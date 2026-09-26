@@ -255,8 +255,28 @@ local function isKO(p)
     if not c then return false end
     local be = c:FindFirstChild("BodyEffects")
     if be then
-        local ko = be:FindFirstChild("K.O") or be:FindFirstChild("KO")
-        if ko and ko.Value == true then return true end
+        -- classic Da Hood / DERS / Des Hood / Hood Customs KO flags
+        for _, name in ipairs({"K.O", "KO", "Knocked", "IsKnocked", "Downed", "Ragdoll"}) do
+            local ko = be:FindFirstChild(name)
+            if ko then
+                if typeof(ko.Value) == "boolean" and ko.Value == true then return true end
+                if typeof(ko.Value) == "number" and ko.Value ~= 0 then return true end
+            end
+        end
+        -- some clones store KO as BoolValue under different paths
+        for _, d in ipairs(be:GetDescendants()) do
+            if d:IsA("BoolValue") then
+                local n = string.lower(d.Name)
+                if (n == "k.o" or n == "ko" or n == "knocked" or n == "isknocked" or n == "downed") and d.Value then
+                    return true
+                end
+            end
+        end
+    end
+    -- fallback: humanoid platform stand / dead-ish state used by some clones
+    local h = getHum(p)
+    if h and (h.PlatformStand or h:GetState() == Enum.HumanoidStateType.Physics) then
+        if h.Health > 0 and h.Health < h.MaxHealth * 0.15 then return true end
     end
     return false
 end
@@ -920,42 +940,111 @@ local function punch(plr)
     end
 end
 
+local function pressStompKey()
+    -- Da Hood / DERS / Des Hood bind stomp to E (PadDown on console)
+    pcall(function()
+        local vim = game:GetService("VirtualInputManager")
+        vim:SendKeyEvent(true, Enum.KeyCode.E, false, game)
+        task.wait(0.03)
+        vim:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+    end)
+    pcall(function()
+        if keypress and keyrelease then
+            keypress(0x45) -- E
+            task.wait(0.03)
+            keyrelease(0x45)
+        end
+    end)
+end
+
+local function fireStompRemotes(plr)
+    if not MainEvent then return end
+    local char = plr and plr.Character
+    -- every common arg pattern used by Da Hood clones (DERS / Des Hood / HC)
+    local names = {"Stomp", "STOMP", "stomp", "Finish", "Execute"}
+    for _, n in ipairs(names) do
+        pcall(function() MainEvent:FireServer(n) end)
+        if char then
+            pcall(function() MainEvent:FireServer(n, char) end)
+            pcall(function() MainEvent:FireServer(n, char, true) end)
+        end
+        if plr then
+            pcall(function() MainEvent:FireServer(n, plr) end)
+        end
+    end
+    -- some forks nest remotes under MainEvent or use separate events
+    pcall(function()
+        for _, v in ipairs(ReplicatedStorage:GetDescendants()) do
+            if v:IsA("RemoteEvent") then
+                local n = string.lower(v.Name)
+                if n == "stomp" or n == "finish" or n == "execute" then
+                    pcall(function() v:FireServer() end)
+                    if char then pcall(function() v:FireServer(char) end) end
+                end
+            end
+        end
+    end)
+end
+
 local function stomp(plr)
     if not plr then return end
     if isProtected(plr) then return end
     local my = getHRP()
     local their = getHRP(plr)
     if not my or not their then return end
-    -- get close to KO body then stomp hard
+    -- ALWAYS force stand on KO body (DERS/Des Hood need this more than classic DH)
     pcall(function()
         local h = getHum()
         if h then
             h.PlatformStand = false
-            h:MoveTo(their.Position)
+            h.Sit = false
+            h:ChangeState(Enum.HumanoidStateType.Running)
         end
-        -- soft snap if close enough (helps land stomp)
-        local dist = (my.Position - their.Position).Magnitude
-        if dist < 12 then
-            my.CFrame = CFrame.new(their.Position + Vector3.new(0, 2.5, 0))
+        -- prefer UpperTorso / Torso height if present
+        local c = getChar(plr)
+        local standOn = their
+        if c then
+            standOn = c:FindFirstChild("UpperTorso") or c:FindFirstChild("Torso") or their
+        end
+        local pos = standOn.Position
+        -- snap on top multiple times so lag / anti-tp doesn't leave us under the floor
+        for _ = 1, 3 do
+            my.CFrame = CFrame.new(pos + Vector3.new(0, 2.2, 0))
+            my.AssemblyLinearVelocity = Vector3.zero
+            my.AssemblyAngularVelocity = Vector3.zero
+        end
+        if h then h:MoveTo(pos) end
+    end)
+    task.wait(0.05)
+    -- must hold Combat for stomp to register on most hood clones
+    local tool = equipCombat()
+    if not tool then
+        -- some clones name it differently
+        tool = findToolByName("Combat", false)
+            or findToolByName("[Combat]", false)
+            or findToolByName("Fist", false)
+        if tool then equipTool(tool, 0.4) end
+    end
+    activateTool(tool)
+    pressStompKey()
+    fireStompRemotes(plr)
+    task.wait(0.06)
+    -- re-snap + second burst (clones often need 2–3 attempts)
+    pcall(function()
+        my = getHRP()
+        their = getHRP(plr)
+        if my and their then
+            my.CFrame = CFrame.new(their.Position + Vector3.new(0, 2.2, 0))
             my.AssemblyLinearVelocity = Vector3.zero
         end
     end)
-    task.wait(0.04)
-    local tool = equipCombat()
     activateTool(tool)
-    if MainEvent then
-        pcall(function() MainEvent:FireServer("Stomp") end)
-        pcall(function() MainEvent:FireServer("Stomp", plr.Character) end)
-        pcall(function() MainEvent:FireServer("Stomp", plr) end)
-    end
-    task.wait(0.06)
-    activateTool(tool)
-    if MainEvent then
-        pcall(function() MainEvent:FireServer("Stomp") end)
-        pcall(function() MainEvent:FireServer("Stomp", plr.Character) end)
-    end
+    pressStompKey()
+    fireStompRemotes(plr)
     task.wait(0.04)
     activateTool(tool)
+    pressStompKey()
+    fireStompRemotes(plr)
 end
 
 local function softReload(gun)
@@ -2124,11 +2213,22 @@ local function cmdKnife(user)
             task.wait(0.03)
         end
 
+        -- wait briefly for KO flag to replicate (DERS/Des Hood can lag the BoolValue)
+        for _ = 1, 8 do
+            if isKO(plr) then break end
+            task.wait(0.05)
+        end
         if isKO(plr) then
-            for _ = 1, 12 do
+            notify("Knife KO — stomping " .. plr.Name)
+            setStealthVisible(true) -- visible while stomping so server registers contact
+            for _ = 1, 22 do
+                if not isKO(plr) and not getChar(plr) then break end
+                if not isKO(plr) then break end
                 stomp(plr)
-                task.wait(0.09)
+                task.wait(0.08)
             end
+        else
+            notify("Knife: no KO flag — try .stomp " .. plr.Name)
         end
         setStealthVisible(true)
         ensureVisible()
