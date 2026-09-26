@@ -10,26 +10,9 @@
       - Hood Customs     (9825515356)
 ]]
 
-local function _standPickConfig()
-    local c
-    pcall(function()
-        if getgenv then c = getgenv().StandConfig end
-    end)
-    if type(c) == "table" then return c end
-    pcall(function()
-        c = rawget(_G, "StandConfig")
-    end)
-    if type(c) == "table" then return c end
-    pcall(function()
-        if shared then c = shared.StandConfig end
-    end)
-    if type(c) == "table" then return c end
-    return nil
-end
-local Config = _standPickConfig()
+local Config = rawget(_G, "StandConfig") or (getgenv and getgenv().StandConfig) or nil
 if not Config then
-    warn("[Stand] No StandConfig — use the loader (getgenv/_G/shared all empty)")
-    print("[Stand] No StandConfig — main aborted")
+    warn("[Stand] No StandConfig — use the loader")
     return
 end
 
@@ -961,107 +944,152 @@ local function pressStompKey()
     -- Da Hood / DERS / Des Hood bind stomp to E (PadDown on console)
     pcall(function()
         local vim = game:GetService("VirtualInputManager")
+        if not vim then return end
         vim:SendKeyEvent(true, Enum.KeyCode.E, false, game)
-        task.wait(0.03)
+        task.wait(0.05)
         vim:SendKeyEvent(false, Enum.KeyCode.E, false, game)
     end)
     pcall(function()
         if keypress and keyrelease then
             keypress(0x45) -- E
-            task.wait(0.03)
+            task.wait(0.05)
             keyrelease(0x45)
         end
+    end)
+    -- also try button bound on some mobile/console hood clones
+    pcall(function()
+        local vim = game:GetService("VirtualInputManager")
+        if not vim then return end
+        vim:SendKeyEvent(true, Enum.KeyCode.ButtonB, false, game)
+        task.wait(0.03)
+        vim:SendKeyEvent(false, Enum.KeyCode.ButtonB, false, game)
     end)
 end
 
 local function fireStompRemotes(plr)
-    if not MainEvent then return end
     local char = plr and plr.Character
-    -- every common arg pattern used by Da Hood clones (DERS / Des Hood / HC)
-    local names = {"Stomp", "STOMP", "stomp", "Finish", "Execute"}
-    for _, n in ipairs(names) do
-        pcall(function() MainEvent:FireServer(n) end)
-        if char then
-            pcall(function() MainEvent:FireServer(n, char) end)
-            pcall(function() MainEvent:FireServer(n, char, true) end)
-        end
-        if plr then
-            pcall(function() MainEvent:FireServer(n, plr) end)
+    local names = {"Stomp", "STOMP", "stomp", "Finish", "Execute", "STopm"} -- STopm = common typo remote on some clones
+    if MainEvent then
+        for _, n in ipairs(names) do
+            pcall(function() MainEvent:FireServer(n) end)
+            if char then
+                pcall(function() MainEvent:FireServer(n, char) end)
+                pcall(function() MainEvent:FireServer(n, char, true) end)
+                pcall(function() MainEvent:FireServer(n, true) end)
+            end
+            if plr then
+                pcall(function() MainEvent:FireServer(n, plr) end)
+            end
         end
     end
-    -- some forks nest remotes under MainEvent or use separate events
+    -- scan ALL remotes (DERS HOOD sometimes uses a non-MainEvent stomp remote)
     pcall(function()
         for _, v in ipairs(ReplicatedStorage:GetDescendants()) do
-            if v:IsA("RemoteEvent") then
+            if v:IsA("RemoteEvent") or v:IsA("RemoteFunction") then
                 local n = string.lower(v.Name)
-                if n == "stomp" or n == "finish" or n == "execute" then
-                    pcall(function() v:FireServer() end)
-                    if char then pcall(function() v:FireServer(char) end) end
+                if string.find(n, "stomp", 1, true) or n == "finish" or n == "execute" then
+                    pcall(function()
+                        if v:IsA("RemoteEvent") then
+                            v:FireServer()
+                            if char then v:FireServer(char) end
+                        end
+                    end)
                 end
             end
         end
     end)
 end
 
-local function stomp(plr)
-    if not plr then return end
-    if isProtected(plr) then return end
-    local my = getHRP()
+-- Plant character ON the KO body and keep them there (anti-tp rubberband fight)
+local function plantOnKO(plr)
     local their = getHRP(plr)
-    if not my or not their then return end
-    -- ALWAYS force stand on KO body (DERS/Des Hood need this more than classic DH)
+    if not their then return false end
+    local c = getChar(plr)
+    local standOn = their
+    if c then
+        standOn = c:FindFirstChild("UpperTorso")
+            or c:FindFirstChild("Torso")
+            or c:FindFirstChild("LowerTorso")
+            or their
+    end
+    local pos = standOn.Position + Vector3.new(0, 2.35, 0)
+    local my = getHRP()
+    local h = getHum()
+    if not my then return false end
     pcall(function()
-        local h = getHum()
         if h then
             h.PlatformStand = false
             h.Sit = false
+            h.Jump = false
             h:ChangeState(Enum.HumanoidStateType.Running)
         end
-        -- prefer UpperTorso / Torso height if present
-        local c = getChar(plr)
-        local standOn = their
-        if c then
-            standOn = c:FindFirstChild("UpperTorso") or c:FindFirstChild("Torso") or their
+        -- PivotTo is more reliable on newer R15 clones
+        local mc = getChar()
+        if mc and mc.PivotTo then
+            mc:PivotTo(CFrame.new(pos))
         end
-        local pos = standOn.Position
-        -- snap on top multiple times so lag / anti-tp doesn't leave us under the floor
-        for _ = 1, 3 do
-            my.CFrame = CFrame.new(pos + Vector3.new(0, 2.2, 0))
-            my.AssemblyLinearVelocity = Vector3.zero
-            my.AssemblyAngularVelocity = Vector3.zero
-        end
-        if h then h:MoveTo(pos) end
+        my.CFrame = CFrame.new(pos)
+        my.AssemblyLinearVelocity = Vector3.zero
+        my.AssemblyAngularVelocity = Vector3.zero
+        -- slight downward push so feet contact the body (server proximity check)
+        my.AssemblyLinearVelocity = Vector3.new(0, -8, 0)
     end)
-    task.wait(0.05)
-    -- must hold Combat for stomp to register on most hood clones
+    return true
+end
+
+local function stomp(plr)
+    if not plr then return end
+    if isProtected(plr) then return end
+    if not getHRP(plr) then return end
+
+    -- CRITICAL on DERS/Des Hood: stomp is IGNORED while holding Knife/Gun.
+    -- Must fully unequip then equip Combat before any Stomp remote.
+    unequip()
+    task.wait(0.06)
     local tool = equipCombat()
     if not tool then
-        -- some clones name it differently
         tool = findToolByName("Combat", false)
             or findToolByName("[Combat]", false)
             or findToolByName("Fist", false)
-        if tool then equipTool(tool, 0.4) end
+            or findToolByName("Fists", false)
+            or findToolByName("[Fist]", false)
+        if tool then tool = equipTool(tool, 0.7) end
     end
-    activateTool(tool)
-    pressStompKey()
-    fireStompRemotes(plr)
-    task.wait(0.06)
-    -- re-snap + second burst (clones often need 2–3 attempts)
-    pcall(function()
-        my = getHRP()
-        their = getHRP(plr)
-        if my and their then
-            my.CFrame = CFrame.new(their.Position + Vector3.new(0, 2.2, 0))
-            my.AssemblyLinearVelocity = Vector3.zero
+    -- if still no combat, try equipping whatever is named like combat in backpack
+    if not tool then
+        pcall(function()
+            local bag = LocalPlayer:FindFirstChild("Backpack")
+            if not bag then return end
+            for _, x in ipairs(bag:GetChildren()) do
+                if x:IsA("Tool") and string.find(string.lower(x.Name), "combat", 1, true) then
+                    tool = equipTool(x, 0.7)
+                    break
+                end
+            end
+        end)
+    end
+    if not tool or not isToolEquipped(tool) then
+        -- last resort: punch remotes still sometimes allow stomp with empty hands on clones
+        unequip()
+    end
+
+    -- stay planted and spam stomp for a short window
+    for i = 1, 6 do
+        if not getChar(plr) then break end
+        plantOnKO(plr)
+        if tool and not isToolEquipped(tool) then
+            tool = equipTool(tool, 0.35) or equipCombat()
         end
-    end)
-    activateTool(tool)
-    pressStompKey()
-    fireStompRemotes(plr)
-    task.wait(0.04)
-    activateTool(tool)
-    pressStompKey()
-    fireStompRemotes(plr)
+        activateTool(tool)
+        pressStompKey()
+        fireStompRemotes(plr)
+        -- keep feet on body between fires (anti-tp pulls you off)
+        task.wait(0.04)
+        plantOnKO(plr)
+        pressStompKey()
+        fireStompRemotes(plr)
+        task.wait(0.05)
+    end
 end
 
 local function softReload(gun)
@@ -1443,14 +1471,21 @@ local function cmdStompUser(user)
             end
         end
         if isKO(plr) then
-            for _ = 1, 18 do
-                if not isKO(plr) then break end
+            for _ = 1, 14 do
+                if not getChar(plr) then break end
+                -- keep stomping even if KO flag flickers on DERS HOOD
                 stomp(plr)
-                task.wait(0.1)
+                task.wait(0.12)
             end
             notify("Stomp done " .. plr.Name)
         else
-            notify("Stomp: failed to KO " .. plr.Name)
+            -- still try stomp a few times in case KO flag is client-desynced
+            notify("Stomp: no KO flag — forcing stomp attempts on " .. plr.Name)
+            for _ = 1, 8 do
+                if not getChar(plr) then break end
+                stomp(plr)
+                task.wait(0.12)
+            end
         end
         clearCamlock()
         State.Tracking = savedTrack
