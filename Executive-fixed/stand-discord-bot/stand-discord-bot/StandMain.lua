@@ -10,9 +10,26 @@
       - Hood Customs     (9825515356)
 ]]
 
-local Config = rawget(_G, "StandConfig") or (getgenv and getgenv().StandConfig) or nil
+local function _standPickConfig()
+    local c
+    pcall(function()
+        if getgenv then c = getgenv().StandConfig end
+    end)
+    if type(c) == "table" then return c end
+    pcall(function()
+        c = rawget(_G, "StandConfig")
+    end)
+    if type(c) == "table" then return c end
+    pcall(function()
+        if shared then c = shared.StandConfig end
+    end)
+    if type(c) == "table" then return c end
+    return nil
+end
+local Config = _standPickConfig()
 if not Config then
-    warn("[Stand] No StandConfig — use the loader")
+    warn("[Stand] No StandConfig — use the loader (getgenv/_G/shared all empty)")
+    print("[Stand] No StandConfig — main aborted")
     return
 end
 
