@@ -44,7 +44,7 @@ def default_config() -> dict:
         "alts": {},
         "controllers": [],  # extra Roblox usernames that can command alts
         "rank": "free",  # free | premium | bypass
-        "gun": "[DoubleBarrel]",
+        "gun": "[Double-Barrel SG]",  # Da Hood name; script aliases DoubleBarrel for Hood Customs
         "prefix": ".",
         "anim": "rbxassetid://125405104081365",
         "char_user": 1,
