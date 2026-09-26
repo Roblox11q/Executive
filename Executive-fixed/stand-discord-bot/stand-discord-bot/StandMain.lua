@@ -1810,16 +1810,57 @@ local function cmdKnife(user)
     end)
 end
 
--- Talk toggle (alts stay silent when off)
+-- .talk <message>  →  alts say the message in chat
+-- .talk on / .talk off  →  enable/disable bot chat replies
 local StateTalk = true
-local function cmdTalk(arg)
+
+local function sayInChat(text)
+    if not text or text == "" then return end
+    if not StateTalk then return end
+    -- only alts speak (owner types the command)
+    if IsOwner then return end
+    pcall(function()
+        local TextChatService = game:GetService("TextChatService")
+        if TextChatService then
+            local channels = TextChatService:FindFirstChild("TextChannels")
+            local general = channels and (channels:FindFirstChild("RBXGeneral") or channels:FindFirstChild("General"))
+            if general and general.SendAsync then
+                general:SendAsync(text)
+                return
+            end
+        end
+    end)
+    pcall(function()
+        LocalPlayer:Chat(text)
+    end)
+    pcall(function()
+        local chat = game:GetService("Chat")
+        if chat and chat.Chat then
+            chat:Chat(LocalPlayer.Character or LocalPlayer, text, Enum.ChatColor.White)
+        end
+    end)
+end
+
+local function cmdTalk(arg, fullMessage)
+    -- fullMessage = original text after "talk " (preserves case / spaces)
     if arg == "off" or arg == "0" or arg == "false" then
         StateTalk = false
-        notify("Talk OFF")
-    else
+        notify("Talk OFF (bots won't speak)")
+        return
+    end
+    if arg == "on" or arg == "1" or arg == "true" then
         StateTalk = true
         notify("Talk ON")
+        return
     end
+    local msg = fullMessage
+    if not msg or msg == "" then
+        notify("Usage: .talk <message>  or  .talk on/off")
+        return
+    end
+    StateTalk = true
+    sayInChat(msg)
+    notify("Said: " .. msg)
 end
 
 -- Freeze / unfreeze targets (client-side lock loop)
@@ -1941,7 +1982,8 @@ wl <user> uwl | protect <user> unprotect
 loopkill/lk <user> | unloopkill/unlk
 bring <user> | drop
 knife <user> | view
-talk on/off | freeze <user> | unfreeze <user>
+talk <msg> | talk on/off | say <msg>
+freeze <user> | unfreeze <user>
 benx <user> | unbenx | pkick <user> | forcevoid <user>
 fakeban/fb <user> | forcefix <user>
 l | e | a | fix | kick | r [off]
@@ -1968,12 +2010,22 @@ local function onControlChat(msg, speaker)
     lastChatMsg = msg
     lastChatAt = now
 
-    local body = string.lower(string.sub(msg, #Prefix + 1))
+    local rawBody = string.sub(msg, #Prefix + 1) -- preserve case for .talk messages
+    local body = string.lower(rawBody)
     local parts = {}
     for w in string.gmatch(body, "%S+") do parts[#parts + 1] = w end
     if #parts == 0 then return end
 
     local cmd, a1, a2 = parts[1], parts[2], parts[3]
+    -- original-case text after the command word (for .talk Hello There)
+    local restOriginal = ""
+    do
+        local lowerRaw = string.lower(rawBody)
+        local cmdLen = #cmd
+        if string.sub(lowerRaw, 1, cmdLen) == cmd then
+            restOriginal = string.match(string.sub(rawBody, cmdLen + 1), "^%s*(.-)%s*$") or ""
+        end
+    end
     local isOwnerSpeaker = speaker and string.lower(speaker.Name) == string.lower(OwnerName)
     local isController = speaker and Controllers[string.lower(speaker.Name)]
     local isFullControl = isOwnerSpeaker or isController
@@ -2024,7 +2076,7 @@ local function onControlChat(msg, speaker)
     elseif cmd == "drop" then cmdDrop()
     elseif cmd == "knife" then cmdKnife(a1)
     elseif cmd == "view" or cmd == "players" then cmdView()
-    elseif cmd == "talk" then cmdTalk(a1)
+    elseif cmd == "talk" or cmd == "say" then cmdTalk(a1, restOriginal)
     elseif cmd == "freeze" then cmdFreeze(a1)
     elseif cmd == "unfreeze" then cmdUnfreeze(a1)
     elseif cmd == "l" then cmdTaunt(a1 == "off")
@@ -2354,12 +2406,17 @@ local function createTierTag(plr, rank)
         local head = safeHead(c)
         if not head then return end
 
-        -- already has our tag?
+        -- already has our tag? refresh size + emoji
         local existing = head:FindFirstChild("StandTierTag")
         if existing then
+            existing.Size = UDim2.new(0, 22, 0, 22)
+            existing.StudsOffset = Vector3.new(0, 1.35, 0)
+            existing.AlwaysOnTop = false
             local lbl = existing:FindFirstChild("TierLabel")
             if lbl then
                 lbl.Text = TIER_EMOJI[rank] or "😎"
+                lbl.TextSize = 16
+                lbl.TextScaled = true
             end
             TierTags[plr.UserId] = existing
             return
@@ -2370,23 +2427,30 @@ local function createTierTag(plr, rank)
         local bb = Instance.new("BillboardGui")
         bb.Name = "StandTierTag"
         bb.Adornee = head
-        bb.Size = UDim2.new(0, 48, 0, 48)
-        bb.StudsOffset = Vector3.new(0, 2.8, 0)
-        bb.AlwaysOnTop = true
-        bb.MaxDistance = 150
-        bb.LightInfluence = 0
+        -- small, sits right on top of the head like part of the character
+        bb.Size = UDim2.new(0, 22, 0, 22)
+        bb.StudsOffset = Vector3.new(0, 1.35, 0)
+        bb.AlwaysOnTop = false
+        bb.MaxDistance = 80
+        bb.LightInfluence = 0.4
         bb.Parent = head
 
         local label = Instance.new("TextLabel")
         label.Name = "TierLabel"
         label.BackgroundTransparency = 1
         label.Size = UDim2.new(1, 0, 1, 0)
-        label.Font = Enum.Font.GothamBold
+        label.Font = Enum.Font.Gotham
         label.Text = TIER_EMOJI[rank] or "😎"
         label.TextColor3 = Color3.fromRGB(255, 255, 255)
-        label.TextSize = 32
-        label.TextStrokeTransparency = 0.5
+        label.TextSize = 16
+        label.TextScaled = true
+        label.TextStrokeTransparency = 0.65
         label.Parent = bb
+
+        local constraint = Instance.new("UITextSizeConstraint")
+        constraint.MaxTextSize = 18
+        constraint.MinTextSize = 10
+        constraint.Parent = label
 
         TierTags[plr.UserId] = bb
     end)
