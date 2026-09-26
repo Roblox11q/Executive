@@ -270,52 +270,6 @@ local function fireMouse(pos)
     end)
 end
 
--- Force-hit: spam aim + hit remotes so guns register even on lag / partial misses
-local function forceHit(plr, gun)
-    if not plr then return end
-    local aim = getTargetAimPos(plr)
-    if not aim then
-        local hrp = getHRP(plr)
-        aim = hrp and (hrp.Position + Vector3.new(0, 1.4, 0)) or nil
-    end
-    if not aim then return end
-    for _ = 1, 6 do
-        fireMouse(aim)
-    end
-    pcall(function()
-        local cam = Workspace.CurrentCamera
-        if cam then
-            cam.CFrame = CFrame.lookAt(cam.CFrame.Position, aim)
-            cam.Focus = CFrame.new(aim)
-        end
-    end)
-    if gun then
-        pcall(function() gun:Activate() end)
-    end
-    if MainEvent then
-        pcall(function() MainEvent:FireServer("Shoot", aim) end)
-        pcall(function() MainEvent:FireServer("Hit", plr.Character) end)
-        pcall(function() MainEvent:FireServer("Hit", plr) end)
-        pcall(function() MainEvent:FireServer(MouseRemote, aim) end)
-        if gun then
-            pcall(function() MainEvent:FireServer("Shoot", gun.Name, aim) end)
-            pcall(function() MainEvent:FireServer("Fire", gun.Name) end)
-        end
-    end
-    -- tool-local shoot remotes
-    if gun then
-        pcall(function()
-            for _, v in ipairs(gun:GetDescendants()) do
-                local n = string.lower(v.Name)
-                if v:IsA("RemoteEvent") and (string.find(n, "shoot", 1, true) or string.find(n, "fire", 1, true) or string.find(n, "hit", 1, true)) then
-                    pcall(function() v:FireServer(aim) end)
-                    pcall(function() v:FireServer() end)
-                end
-            end
-        end)
-    end
-end
-
 local function getAimPart(plr)
     local ok, part = pcall(function()
         local c = getChar(plr)
@@ -355,6 +309,52 @@ local function getTargetAimPos(plr)
         return p
     end)
     return ok and aim or nil
+end
+
+-- Force-hit: spam aim + hit remotes so guns register even on lag / partial misses
+-- (must be AFTER getTargetAimPos so it is not nil)
+local function forceHit(plr, gun)
+    if not plr then return end
+    local aim = getTargetAimPos(plr)
+    if not aim then
+        local hrp = getHRP(plr)
+        aim = hrp and (hrp.Position + Vector3.new(0, 1.4, 0)) or nil
+    end
+    if not aim then return end
+    for _ = 1, 6 do
+        fireMouse(aim)
+    end
+    pcall(function()
+        local cam = Workspace.CurrentCamera
+        if cam then
+            cam.CFrame = CFrame.lookAt(cam.CFrame.Position, aim)
+            cam.Focus = CFrame.new(aim)
+        end
+    end)
+    if gun then
+        pcall(function() gun:Activate() end)
+    end
+    if MainEvent then
+        pcall(function() MainEvent:FireServer("Shoot", aim) end)
+        pcall(function() MainEvent:FireServer("Hit", plr.Character) end)
+        pcall(function() MainEvent:FireServer("Hit", plr) end)
+        pcall(function() MainEvent:FireServer(MouseRemote, aim) end)
+        if gun then
+            pcall(function() MainEvent:FireServer("Shoot", gun.Name, aim) end)
+            pcall(function() MainEvent:FireServer("Fire", gun.Name) end)
+        end
+    end
+    if gun then
+        pcall(function()
+            for _, v in ipairs(gun:GetDescendants()) do
+                local n = string.lower(v.Name)
+                if v:IsA("RemoteEvent") and (string.find(n, "shoot", 1, true) or string.find(n, "fire", 1, true) or string.find(n, "hit", 1, true)) then
+                    pcall(function() v:FireServer(aim) end)
+                    pcall(function() v:FireServer() end)
+                end
+            end
+        end)
+    end
 end
 
 local CamlockHighlight = nil
