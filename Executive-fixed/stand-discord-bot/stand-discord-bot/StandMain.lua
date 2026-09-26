@@ -89,8 +89,10 @@ local State = {
     Armed = false,
     Camlock = false,
     LoopKill = nil, -- player name string, or nil
+    LoopKillKnife = false, -- if true, loopkill uses knife instead of gun/punch
     Carrying = nil, -- player name being carried to owner
     KnifeMode = false,
+    StealthKnife = false, -- invisible while knifing
 }
 
 local Whitelist = {} -- UserId -> true (don't attack)
@@ -100,6 +102,13 @@ local VoidCF = CFrame.new(0, -480, 0)
 local CamTarget = nil
 local CamlockUntil = 0
 local OrbitAngle = 0
+
+-- forward decls (defined later with knife helpers)
+local setStealthVisible
+local knifeAttackTarget
+local findKnife
+local expandKnifeHitbox
+local knifeInstantTP
 
 -- Extra Roblox usernames allowed to issue commands (from config)
 local Controllers = {}
@@ -259,6 +268,52 @@ local function fireMouse(pos)
             end
         end
     end)
+end
+
+-- Force-hit: spam aim + hit remotes so guns register even on lag / partial misses
+local function forceHit(plr, gun)
+    if not plr then return end
+    local aim = getTargetAimPos(plr)
+    if not aim then
+        local hrp = getHRP(plr)
+        aim = hrp and (hrp.Position + Vector3.new(0, 1.4, 0)) or nil
+    end
+    if not aim then return end
+    for _ = 1, 6 do
+        fireMouse(aim)
+    end
+    pcall(function()
+        local cam = Workspace.CurrentCamera
+        if cam then
+            cam.CFrame = CFrame.lookAt(cam.CFrame.Position, aim)
+            cam.Focus = CFrame.new(aim)
+        end
+    end)
+    if gun then
+        pcall(function() gun:Activate() end)
+    end
+    if MainEvent then
+        pcall(function() MainEvent:FireServer("Shoot", aim) end)
+        pcall(function() MainEvent:FireServer("Hit", plr.Character) end)
+        pcall(function() MainEvent:FireServer("Hit", plr) end)
+        pcall(function() MainEvent:FireServer(MouseRemote, aim) end)
+        if gun then
+            pcall(function() MainEvent:FireServer("Shoot", gun.Name, aim) end)
+            pcall(function() MainEvent:FireServer("Fire", gun.Name) end)
+        end
+    end
+    -- tool-local shoot remotes
+    if gun then
+        pcall(function()
+            for _, v in ipairs(gun:GetDescendants()) do
+                local n = string.lower(v.Name)
+                if v:IsA("RemoteEvent") and (string.find(n, "shoot", 1, true) or string.find(n, "fire", 1, true) or string.find(n, "hit", 1, true)) then
+                    pcall(function() v:FireServer(aim) end)
+                    pcall(function() v:FireServer() end)
+                end
+            end
+        end)
+    end
 end
 
 local function getAimPart(plr)
@@ -906,23 +961,13 @@ local function shoot(plr)
             gun = equipGun()
             if not gun then break end
         end
-        -- stay glued behind target
+        -- stay glued behind target + force hit every shot
         lockOnTarget(plr, 5.5, 0, false)
         local aim = getTargetAimPos(plr) or aimAt(plr)
-        if aim then
-            for _ = 1, 5 do fireMouse(aim) end
-            pcall(function()
-                local cam = Workspace.CurrentCamera
-                if cam then
-                    cam.CFrame = CFrame.lookAt(cam.CFrame.Position, aim)
-                    cam.Focus = CFrame.new(aim)
-                end
-            end)
-        end
+        forceHit(plr, gun)
         activateTool(gun)
-        -- tiny wait then fire again same frame window
         task.wait(0.02)
-        if aim then for _ = 1, 3 do fireMouse(aim) end end
+        forceHit(plr, gun)
         activateTool(gun)
         task.wait(0.03)
     end
@@ -1312,13 +1357,38 @@ local function cmdLoopKill(user)
         return
     end
     State.LoopKill = plr.Name
+    State.LoopKillKnife = false
     State.Tracking = false
     setCamlock(plr, 0)
     notify("LoopKill ON " .. plr.Name)
 end
 
+local function cmdLoopKillKnife(user)
+    if not user or user == "" then
+        notify("lkk: need a name")
+        return
+    end
+    local plr = findPlayer(user)
+    if not plr then
+        notify("lkk: not found")
+        return
+    end
+    if isProtected(plr) then
+        notify("lkk: target protected")
+        return
+    end
+    State.LoopKill = plr.Name
+    State.LoopKillKnife = true
+    State.Tracking = false
+    setCamlock(plr, 0)
+    notify("LoopKill Knife (stealth) ON " .. plr.Name)
+end
+
 local function cmdUnLoopKill()
     State.LoopKill = nil
+    State.LoopKillKnife = false
+    setStealthVisible(true)
+    ensureVisible()
     clearCamlock()
     if not IsOwner then State.Tracking = true end
     notify("LoopKill OFF")
@@ -1629,14 +1699,20 @@ local function cmdFix()
     State.BodyShield = false
     State.RageKA = false
     State.LoopKill = nil
+    State.LoopKillKnife = false
     State.Carrying = nil
     State.TargetName = nil
     State.KnifeMode = false
+    State.StealthKnife = false
     FrozenTargets = {}
     clearCamlock()
     unequip()
     -- force benx off without toggling (direct set)
     StateBenx = false
+    pcall(function()
+        if setStealthVisible then setStealthVisible(true) end
+        ensureVisible()
+    end)
     pcall(function()
         local h = getHum()
         if h then
@@ -1722,7 +1798,7 @@ local function cmdView()
     notify("View: " .. #Players:GetPlayers() .. " players (see F9)")
 end
 
-local function findKnife()
+findKnife = function()
     -- exact [Knife] first (Hood Customs name)
     local exact = findToolByName("[Knife]", true)
     if exact then return exact end
@@ -1740,7 +1816,7 @@ local function findKnife()
 end
 
 -- Expand knife / character hit parts so swings reach the target
-local function expandKnifeHitbox(knife, scale)
+expandKnifeHitbox = function(knife, scale)
     scale = scale or 3.5
     pcall(function()
         if knife then
@@ -1801,7 +1877,7 @@ local function expandKnifeHitbox(knife, scale)
 end
 
 -- Instant TP onto target (knife only — closer than gun lock)
-local function knifeInstantTP(plr)
+knifeInstantTP = function(plr)
     local my = getHRP()
     local their = getHRP(plr)
     if not my or not their then return false end
@@ -1831,6 +1907,87 @@ local function knifeInstantTP(plr)
     return true
 end
 
+-- Stealth: hide character so target doesn't see the bot while knifing
+setStealthVisible = function(visible)
+    State.StealthKnife = not visible
+    pcall(function()
+        local c = getChar()
+        if not c then return end
+        for _, d in ipairs(c:GetDescendants()) do
+            if d:IsA("BasePart") then
+                if visible then
+                    d.LocalTransparencyModifier = 0
+                    if d.Name ~= "HumanoidRootPart" and d.Transparency >= 0.99 then
+                        d.Transparency = 0
+                    end
+                else
+                    d.LocalTransparencyModifier = 1
+                    if d.Name ~= "HumanoidRootPart" then
+                        d.Transparency = 1
+                    end
+                end
+            elseif d:IsA("Decal") or d:IsA("Texture") then
+                d.Transparency = visible and 0 or 1
+            elseif d:IsA("ParticleEmitter") or d:IsA("Trail") or d:IsA("Beam") then
+                d.Enabled = visible
+            end
+        end
+        -- hide tools too
+        for _, t in ipairs(c:GetChildren()) do
+            if t:IsA("Tool") then
+                for _, p in ipairs(t:GetDescendants()) do
+                    if p:IsA("BasePart") then
+                        p.Transparency = visible and 0 or 1
+                        p.LocalTransparencyModifier = visible and 0 or 1
+                    end
+                end
+            end
+        end
+    end)
+end
+
+-- Single stealth knife attack burst (used by .knife and .lkk)
+knifeAttackTarget = function(plr, swings)
+    swings = swings or 8
+    if not plr or isProtected(plr) then return end
+    local knife = findKnife()
+    if not knife then return end
+    knife = equipTool(knife, 0.6)
+    if not knife then return end
+    expandKnifeHitbox(knife, 3.8)
+    setStealthVisible(false)
+    for i = 1, swings do
+        if isKO(plr) or not getChar(plr) then break end
+        -- TP in → hit → TP slightly offset (harder to see)
+        knifeInstantTP(plr)
+        local aim = getTargetAimPos(plr)
+        if aim then for _ = 1, 3 do fireMouse(aim) end end
+        aimAt(plr)
+        if not isToolEquipped(knife) then
+            knife = equipTool(findKnife(), 0.3) or knife
+            if knife then expandKnifeHitbox(knife, 3.8) end
+        end
+        activateTool(knife)
+        if MainEvent then
+            pcall(function() MainEvent:FireServer("Hit", plr.Character) end)
+            pcall(function() MainEvent:FireServer("Punch") end)
+            pcall(function() MainEvent:FireServer("Knife") end)
+            pcall(function() MainEvent:FireServer("Slash") end)
+        end
+        task.wait(0.03)
+        -- blink away briefly so they don't track the bot model
+        pcall(function()
+            local my = getHRP()
+            local their = getHRP(plr)
+            if my and their then
+                my.CFrame = CFrame.new(their.Position + Vector3.new(0, -8, 0))
+                my.AssemblyLinearVelocity = Vector3.zero
+            end
+        end)
+        task.wait(0.02)
+    end
+end
+
 local function cmdKnife(user)
     local plr = findPlayer(user)
     if not plr then
@@ -1846,7 +2003,7 @@ local function cmdKnife(user)
         State.Tracking = false
         if State.InVoid then State.InVoid = false end
         setCamlock(plr, 14)
-        notify("Knife: equipping [Knife] → " .. plr.Name)
+        notify("Knife (stealth): " .. plr.Name)
         local knife = findKnife()
         if not knife then
             notify("Knife: [Knife] not found in backpack/character")
@@ -1867,14 +2024,14 @@ local function cmdKnife(user)
             return
         end
         expandKnifeHitbox(knife, 3.8)
-        notify("Knife: equipped " .. tostring(knife.Name) .. " (TP + expanded hitbox)")
+        setStealthVisible(false)
 
         for i = 1, 50 do
             if isKO(plr) then break end
             if not getChar(plr) then break end
 
-            -- INSTANT TP every swing so knife always connects
             knifeInstantTP(plr)
+            setStealthVisible(false) -- keep invisible every swing
 
             local aim = getTargetAimPos(plr)
             if aim then
@@ -1893,8 +2050,17 @@ local function cmdKnife(user)
                 pcall(function() MainEvent:FireServer("Knife") end)
                 pcall(function() MainEvent:FireServer("Slash") end)
             end
-            task.wait(0.04)
-            -- second swing in same window
+            task.wait(0.03)
+            -- blink under target so model isn't visible standing on them
+            pcall(function()
+                local my = getHRP()
+                local their = getHRP(plr)
+                if my and their then
+                    my.CFrame = CFrame.new(their.Position + Vector3.new(0, -10, 0))
+                    my.AssemblyLinearVelocity = Vector3.zero
+                end
+            end)
+            task.wait(0.025)
             knifeInstantTP(plr)
             activateTool(knife)
             task.wait(0.03)
@@ -1906,6 +2072,8 @@ local function cmdKnife(user)
                 task.wait(0.09)
             end
         end
+        setStealthVisible(true)
+        ensureVisible()
         clearCamlock()
         State.Tracking = savedTrack
         if not State.InVoid and savedTrack and not IsOwner then
@@ -2084,7 +2252,7 @@ v/void | call | track | pos <slot>
 arm unarm | k | knock <user> | rage <user> | o <user>
 os (orbit) | f | s | s <user> | rk
 wl <user> uwl | protect <user> unprotect
-loopkill/lk <user> | unloopkill/unlk
+loopkill/lk <user> | lkk <user> | unloopkill/unlk
 bring <user> | drop
 knife <user> | view
 talk <msg> | talk on/off | say <msg>
@@ -2176,6 +2344,7 @@ local function onControlChat(msg, speaker)
     elseif cmd == "protect" then cmdProtect(a1)
     elseif cmd == "unprotect" then cmdUnprotect()
     elseif cmd == "loopkill" or cmd == "lk" then cmdLoopKill(a1)
+    elseif cmd == "lkk" then cmdLoopKillKnife(a1)
     elseif cmd == "unloopkill" or cmd == "unlk" then cmdUnLoopKill()
     elseif cmd == "bring" then cmdBring(a1)
     elseif cmd == "drop" then cmdDrop()
@@ -2239,13 +2408,30 @@ Connections.Main = RunService.Heartbeat:Connect(function()
     local ownerDown = owner and isKO(owner)
 
     -- LOOPKILL: keep attacking + stomping until unloopkill
+    -- .lkk uses stealth knife instead of gun/punch
     if State.LoopKill and not State.Carrying and not isKO(LocalPlayer) then
         local lk = findPlayer(State.LoopKill)
         if lk and not isProtected(lk) then
             if isAlive(lk) then
                 setCamlock(lk, 0.6)
-                if State.Armed then shoot(lk) else punch(lk) end
+                if State.LoopKillKnife then
+                    -- async so Heartbeat never stalls
+                    if not State._lkkBusy then
+                        State._lkkBusy = true
+                        task.spawn(function()
+                            knifeAttackTarget(lk, 5)
+                            State._lkkBusy = false
+                        end)
+                    end
+                elseif State.Armed then
+                    shoot(lk)
+                else
+                    punch(lk)
+                end
             elseif isKO(lk) then
+                if State.LoopKillKnife then
+                    setStealthVisible(false)
+                end
                 stomp(lk)
             end
         end
