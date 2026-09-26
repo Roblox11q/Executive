@@ -1,7 +1,13 @@
 --[[
-    STAND BOT MAIN — Hood Customs
+    STAND BOT MAIN — Da Hood + DERS/Des Hood + Hood Customs
     Controlled by owner chat commands (Prefix from config)
     Inject on ALTS only — owner just types commands in public chat.
+    Supported places:
+      - Da Hood          (2788229376)
+      - [RANKED] Da Hood / related (16033173781)
+      - DERS HOOD        (96247461091106)
+      - Des Hood         (128413479081937)
+      - Hood Customs     (9825515356)
 ]]
 
 local Config = rawget(_G, "StandConfig") or (getgenv and getgenv().StandConfig) or nil
@@ -27,6 +33,17 @@ local Camera = Workspace.CurrentCamera
 local OwnerName = Config.Owner or ""
 local Prefix = Config.Prefix or "."
 local PreferredGun = Config.Gun or "[DoubleBarrel]"
+-- normalize so bot config "[DoubleBarrel]" still finds Da Hood / DERS HOOD's "[Double-Barrel SG]"
+do
+    local pid = game.PlaceId
+    -- Da Hood-style places (including DERS HOOD clones)
+    local daHoodStyle = (pid == 2788229376 or pid == 16033173781 or pid == 96247461091106 or pid == 128413479081937)
+    local g = tostring(PreferredGun)
+    local low = string.lower(g:gsub("[%[%]]", ""):gsub("%s+", ""))
+    if low == "doublebarrel" or low == "doublebarrelsg" or low == "db" then
+        PreferredGun = daHoodStyle and "[Double-Barrel SG]" or "[DoubleBarrel]"
+    end
+end
 -- Rank: free < premium < bypass (shield). Higher can command lower stands in-server.
 local MyRank = string.lower(tostring(Config.Rank or "free"))
 if MyRank ~= "premium" and MyRank ~= "bypass" then MyRank = "free" end
@@ -178,18 +195,50 @@ local function disc(n)
 end
 
 ----------------------------------------------------------------------
--- HOOD CUSTOMS HELPERS
+-- DA HOOD / DERS HOOD / HOOD CUSTOMS HELPERS
 ----------------------------------------------------------------------
+local PlaceId = game.PlaceId
+-- Da Hood + ranked + DERS HOOD (same MainEvent / mouse remote family)
+local IsDaHood = (PlaceId == 2788229376 or PlaceId == 16033173781)
+local IsDersHood = (PlaceId == 96247461091106 or PlaceId == 128413479081937) -- DERS HOOD + Des Hood
+local IsDaHoodStyle = IsDaHood or IsDersHood -- shared remotes & gun names
+local IsHoodCustoms = (PlaceId == 9825515356)
+local IsHoodGame = IsDaHoodStyle or IsHoodCustoms or true -- default to hood-style remotes
+
 local MainEvent = nil
 local MouseRemote = "MousePosUpdate"
 pcall(function()
-    MainEvent = ReplicatedStorage:FindFirstChild("MainEvent") or ReplicatedStorage:FindFirstChild("MainEventt")
-    local pid = game.PlaceId
-    if pid == 2788229376 or pid == 16033173781 then MouseRemote = "UpdateMousePosI"
-    elseif pid == 9825515356 then MouseRemote = "MousePosUpdate"
-    elseif pid == 5602055394 then MouseRemote = "MousePos"
-    else MouseRemote = "UpdateMousePos" end
+    MainEvent = ReplicatedStorage:FindFirstChild("MainEvent")
+        or ReplicatedStorage:FindFirstChild("MainEventt")
+        or ReplicatedStorage:FindFirstChild("MAINEVENT")
+    -- Place-correct mouse remote (wrong name = error_sum spam / no aim)
+    if IsDaHoodStyle then
+        -- classic Da Hood, ranked, and DERS HOOD clones
+        MouseRemote = "UpdateMousePosI"
+    elseif IsHoodCustoms then
+        MouseRemote = "MousePosUpdate"
+    elseif PlaceId == 5602055394 then
+        MouseRemote = "MousePos"
+    else
+        -- fallback: try common names used across hood clones
+        MouseRemote = "UpdateMousePos"
+        if MainEvent then
+            pcall(function()
+                if MainEvent:FindFirstChild("UpdateMousePosI") then
+                    MouseRemote = "UpdateMousePosI"
+                end
+            end)
+        end
+    end
 end)
+
+local placeLabel =
+    (PlaceId == 128413479081937 and "Des Hood")
+    or (PlaceId == 96247461091106 and "DERS HOOD")
+    or (IsDaHood and "Da Hood")
+    or (IsHoodCustoms and "Hood Customs")
+    or "unknown hood"
+print("[Stand] Place", PlaceId, placeLabel, "| MouseRemote =", MouseRemote)
 
 local function getChar(p) return (p or LocalPlayer).Character end
 local function getHRP(p)
@@ -590,7 +639,16 @@ end
 local function normalizeGunName(name)
     if not name then return "" end
     -- strip brackets/spaces for fuzzy match: "[Double-Barrel SG]" -> "double-barrel sg"
-    return string.lower((tostring(name):gsub("[%[%]]", ""):gsub("%s+", " ")):match("^%s*(.-)%s*$") or "")
+    -- also map common aliases across Da Hood / Hood Customs
+    local n = string.lower((tostring(name):gsub("[%[%]]", ""):gsub("%s+", " ")):match("^%s*(.-)%s*$") or "")
+    -- aliases so config "DoubleBarrel" finds "[Double-Barrel SG]" and vice versa
+    if n == "doublebarrel" or n == "double barrel" or n == "double-barrel" or n == "db" then
+        return "double-barrel sg"
+    end
+    if n == "double-barrel sg" or n == "doublebarrel sg" then
+        return "double-barrel sg"
+    end
+    return n
 end
 
 local function findToolByName(name, exactOnly)
@@ -1799,8 +1857,8 @@ local function cmdView()
 end
 
 findKnife = function()
-    -- exact [Knife] first (Hood Customs name)
-    local exact = findToolByName("[Knife]", true)
+    -- Da Hood uses "Knife"; Hood Customs often uses "[Knife]"
+    local exact = findToolByName("[Knife]", true) or findToolByName("Knife", true)
     if exact then return exact end
     local c = getChar()
     local bag = LocalPlayer:FindFirstChild("Backpack")
