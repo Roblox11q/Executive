@@ -1739,6 +1739,98 @@ local function findKnife()
         or findToolByName("Combat Knife", false)
 end
 
+-- Expand knife / character hit parts so swings reach the target
+local function expandKnifeHitbox(knife, scale)
+    scale = scale or 3.5
+    pcall(function()
+        if knife then
+            for _, part in ipairs(knife:GetDescendants()) do
+                if part:IsA("BasePart") then
+                    if not part:GetAttribute("StandOrigSize") then
+                        part:SetAttribute("StandOrigSize", part.Size)
+                    end
+                    local orig = part:GetAttribute("StandOrigSize")
+                    if typeof(orig) == "Vector3" then
+                        part.Size = orig * scale
+                    else
+                        part.Size = part.Size * scale
+                    end
+                    part.Massless = true
+                    part.CanCollide = false
+                end
+            end
+            -- Handle / blade common names
+            for _, name in ipairs({"Handle", "Blade", "Hitbox", "Knife", "Part"}) do
+                local p = knife:FindFirstChild(name)
+                if p and p:IsA("BasePart") then
+                    if not p:GetAttribute("StandOrigSize") then
+                        p:SetAttribute("StandOrigSize", p.Size)
+                    end
+                    local orig = p:GetAttribute("StandOrigSize")
+                    if typeof(orig) == "Vector3" then
+                        p.Size = Vector3.new(
+                            math.max(orig.X * scale, 4),
+                            math.max(orig.Y * scale, 4),
+                            math.max(orig.Z * scale, 6)
+                        )
+                    end
+                    p.Massless = true
+                    p.CanCollide = false
+                end
+            end
+        end
+        -- also slightly expand local arms / HRP for melee reach
+        local c = getChar()
+        if c then
+            for _, name in ipairs({"RightHand", "LeftHand", "Right Arm", "Left Arm", "HumanoidRootPart"}) do
+                local p = c:FindFirstChild(name)
+                if p and p:IsA("BasePart") then
+                    if not p:GetAttribute("StandOrigSize") then
+                        p:SetAttribute("StandOrigSize", p.Size)
+                    end
+                    local orig = p:GetAttribute("StandOrigSize")
+                    if typeof(orig) == "Vector3" and name ~= "HumanoidRootPart" then
+                        p.Size = orig * 2.2
+                        p.Massless = true
+                        p.CanCollide = false
+                    end
+                end
+            end
+        end
+    end)
+end
+
+-- Instant TP onto target (knife only — closer than gun lock)
+local function knifeInstantTP(plr)
+    local my = getHRP()
+    local their = getHRP(plr)
+    if not my or not their then return false end
+    local head = nil
+    pcall(function()
+        local c = getChar(plr)
+        head = c and c:FindFirstChild("Head")
+    end)
+    local lookAt = (head and head.Position) or (their.Position + Vector3.new(0, 1.2, 0))
+    -- stand right on them / slightly in front for max knife range
+    local pos = their.Position + Vector3.new(0, 0.2, 0) - their.CFrame.LookVector * 0.8
+    local cf = CFrame.new(pos, lookAt)
+    pcall(function()
+        local h = getHum()
+        if h then
+            h.PlatformStand = false
+            h:ChangeState(Enum.HumanoidStateType.Running)
+        end
+        local char = getChar()
+        if char and char.PivotTo then
+            char:PivotTo(cf)
+        end
+        my.CFrame = cf
+        my.AssemblyLinearVelocity = Vector3.zero
+        my.AssemblyAngularVelocity = Vector3.zero
+    end)
+    return true
+end
+
 local function cmdKnife(user)
     local plr = findPlayer(user)
     if not plr then
@@ -1752,7 +1844,8 @@ local function cmdKnife(user)
     task.spawn(function()
         local savedTrack = State.Tracking
         State.Tracking = false
-        setCamlock(plr, 12)
+        if State.InVoid then State.InVoid = false end
+        setCamlock(plr, 14)
         notify("Knife: equipping [Knife] → " .. plr.Name)
         local knife = findKnife()
         if not knife then
@@ -1763,7 +1856,6 @@ local function cmdKnife(user)
         end
         knife = equipTool(knife, 1.0)
         if not knife or not isToolEquipped(knife) then
-            -- retry equip
             task.wait(0.1)
             knife = findKnife()
             knife = equipTool(knife, 1.0)
@@ -1774,27 +1866,40 @@ local function cmdKnife(user)
             State.Tracking = savedTrack
             return
         end
-        notify("Knife: equipped " .. tostring(knife.Name))
-        for i = 1, 45 do
+        expandKnifeHitbox(knife, 3.8)
+        notify("Knife: equipped " .. tostring(knife.Name) .. " (TP + expanded hitbox)")
+
+        for i = 1, 50 do
             if isKO(plr) then break end
             if not getChar(plr) then break end
-            lockOnTarget(plr, 3.8, 0, i % 6 == 1)
+
+            -- INSTANT TP every swing so knife always connects
+            knifeInstantTP(plr)
+
             local aim = getTargetAimPos(plr)
             if aim then
-                for _ = 1, 3 do fireMouse(aim) end
+                for _ = 1, 4 do fireMouse(aim) end
             end
             aimAt(plr)
+
             if not isToolEquipped(knife) then
-                knife = equipTool(findKnife(), 0.5) or knife
+                knife = equipTool(findKnife(), 0.4) or knife
+                if knife then expandKnifeHitbox(knife, 3.8) end
             end
             activateTool(knife)
             if MainEvent then
                 pcall(function() MainEvent:FireServer("Hit", plr.Character) end)
                 pcall(function() MainEvent:FireServer("Punch") end)
                 pcall(function() MainEvent:FireServer("Knife") end)
+                pcall(function() MainEvent:FireServer("Slash") end)
             end
-            task.wait(0.05)
+            task.wait(0.04)
+            -- second swing in same window
+            knifeInstantTP(plr)
+            activateTool(knife)
+            task.wait(0.03)
         end
+
         if isKO(plr) then
             for _ = 1, 12 do
                 stomp(plr)
