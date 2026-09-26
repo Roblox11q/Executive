@@ -278,20 +278,24 @@ local function getTargetAimPos(plr)
     local part = getAimPart(plr)
     if not part then
         local hrp = getHRP(plr)
-        return hrp and hrp.Position or nil
+        return hrp and (hrp.Position + Vector3.new(0, 1.5, 0)) or nil
     end
     local ok, aim = pcall(function()
         local p = part.Position
+        -- always bias toward head center for consistent hits
+        if part.Name == "Head" then
+            p = p + Vector3.new(0, 0.05, 0)
+        else
+            p = p + Vector3.new(0, 0.35, 0)
+        end
         local their = getHRP(plr)
+        local my = getHRP()
         if their then
             local vel = their.AssemblyLinearVelocity or Vector3.zero
-            -- upgraded prediction: stronger horizontal lead + slight vertical damp
-            local lead = 0.22
-            p = p + Vector3.new(vel.X * lead, math.clamp(vel.Y, -20, 20) * 0.12, vel.Z * lead)
-            -- slight head offset for better headshots
-            if part.Name == "Head" then
-                p = p + Vector3.new(0, 0.15, 0)
-            end
+            -- distance-based lead so shots land at range
+            local dist = my and (their.Position - my.Position).Magnitude or 20
+            local lead = math.clamp(0.12 + (dist / 180), 0.14, 0.38)
+            p = p + Vector3.new(vel.X * lead, math.clamp(vel.Y, -25, 25) * 0.08, vel.Z * lead)
         end
         return p
     end)
@@ -399,15 +403,9 @@ local function camlockStep()
         return
     end
 
-    local head = nil
-    pcall(function()
-        local c = getChar(plr)
-        head = c and c:FindFirstChild("Head")
-    end)
-    local aim
-    if head then
-        aim = head.Position
-    else
+    -- prefer predicted aim pos (velocity lead) over raw head
+    local aim = getTargetAimPos(plr)
+    if not aim then
         local hrp = getHRP(plr)
         aim = hrp and (hrp.Position + Vector3.new(0, 1.5, 0)) or nil
     end
@@ -417,15 +415,13 @@ local function camlockStep()
     if not cam then return end
 
     pcall(function()
-        -- Scriptable = engine won't override our CFrame
         if cam.CameraType ~= Enum.CameraType.Scriptable then
             cam.CameraType = Enum.CameraType.Scriptable
         end
-        -- Camera sits slightly behind local character looking AT head → crosshair center = head
         local my = getHRP()
         local camPos
         if my then
-            camPos = my.Position + Vector3.new(0, 2.35, 0) - my.CFrame.LookVector * 0.35
+            camPos = my.Position + Vector3.new(0, 2.4, 0) - my.CFrame.LookVector * 0.25
         else
             camPos = cam.CFrame.Position
         end
@@ -434,11 +430,10 @@ local function camlockStep()
     end)
 
     moveCursorToWorld(aim)
-    -- upgraded aimbot: more mouse fires for lock reliability
-    fireMouse(aim)
-    fireMouse(aim)
-    fireMouse(aim)
-    fireMouse(aim)
+    -- spam mouse pos so server always has latest aim (hits more consistently)
+    for _ = 1, 6 do
+        fireMouse(aim)
+    end
 end
 
 local function setCamlock(plr, seconds)
@@ -877,7 +872,7 @@ local function shoot(plr)
         task.wait(0.05)
     end
     ensureVisible()
-    setCamlock(plr, 1.5)
+    setCamlock(plr, 2.5)
 
     local gun = equipGun()
     if not gun then return end
@@ -886,17 +881,20 @@ local function shoot(plr)
     -- soft reload only, stay on target
     if needsReload(gun) then
         softReload(gun)
-        task.wait(0.08)
+        task.wait(0.06)
         gun = equipGun()
         if not gun then return end
     end
 
-    -- force an immediate body snap once, then throttled updates
-    -- one instant TP behind target, then shoot (walk only after)
-    lockOnTarget(plr, 7.0, 0, true)
+    -- closer range = more reliable hits on Hood Customs
+    lockOnTarget(plr, 5.5, 0, true)
+    local aim0 = getTargetAimPos(plr)
+    if aim0 then
+        for _ = 1, 4 do fireMouse(aim0) end
+    end
     aimAt(plr)
 
-    for i = 1, 10 do
+    for i = 1, 14 do
         if not isAlive(plr) then break end
         gun = findToolByName(PreferredGun, false)
         if not gun or not isToolEquipped(gun) then
@@ -908,15 +906,25 @@ local function shoot(plr)
             gun = equipGun()
             if not gun then break end
         end
-        -- walk only after first TP (no spam teleport)
-        lockOnTarget(plr, 7.0, 0, false)
-        local aim = aimAt(plr)
+        -- stay glued behind target
+        lockOnTarget(plr, 5.5, 0, false)
+        local aim = getTargetAimPos(plr) or aimAt(plr)
         if aim then
-            fireMouse(aim)
-            fireMouse(aim)
+            for _ = 1, 5 do fireMouse(aim) end
+            pcall(function()
+                local cam = Workspace.CurrentCamera
+                if cam then
+                    cam.CFrame = CFrame.lookAt(cam.CFrame.Position, aim)
+                    cam.Focus = CFrame.new(aim)
+                end
+            end)
         end
         activateTool(gun)
-        task.wait(0.04)
+        -- tiny wait then fire again same frame window
+        task.wait(0.02)
+        if aim then for _ = 1, 3 do fireMouse(aim) end end
+        activateTool(gun)
+        task.wait(0.03)
     end
 end
 
@@ -1422,40 +1430,42 @@ local function carryStep()
         State.Carrying = nil
         return
     end
+    -- if they got up, re-knock quickly
+    if not isKO(victim) and isAlive(victim) then
+        punch(victim)
+        return
+    end
     local vHRP = getHRP(victim)
     local my = getHRP()
     if not vHRP or not my then return end
 
-    -- hold body in front of alt (stronger hold)
+    -- hard hold body in front of alt every frame
     pcall(function()
-        vHRP.CFrame = my.CFrame * CFrame.new(0, 0.6, -2.0)
+        vHRP.CFrame = my.CFrame * CFrame.new(0, 0.7, -1.6)
         vHRP.AssemblyLinearVelocity = Vector3.zero
         vHRP.AssemblyAngularVelocity = Vector3.zero
-        if vHRP.Anchored ~= nil then
-            -- don't anchor permanently (anti-cheat), just zero vel
-        end
     end)
     if MainEvent then
         pcall(function() MainEvent:FireServer("Grabbing", true) end)
         pcall(function() MainEvent:FireServer("Grabbing") end)
         pcall(function() MainEvent:FireServer("Carry", true) end)
+        pcall(function() MainEvent:FireServer("PickUp") end)
     end
 
-    -- move toward owner faster
+    -- move toward owner fast
     local owner = getOwner()
     local oHRP = owner and getHRP(owner)
     if oHRP then
         local dist = (oHRP.Position - my.Position).Magnitude
-        if dist > 5 then
+        if dist > 4 then
             pcall(function()
-                local targetPos = oHRP.Position + oHRP.CFrame.LookVector * 3 + Vector3.new(0, 0.5, 0)
-                my.CFrame = CFrame.new(my.Position:Lerp(targetPos, 0.42), oHRP.Position)
+                local targetPos = oHRP.Position + oHRP.CFrame.LookVector * 3.5 + Vector3.new(0, 0.5, 0)
+                my.CFrame = CFrame.new(my.Position:Lerp(targetPos, 0.55), oHRP.Position)
                 my.AssemblyLinearVelocity = Vector3.zero
             end)
         else
-            -- at owner — keep holding until drop
             pcall(function()
-                my.CFrame = CFrame.new(oHRP.Position + oHRP.CFrame.LookVector * 3 + Vector3.new(0, 0.5, 0), oHRP.Position)
+                my.CFrame = CFrame.new(oHRP.Position + oHRP.CFrame.LookVector * 3.5 + Vector3.new(0, 0.5, 0), oHRP.Position)
                 my.AssemblyLinearVelocity = Vector3.zero
             end)
         end
@@ -1504,7 +1514,7 @@ local function cmdBring(user)
         State.Tracking = false
         State.LoopKill = nil
         State.Carrying = nil
-        setCamlock(plr, 15)
+        setCamlock(plr, 20)
         notify("Bring: knocking " .. plr.Name)
 
         local useGun = false
@@ -1514,43 +1524,57 @@ local function cmdBring(user)
             State.Armed = useGun
         end
 
-        -- more aggressive knock
-        for i = 1, 60 do
+        -- aggressive knock until KO
+        for i = 1, 80 do
             if isKO(plr) then break end
             if not getChar(plr) then break end
-            lockOnTarget(plr, 6.0, 0, i == 1)
+            lockOnTarget(plr, 5.0, 0, i % 8 == 1)
             if useGun then shoot(plr) else punch(plr) end
-            task.wait(0.04)
+            task.wait(0.035)
         end
 
         if not isKO(plr) then
-            for _ = 1, 20 do
+            for _ = 1, 25 do
                 if isKO(plr) then break end
                 punch(plr)
-                task.wait(0.04)
+                task.wait(0.035)
             end
         end
 
         if isKO(plr) then
-            for _ = 1, 6 do
+            for _ = 1, 8 do
                 stomp(plr)
-                task.wait(0.08)
+                task.wait(0.07)
             end
-            -- start carry immediately
             State.Carrying = plr.Name
             State.Tracking = false
-            -- try grab remotes
+            -- grab remotes (multiple hood variants)
             if MainEvent then
                 pcall(function() MainEvent:FireServer("Grabbing", true) end)
                 pcall(function() MainEvent:FireServer("Grabbing") end)
+                pcall(function() MainEvent:FireServer("Carry", true) end)
+                pcall(function() MainEvent:FireServer("PickUp") end)
             end
-            -- snap body close once
-            local vHRP = getHRP(plr)
+            -- hard snap body to us repeatedly so carry sticks
+            for _ = 1, 6 do
+                local vHRP = getHRP(plr)
+                local my = getHRP()
+                if vHRP and my then
+                    pcall(function()
+                        vHRP.CFrame = my.CFrame * CFrame.new(0, 0.8, -1.8)
+                        vHRP.AssemblyLinearVelocity = Vector3.zero
+                        vHRP.AssemblyAngularVelocity = Vector3.zero
+                    end)
+                end
+                task.wait(0.05)
+            end
+            -- walk toward owner immediately
+            local owner = getOwner()
+            local oHRP = owner and getHRP(owner)
             local my = getHRP()
-            if vHRP and my then
+            if oHRP and my then
                 pcall(function()
-                    vHRP.CFrame = my.CFrame * CFrame.new(0, 0.5, -2.0)
-                    vHRP.AssemblyLinearVelocity = Vector3.zero
+                    my.CFrame = CFrame.new(oHRP.Position + oHRP.CFrame.LookVector * 4 + Vector3.new(0, 0.5, 0), oHRP.Position)
                 end)
             end
             notify("Bring: carrying " .. plr.Name .. " → owner (use .drop to release)")
@@ -1608,6 +1632,7 @@ local function cmdFix()
     State.Carrying = nil
     State.TargetName = nil
     State.KnifeMode = false
+    FrozenTargets = {}
     clearCamlock()
     unequip()
     -- force benx off without toggling (direct set)
@@ -1698,10 +1723,20 @@ local function cmdView()
 end
 
 local function findKnife()
+    -- exact [Knife] first (Hood Customs name)
+    local exact = findToolByName("[Knife]", true)
+    if exact then return exact end
+    local c = getChar()
+    local bag = LocalPlayer:FindFirstChild("Backpack")
+    for _, container in ipairs({c, bag}) do
+        if container then
+            local t = container:FindFirstChild("[Knife]")
+            if t and t:IsA("Tool") then return t end
+        end
+    end
     return findToolByName("[Knife]", false)
         or findToolByName("Knife", false)
         or findToolByName("Combat Knife", false)
-        or findToolByName("Knife", true)
 end
 
 local function cmdKnife(user)
@@ -1717,38 +1752,53 @@ local function cmdKnife(user)
     task.spawn(function()
         local savedTrack = State.Tracking
         State.Tracking = false
-        setCamlock(plr, 10)
-        notify("Knife: attacking " .. plr.Name)
+        setCamlock(plr, 12)
+        notify("Knife: equipping [Knife] → " .. plr.Name)
         local knife = findKnife()
         if not knife then
-            notify("Knife: no knife found in backpack")
+            notify("Knife: [Knife] not found in backpack/character")
             clearCamlock()
             State.Tracking = savedTrack
             return
         end
-        knife = equipTool(knife, 0.8)
-        if not knife then
-            notify("Knife: failed to equip")
+        knife = equipTool(knife, 1.0)
+        if not knife or not isToolEquipped(knife) then
+            -- retry equip
+            task.wait(0.1)
+            knife = findKnife()
+            knife = equipTool(knife, 1.0)
+        end
+        if not knife or not isToolEquipped(knife) then
+            notify("Knife: failed to equip [Knife]")
             clearCamlock()
             State.Tracking = savedTrack
             return
         end
-        for i = 1, 40 do
-            if not isAlive(plr) and not isKO(plr) then break end
+        notify("Knife: equipped " .. tostring(knife.Name))
+        for i = 1, 45 do
             if isKO(plr) then break end
-            lockOnTarget(plr, 4.5, 0, i == 1)
+            if not getChar(plr) then break end
+            lockOnTarget(plr, 3.8, 0, i % 6 == 1)
+            local aim = getTargetAimPos(plr)
+            if aim then
+                for _ = 1, 3 do fireMouse(aim) end
+            end
             aimAt(plr)
+            if not isToolEquipped(knife) then
+                knife = equipTool(findKnife(), 0.5) or knife
+            end
             activateTool(knife)
             if MainEvent then
                 pcall(function() MainEvent:FireServer("Hit", plr.Character) end)
                 pcall(function() MainEvent:FireServer("Punch") end)
+                pcall(function() MainEvent:FireServer("Knife") end)
             end
-            task.wait(0.06)
+            task.wait(0.05)
         end
         if isKO(plr) then
-            for _ = 1, 10 do
+            for _ = 1, 12 do
                 stomp(plr)
-                task.wait(0.1)
+                task.wait(0.09)
             end
         end
         clearCamlock()
@@ -1758,6 +1808,91 @@ local function cmdKnife(user)
         end
         notify("Knife done " .. plr.Name)
     end)
+end
+
+-- Talk toggle (alts stay silent when off)
+local StateTalk = true
+local function cmdTalk(arg)
+    if arg == "off" or arg == "0" or arg == "false" then
+        StateTalk = false
+        notify("Talk OFF")
+    else
+        StateTalk = true
+        notify("Talk ON")
+    end
+end
+
+-- Freeze / unfreeze targets (client-side lock loop)
+local FrozenTargets = {} -- name lower -> true
+
+local function freezeLoop()
+    while true do
+        task.wait(0.05)
+        for name in pairs(FrozenTargets) do
+            local plr = findPlayer(name)
+            if plr then
+                local hrp = getHRP(plr)
+                local hum = getHum(plr)
+                if hrp then
+                    pcall(function()
+                        hrp.AssemblyLinearVelocity = Vector3.zero
+                        hrp.AssemblyAngularVelocity = Vector3.zero
+                        if FrozenTargets[name] and type(FrozenTargets[name]) == "userdata" then
+                            hrp.CFrame = FrozenTargets[name]
+                        else
+                            FrozenTargets[name] = hrp.CFrame
+                        end
+                        hrp.CFrame = FrozenTargets[name]
+                    end)
+                end
+                if hum then
+                    pcall(function()
+                        hum.WalkSpeed = 0
+                        hum.JumpPower = 0
+                        hum.PlatformStand = true
+                    end)
+                end
+            end
+        end
+    end
+end
+task.spawn(freezeLoop)
+
+local function cmdFreeze(user)
+    local plr = findPlayer(user)
+    if not plr then
+        notify("Freeze: player not found")
+        return
+    end
+    if isProtected(plr) then
+        notify("Freeze: target protected")
+        return
+    end
+    local hrp = getHRP(plr)
+    FrozenTargets[string.lower(plr.Name)] = hrp and hrp.CFrame or true
+    notify("Freeze ON " .. plr.Name)
+end
+
+local function cmdUnfreeze(user)
+    if not user or user == "" then
+        FrozenTargets = {}
+        notify("Unfreeze: all cleared")
+        return
+    end
+    local plr = findPlayer(user)
+    local key = plr and string.lower(plr.Name) or string.lower(user)
+    FrozenTargets[key] = nil
+    if plr then
+        local hum = getHum(plr)
+        if hum then
+            pcall(function()
+                hum.WalkSpeed = 16
+                hum.JumpPower = 50
+                hum.PlatformStand = false
+            end)
+        end
+    end
+    notify("Unfreeze " .. (plr and plr.Name or user))
 end
 
 -- Fake ban message (what moderators typically show)
@@ -1806,6 +1941,7 @@ wl <user> uwl | protect <user> unprotect
 loopkill/lk <user> | unloopkill/unlk
 bring <user> | drop
 knife <user> | view
+talk on/off | freeze <user> | unfreeze <user>
 benx <user> | unbenx | pkick <user> | forcevoid <user>
 fakeban/fb <user> | forcefix <user>
 l | e | a | fix | kick | r [off]
@@ -1888,6 +2024,9 @@ local function onControlChat(msg, speaker)
     elseif cmd == "drop" then cmdDrop()
     elseif cmd == "knife" then cmdKnife(a1)
     elseif cmd == "view" or cmd == "players" then cmdView()
+    elseif cmd == "talk" then cmdTalk(a1)
+    elseif cmd == "freeze" then cmdFreeze(a1)
+    elseif cmd == "unfreeze" then cmdUnfreeze(a1)
     elseif cmd == "l" then cmdTaunt(a1 == "off")
     elseif cmd == "e" then cmdEmote(a1)
     elseif cmd == "a" then cmdArmor()
@@ -2156,21 +2295,30 @@ end)
 showIntroGui()
 
 ----------------------------------------------------------------------
--- TIER TAGS ABOVE HEAD (visible to everyone in server)
+-- TIER EMOJI TAGS ABOVE HEAD
+-- free = 😎  premium = 🌟  bypass/shield = 👑
 ----------------------------------------------------------------------
 local TierTags = {} -- UserId -> BillboardGui
 
-local TIER_COLORS = {
-    free = Color3.fromRGB(180, 180, 180),
-    premium = Color3.fromRGB(80, 180, 255),
-    bypass = Color3.fromRGB(255, 80, 80),
+local TIER_EMOJI = {
+    free = "😎",
+    premium = "🌟",
+    bypass = "👑",
 }
 
-local TIER_LABELS = {
-    free = "FREE",
-    premium = "PREMIUM",
-    bypass = "SHIELD BYPASS",
-}
+local function safeHead(char)
+    if not char then return nil end
+    local ok, head = pcall(function()
+        return char:FindFirstChild("Head")
+    end)
+    if ok and head and head:IsA("BasePart") then return head end
+    -- fallback parts some hood places use
+    ok, head = pcall(function()
+        return char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso") or char:FindFirstChild("HumanoidRootPart")
+    end)
+    if ok and head and head:IsA("BasePart") then return head end
+    return nil
+end
 
 local function removeTierTag(plr)
     if not plr then return end
@@ -2179,14 +2327,17 @@ local function removeTierTag(plr)
         pcall(function() existing:Destroy() end)
         TierTags[plr.UserId] = nil
     end
-    -- also clean any leftover on character
     pcall(function()
         local c = getChar(plr)
-        if c then
-            local head = c:FindFirstChild("Head")
-            if head then
-                local old = head:FindFirstChild("StandTierTag")
-                if old then old:Destroy() end
+        if not c then return end
+        local head = safeHead(c)
+        if head then
+            local old = head:FindFirstChild("StandTierTag")
+            if old then old:Destroy() end
+        end
+        for _, d in ipairs(c:GetDescendants()) do
+            if d.Name == "StandTierTag" then
+                pcall(function() d:Destroy() end)
             end
         end
     end)
@@ -2196,53 +2347,53 @@ local function createTierTag(plr, rank)
     if not plr then return end
     rank = string.lower(tostring(rank or "free"))
     if rank ~= "premium" and rank ~= "bypass" then rank = "free" end
-    removeTierTag(plr)
 
     pcall(function()
         local c = getChar(plr)
         if not c then return end
-        local head = c:FindFirstChild("Head")
+        local head = safeHead(c)
         if not head then return end
+
+        -- already has our tag?
+        local existing = head:FindFirstChild("StandTierTag")
+        if existing then
+            local lbl = existing:FindFirstChild("TierLabel")
+            if lbl then
+                lbl.Text = TIER_EMOJI[rank] or "😎"
+            end
+            TierTags[plr.UserId] = existing
+            return
+        end
+
+        removeTierTag(plr)
 
         local bb = Instance.new("BillboardGui")
         bb.Name = "StandTierTag"
         bb.Adornee = head
-        bb.Size = UDim2.new(0, 140, 0, 28)
-        bb.StudsOffset = Vector3.new(0, 2.6, 0)
+        bb.Size = UDim2.new(0, 48, 0, 48)
+        bb.StudsOffset = Vector3.new(0, 2.8, 0)
         bb.AlwaysOnTop = true
-        bb.MaxDistance = 120
+        bb.MaxDistance = 150
+        bb.LightInfluence = 0
         bb.Parent = head
 
         local label = Instance.new("TextLabel")
         label.Name = "TierLabel"
-        label.BackgroundTransparency = 0.35
-        label.BackgroundColor3 = Color3.fromRGB(20, 20, 28)
+        label.BackgroundTransparency = 1
         label.Size = UDim2.new(1, 0, 1, 0)
         label.Font = Enum.Font.GothamBold
-        label.Text = TIER_LABELS[rank] or "FREE"
-        label.TextColor3 = TIER_COLORS[rank] or TIER_COLORS.free
-        label.TextSize = 14
-        label.TextStrokeTransparency = 0.4
+        label.Text = TIER_EMOJI[rank] or "😎"
+        label.TextColor3 = Color3.fromRGB(255, 255, 255)
+        label.TextSize = 32
+        label.TextStrokeTransparency = 0.5
         label.Parent = bb
-
-        local corner = Instance.new("UICorner")
-        corner.CornerRadius = UDim.new(0, 6)
-        corner.Parent = label
-
-        local stroke = Instance.new("UIStroke")
-        stroke.Color = TIER_COLORS[rank] or TIER_COLORS.free
-        stroke.Thickness = 1.2
-        stroke.Transparency = 0.3
-        stroke.Parent = label
 
         TierTags[plr.UserId] = bb
     end)
 end
 
 local function refreshTierTags()
-    -- tag self
     createTierTag(LocalPlayer, MyRank)
-    -- tag known ranked owners/stands in server
     for _, plr in ipairs(Players:GetPlayers()) do
         local r = RankedOwners[string.lower(plr.Name)]
         if r then
@@ -2253,31 +2404,51 @@ local function refreshTierTags()
     end
 end
 
--- create on join + character respawn
 task.spawn(function()
-    task.wait(1.5)
-    refreshTierTags()
+    task.wait(2)
+    pcall(refreshTierTags)
 end)
 
-LocalPlayer.CharacterAdded:Connect(function()
-    task.wait(1)
-    createTierTag(LocalPlayer, MyRank)
+LocalPlayer.CharacterAdded:Connect(function(char)
+    task.spawn(function()
+        -- wait until head exists (avoids Head is not a valid member errors)
+        local t0 = tick()
+        while tick() - t0 < 5 do
+            if safeHead(char) then break end
+            task.wait(0.2)
+        end
+        task.wait(0.3)
+        createTierTag(LocalPlayer, MyRank)
+    end)
 end)
 
 Players.PlayerAdded:Connect(function(plr)
-    task.wait(2)
-    local r = RankedOwners[string.lower(plr.Name)]
-    if r then createTierTag(plr, r) end
+    task.spawn(function()
+        task.wait(2.5)
+        local r = RankedOwners[string.lower(plr.Name)]
+        if r then createTierTag(plr, r) end
+        plr.CharacterAdded:Connect(function(char)
+            task.spawn(function()
+                local t0 = tick()
+                while tick() - t0 < 5 do
+                    if safeHead(char) then break end
+                    task.wait(0.2)
+                end
+                task.wait(0.3)
+                local rr = RankedOwners[string.lower(plr.Name)]
+                if rr then createTierTag(plr, rr) end
+            end)
+        end)
+    end)
 end)
 
 Players.PlayerRemoving:Connect(function(plr)
     removeTierTag(plr)
 end)
 
--- re-apply tags periodically (in case character respawns for others)
 task.spawn(function()
     while true do
-        task.wait(8)
+        task.wait(10)
         pcall(refreshTierTags)
     end
 end)
