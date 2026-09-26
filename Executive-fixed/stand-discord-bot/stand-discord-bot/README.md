@@ -1,5 +1,7 @@
 # Stand Discord Config Bot (Render + Supabase)
 
+**In-game support:** Da Hood (`2788229376`) · DERS HOOD (`96247461091106`) · Des Hood (`128413479081937`) · Hood Customs (`9825515356`)
+
 ## 1. Supabase
 
 1. Create a project at https://supabase.com
