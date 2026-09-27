@@ -135,6 +135,7 @@ local State = {
     KnifeBusy     = false,
     LoopKillBusy  = false,
     AutoReload    = true,
+    Sweep         = false,
 }
 
 local Whitelist    = {}
@@ -881,38 +882,71 @@ end
 ----------------------------------------------------------------------
 local function stompTarget(plr, times)
     if not plr then return end
-    times = times or 8
-    local char = getChar(plr)
+    times = times or 12
+    State.Tracking = false
+
     for i = 1, times do
         if not getChar(plr) then break end
+        -- if they got up and are no longer KO, stop stomping this cycle
+        if not isKO(plr) and i > 2 then
+            local h = getHum(plr)
+            if h and h.Health > 15 then break end
+        end
+
         local my = getHRP()
         local their = getHRP(plr)
         if my and their then
+            -- stand on their torso / head area (classic hood stomp pos)
+            local pos = their.Position + Vector3.new(0, 2.5, 0)
             pcall(function()
-                my.CFrame = CFrame.new(their.Position + Vector3.new(0, 2.2, 0))
+                local ch = getChar()
+                local cf = CFrame.new(pos)
+                if ch and ch.PivotTo then ch:PivotTo(cf) end
+                my.CFrame = cf
                 my.AssemblyLinearVelocity = Vector3.zero
+                my.AssemblyAngularVelocity = Vector3.zero
             end)
         end
+
+        -- E key (stomp)
         pcall(function()
             local vim = game:GetService("VirtualInputManager")
             if vim then
                 vim:SendKeyEvent(true, Enum.KeyCode.E, false, game)
-                task.wait(0.05)
+                task.wait(0.06)
                 vim:SendKeyEvent(false, Enum.KeyCode.E, false, game)
             end
         end)
+        pcall(function()
+            local vu = game:GetService("VirtualUser")
+            if vu then
+                vu:SetKeyDown("0x45")
+                task.wait(0.05)
+                vu:SetKeyUp("0x45")
+            end
+        end)
+
+        local char = getChar(plr)
         if MainEvent then
-            for _, n in ipairs({"Stomp", "KnockedStomp", "Finish"}) do
+            for _, n in ipairs({"Stomp", " stoomp", "KnockedStomp", "Finish", "StompPlayer"}) do
                 pcall(function() MainEvent:FireServer(n) end)
-                pcall(function() MainEvent:FireServer(n, char) end)
                 pcall(function() MainEvent:FireServer(n, true) end)
+                if char then
+                    pcall(function() MainEvent:FireServer(n, char) end)
+                    pcall(function() MainEvent:FireServer(n, char, true) end)
+                end
+                pcall(function() MainEvent:FireServer(n, plr) end)
             end
         end
-        task.wait(0.12)
+        if UnreliableMainEvent then
+            pcall(function() UnreliableMainEvent:FireServer("Stomp") end)
+            pcall(function() UnreliableMainEvent:FireServer("Stomp", true) end)
+        end
+
+        task.wait(0.1)
     end
 end
 
-----------------------------------------------------------------------
 -- COMBAT: KNIFE
 ----------------------------------------------------------------------
 local function knifeTarget(plr)
@@ -1185,8 +1219,24 @@ local function cmdKnock(user)
     State.Tracking = false
     task.spawn(function()
         shootTarget(plr)
-        task.wait(0.3)
-        if isKO(plr) then stompTarget(plr, 6) end
+        -- wait briefly for KO to register
+        local t0 = tick()
+        while tick() - t0 < 2.5 do
+            if isKO(plr) then break end
+            if not getChar(plr) then break end
+            task.wait(0.15)
+        end
+        if isKO(plr) or (getHum(plr) and getHum(plr).Health < 20) then
+            notify("Stomping " .. plr.Name)
+            stompTarget(plr, 14)
+        else
+            -- try a bit more shooting then stomp attempt
+            shootTarget(plr)
+            task.wait(0.4)
+            stompTarget(plr, 10)
+        end
+        clearAimLock()
+        clearCamlock()
         State.Tracking = true
         returnToOwner()
     end)
@@ -1258,6 +1308,65 @@ local function loopKillCycle(plr)
     end
 end
 
+local function cmdSweep()
+    if State.Sweep then
+        notify("Sweep already ON")
+        return
+    end
+    State.Sweep = true
+    State.Tracking = false
+    notify("Sweep ON — clearing server")
+    task.spawn(function()
+        while State.Sweep do
+            local targets = {}
+            for _, plr in ipairs(Players:GetPlayers()) do
+                if plr ~= LocalPlayer and not isProtected(plr) then
+                    if isAlive(plr) or isKO(plr) then
+                        targets[#targets + 1] = plr
+                    end
+                end
+            end
+            if #targets == 0 then
+                task.wait(1)
+            else
+                for _, plr in ipairs(targets) do
+                    if not State.Sweep then break end
+                    if isProtected(plr) then continue end
+                    if isKO(plr) then
+                        stompTarget(plr, 10)
+                    elseif isAlive(plr) then
+                        setAimLock(plr)
+                        pcall(ensureSilentAim)
+                        setCamlock(plr, 3)
+                        shootTarget(plr)
+                        local t0 = tick()
+                        while tick() - t0 < 2 and State.Sweep do
+                            if isKO(plr) then break end
+                            if not getChar(plr) then break end
+                            task.wait(0.15)
+                        end
+                        if isKO(plr) then
+                            stompTarget(plr, 12)
+                        end
+                    end
+                    task.wait(0.2)
+                end
+            end
+            task.wait(0.35)
+        end
+        clearAimLock()
+        clearCamlock()
+        State.Tracking = true
+        returnToOwner()
+        notify("Sweep OFF")
+    end)
+end
+
+local function cmdUnSweep()
+    State.Sweep = false
+    notify("Sweep stopping...")
+end
+
 local function cmdProtect(user)
     local plr = findPlayer(user)
     if not plr then notify("Protect: not found") return end
@@ -1321,6 +1430,7 @@ local function cmdFix()
     State.LoopKill = nil
     State.LoopKillKnife = false
     State.LoopKillBusy = false
+    State.Sweep = false
     State.TargetName = nil
     State.KnifeBusy = false
     State.InVoid = false
@@ -1388,6 +1498,7 @@ local function cmdHelp()
     print("  " .. Prefix .. "arm / unarm")
     print("  " .. Prefix .. "knock <user>  |  stomp <user>  |  knife <user>")
     print("  " .. Prefix .. "lk <user>  |  lkk <user>  |  unlk")
+    print("  " .. Prefix .. "sweep  |  unsweep   -- kill whole server")
     print("  " .. Prefix .. "protect <user>  |  unprotect")
     print("  " .. Prefix .. "wl <user>  |  uwl [user]")
     print("  " .. Prefix .. "target <user>  |  untarget")
@@ -1430,6 +1541,8 @@ local function onControlChat(msg, speaker)
     elseif cmd == "lk" or cmd == "loopkill" then cmdLoopKill(a1, false)
     elseif cmd == "lkk" then cmdLoopKill(a1, true)
     elseif cmd == "unlk" or cmd == "unloopkill" then cmdUnLoopKill()
+    elseif cmd == "sweep" then cmdSweep()
+    elseif cmd == "unsweep" or cmd == "stopsweep" then cmdUnSweep()
     elseif cmd == "protect" or cmd == "prot" then cmdProtect(a1)
     elseif cmd == "unprotect" or cmd == "unprot" then cmdUnprotect()
     elseif cmd == "wl" or cmd == "whitelist" then cmdWL(a1)
@@ -1479,7 +1592,7 @@ end)
 ----------------------------------------------------------------------
 Connections.Main = RunService.Heartbeat:Connect(function()
     if IsOwner then return end
-    if not State.KnifeBusy and not State.LoopKillBusy then
+    if not State.KnifeBusy and not State.LoopKillBusy and not State.Sweep and not State.LoopKill then
         followOwner()
     end
     autoReloadTick()
