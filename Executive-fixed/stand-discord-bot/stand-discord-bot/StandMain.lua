@@ -209,11 +209,15 @@ local IsHoodCustoms = (PlaceId == 9825515356)
 local IsHoodGame = IsDaHoodStyle or IsHoodCustoms or true -- default to hood-style remotes
 
 local MainEvent = nil
+local UnreliableMainEvent = nil
+local MainFunction = nil
 local MouseRemote = "MousePosUpdate"
 pcall(function()
     MainEvent = ReplicatedStorage:FindFirstChild("MainEvent")
         or ReplicatedStorage:FindFirstChild("MainEventt")
         or ReplicatedStorage:FindFirstChild("MAINEVENT")
+    UnreliableMainEvent = ReplicatedStorage:FindFirstChild("UnreliableMainEvent")
+    MainFunction = ReplicatedStorage:FindFirstChild("MainFunction")
     -- Place-correct mouse remote (wrong name = error_sum spam / no aim)
     if IsDaHoodStyle then
         -- classic Da Hood, ranked, and DERS HOOD clones
@@ -773,54 +777,83 @@ local function activateTool(tool)
     return true
 end
 
--- Fire every RemoteEvent / RemoteFunction inside the knife tool (Hood Customs
--- and many clones put the real hit logic on tool.Remote, not MainEvent alone).
-local function fireToolHit(tool, plr)
-    if not tool or not plr then return end
+-- Hood Customs dump: Knife has NO internal remotes. Hits go through
+-- MainEvent / UnreliableMainEvent / MainFunction + Tool:Activate + BodyEffects.Attacking.
+local function fireMeleeHit(tool, plr)
+    if not plr then return end
     local targetChar = getChar(plr)
     local targetHum = getHum(plr)
     local targetHRP = getHRP(plr)
     local aim = getTargetAimPos(plr)
 
-    local function tryFire(remote)
-        if not remote then return end
-        -- common arg patterns used by hood knife tools
-        pcall(function() remote:FireServer("Hit") end)
-        pcall(function() remote:FireServer("Hit", targetHum) end)
-        pcall(function() remote:FireServer("Hit", targetChar) end)
-        pcall(function() remote:FireServer("Hit", targetHRP) end)
-        pcall(function() remote:FireServer("Slash") end)
-        pcall(function() remote:FireServer("Slash", targetHum) end)
-        pcall(function() remote:FireServer("Knife") end)
-        pcall(function() remote:FireServer("Attack") end)
-        pcall(function() remote:FireServer("Attack", targetChar) end)
-        pcall(function() remote:FireServer(true) end)
-        pcall(function() remote:FireServer(targetChar) end)
-        pcall(function() remote:FireServer(targetHum) end)
-        if aim then
-            pcall(function() remote:FireServer(aim) end)
-            pcall(function() remote:FireServer("Hit", aim) end)
-        end
-        if remote:IsA("RemoteFunction") then
-            pcall(function() remote:InvokeServer("Hit", targetHum) end)
-            pcall(function() remote:InvokeServer(targetChar) end)
-        end
-    end
-
+    -- Mark attacking so server melee checks pass
     pcall(function()
-        for _, d in ipairs(tool:GetDescendants()) do
-            if d:IsA("RemoteEvent") or d:IsA("RemoteFunction") then
-                tryFire(d)
-            end
-        end
-        -- also direct children named Remote / Hit / Attack
-        for _, name in ipairs({"Remote", "Hit", "Attack", "Knife", "Slash", "Combat"}) do
-            local r = tool:FindFirstChild(name, true)
-            if r and (r:IsA("RemoteEvent") or r:IsA("RemoteFunction")) then
-                tryFire(r)
+        local c = getChar()
+        local be = c and c:FindFirstChild("BodyEffects")
+        if be then
+            local atk = be:FindFirstChild("Attacking")
+            if atk and atk:IsA("BoolValue") then atk.Value = true end
+            local atkC = be:FindFirstChild("Attacking_CLIENT")
+            if atkC and atkC:IsA("BoolValue") then atkC.Value = true end
+            if aim then
+                local mp = be:FindFirstChild("MousePos")
+                if mp and mp:IsA("Vector3Value") then mp.Value = aim end
             end
         end
     end)
+
+    if tool then
+        pcall(function() tool:Activate() end)
+    end
+
+    local function fireAll(remote, isFn)
+        if not remote then return end
+        local function send(...)
+            if isFn then
+                pcall(function() remote:InvokeServer(...) end)
+            else
+                pcall(function() remote:FireServer(...) end)
+            end
+        end
+        send("Hit")
+        send("Hit", targetChar)
+        send("Hit", targetHum)
+        send("Hit", plr)
+        send("Knife")
+        send("Knife", targetChar)
+        send("Slash")
+        send("Punch")
+        send("Combat")
+        send("Attack")
+        if aim then
+            send(MouseRemote, aim)
+            send("MousePosUpdate", aim)
+            send("UpdateMousePos", aim)
+        end
+    end
+
+    fireAll(MainEvent, false)
+    fireAll(UnreliableMainEvent, false)
+    fireAll(MainFunction, true)
+
+    -- tool-internal remotes if any exist on other tools / future places
+    if tool then
+        pcall(function()
+            for _, d in ipairs(tool:GetDescendants()) do
+                if d:IsA("RemoteEvent") then
+                    pcall(function() d:FireServer("Hit", targetHum) end)
+                    pcall(function() d:FireServer("Hit", targetChar) end)
+                elseif d:IsA("RemoteFunction") then
+                    pcall(function() d:InvokeServer("Hit", targetHum) end)
+                end
+            end
+        end)
+    end
+end
+
+-- keep old name as alias so existing call sites still work
+local function fireToolHit(tool, plr)
+    fireMeleeHit(tool, plr)
 end
 
 -- Force alt back onto owner (used after knife / knock so bot doesn't stick on corpse)
@@ -2817,37 +2850,64 @@ local function cmdKnife(user)
         local savedTrack = State.Tracking
         State.Tracking = false
         if State.InVoid then State.InVoid = false end
-        setCamlock(plr, 14)
+        setCamlock(plr, 16)
         notify("Knife: " .. plr.Name)
 
         local knife = ensureKnifeEquipped(1.5)
         if not knife or not isToolEquipped(knife) then
-            task.wait(0.15)
+            task.wait(0.2)
             knife = ensureKnifeEquipped(1.2)
         end
         if not knife or not isToolEquipped(knife) then
-            notify("Knife: failed to equip [Knife] — buy/equip knife in backpack first")
+            notify("Knife: failed to equip [Knife] — buy knife first")
             clearCamlock()
             State.Tracking = savedTrack
             return
         end
 
-        local hitScale = 6.0
-        expandKnifeHitbox(knife, hitScale)
-
-        -- VISIBLE during knife so server + other clients see us on the target.
-        -- Stealth (full transparency) was making hits fail and owner couldn't see the bot move.
+        expandKnifeHitbox(knife, 6.0)
         setStealthVisible(true)
         ensureVisible()
 
-        -- Heartbeat lock: force CFrame every frame so anti-teleport can't snap us away
-        -- before Activate() registers. This is the difference between "swings only" and real damage.
+        -- 1) Progressive approach: walk CFrame closer in small steps so anti-TP
+        --    accepts the move and OTHER clients (you) see the bot leave formation.
+        do
+            local my = getHRP()
+            local their = getHRP(plr)
+            if my and their then
+                local start = my.Position
+                local goal = their.Position + Vector3.new(0, 0.2, 0)
+                for step = 1, 12 do
+                    local alpha = step / 12
+                    local pos = start:Lerp(goal, alpha)
+                    local cf = CFrame.new(pos, their.Position + Vector3.new(0, 1.2, 0))
+                    pcall(function()
+                        local char = getChar()
+                        if char and char.PivotTo then char:PivotTo(cf) end
+                        my.CFrame = cf
+                        my.AssemblyLinearVelocity = Vector3.zero
+                    end)
+                    task.wait(0.04)
+                    their = getHRP(plr)
+                    my = getHRP()
+                    if not my or not their then break end
+                    goal = their.Position + Vector3.new(0, 0.2, 0)
+                end
+            end
+        end
+
+        -- 2) Heartbeat lock ON the target (and alternate slightly under for tall hitbox)
+        local modeUnder = false
         local lockConn
         lockConn = RunService.Heartbeat:Connect(function()
             if not plr or isKO(plr) or not getChar(plr) then return end
             local my = getHRP()
-            local cf = knifeTargetCF(plr)
-            if not my or not cf then return end
+            local their = getHRP(plr)
+            if not my or not their then return end
+            local offset = modeUnder and Vector3.new(0, -2.0, 0) or Vector3.new(0, 0.2, 0)
+            local pos = their.Position + offset
+            local look = their.Position + Vector3.new(0, 1.2, 0)
+            local cf = CFrame.new(pos, look)
             pcall(function()
                 local char = getChar()
                 if char and char.PivotTo then char:PivotTo(cf) end
@@ -2856,77 +2916,48 @@ local function cmdKnife(user)
                 my.AssemblyAngularVelocity = Vector3.zero
                 local ap = ensureKnifeAlign(my)
                 if ap then
-                    ap.Position = cf.Position
+                    ap.Position = pos
                     ap.Enabled = true
                 end
             end)
         end)
 
         local t0 = tick()
-        local maxTime = 6.0 -- hard cap so we never stick forever
         local swing = 0
-        while tick() - t0 < maxTime do
+        while tick() - t0 < 7.0 do
             if isKO(plr) then break end
             if not getChar(plr) then break end
             swing = swing + 1
+            modeUnder = (swing % 6) >= 3 -- alternate on-body / under
 
-            -- keep tool equipped
-            if not knife or not isToolEquipped(knife) or (swing % 5 == 1) then
+            if not knife or not isToolEquipped(knife) or (swing % 4 == 1) then
                 knife = ensureKnifeEquipped(0.5)
-                if knife then expandKnifeHitbox(knife, hitScale) end
+                if knife then expandKnifeHitbox(knife, 6.0) end
             end
 
             local aim = getTargetAimPos(plr)
-            if aim then
-                for _ = 1, 4 do fireMouse(aim) end
-            end
+            if aim then for _ = 1, 5 do fireMouse(aim) end end
             aimAt(plr)
 
-            if knife then
-                activateTool(knife)
-                -- CRITICAL: Hood Customs / clones put hit logic on remotes INSIDE the tool
-                fireToolHit(knife, plr)
-            end
+            -- full melee fire path from dump (MainEvent + Unreliable + MainFunction + Attacking)
+            fireMeleeHit(knife, plr)
 
-            if MainEvent then
-                pcall(function() MainEvent:FireServer("Hit", plr.Character) end)
-                pcall(function() MainEvent:FireServer("Hit", plr) end)
-                pcall(function() MainEvent:FireServer("Knife") end)
-                pcall(function() MainEvent:FireServer("Punch") end)
-                pcall(function() MainEvent:FireServer("Slash") end)
-                pcall(function() MainEvent:FireServer("Combat") end)
-                if aim then
-                    pcall(function() MainEvent:FireServer(MouseRemote, aim) end)
-                end
-            end
-
-            -- VirtualInput click (some places key off mouse button, not Activate)
             pcall(function()
                 local vim = game:GetService("VirtualInputManager")
                 if vim then
                     vim:SendMouseButtonEvent(0, 0, 0, true, game, 0)
-                    task.wait(0.015)
+                    task.wait(0.02)
                     vim:SendMouseButtonEvent(0, 0, 0, false, game, 0)
                 end
             end)
-            pcall(function()
-                local vu = game:GetService("VirtualUser")
-                if vu then
-                    vu:Button1Down(Vector2.new(0, 0))
-                    task.wait(0.015)
-                    vu:Button1Up(Vector2.new(0, 0))
-                end
-            end)
 
-            task.wait(0.08)
+            task.wait(0.1)
         end
 
-        if lockConn then
-            pcall(function() lockConn:Disconnect() end)
-            lockConn = nil
-        end
+        if lockConn then pcall(function() lockConn:Disconnect() end) end
+        clearKnifeAlign()
 
-        for _ = 1, 12 do
+        for _ = 1, 10 do
             if isKO(plr) then break end
             task.wait(0.05)
         end
@@ -2936,7 +2967,7 @@ local function cmdKnife(user)
             ensureVisible()
             quickStomp(plr, 8)
         else
-            notify("Knife: no KO — try .stomp " .. plr.Name)
+            notify("Knife: no KO — try .stomp / .knock " .. plr.Name)
         end
 
         State.TargetName = nil
@@ -2945,7 +2976,6 @@ local function cmdKnife(user)
         if not (State.Carrying and string.lower(tostring(State.Carrying)) == string.lower(plr.Name)) then
             State.Carrying = nil
         end
-        clearKnifeAlign()
         clearCamlock()
         State.Tracking = true
         returnToOwner()
