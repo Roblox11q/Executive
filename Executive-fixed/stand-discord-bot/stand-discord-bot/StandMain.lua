@@ -121,8 +121,10 @@ local CamTarget = nil
 local CamlockUntil = 0
 local OrbitAngle = 0
 
--- forward decls (defined later with knife helpers)
+-- forward decls (defined later; must be local so early functions close over them)
 local setStealthVisible
+local ensureVisible
+local followOwner
 local knifeAttackTarget
 local findKnife
 local expandKnifeHitbox
@@ -778,8 +780,8 @@ local function returnToOwner()
     State.TargetName = nil
     State.InVoid = false
     State.Tracking = true
-    setStealthVisible(true)
-    ensureVisible()
+    if setStealthVisible then setStealthVisible(true) end
+    if ensureVisible then ensureVisible() end
     pcall(function()
         local h = getHum()
         if h then
@@ -811,7 +813,7 @@ local function returnToOwner()
             if not oHRP or not my then break end
         end
     end
-    followOwner()
+    if followOwner then followOwner() end
 end
 
 -- ONLY the preferred gun from config — never random other tools
@@ -876,7 +878,7 @@ local TP_COOLDOWN = 1.25
 local TP_COOLDOWN_DERS = 0.05 -- near-zero cooldown — DERS guns TP every shot
 local StateBenx = false
 
-local function ensureVisible()
+ensureVisible = function()
     local c = getChar()
     if not c then return end
     pcall(function()
@@ -1267,7 +1269,7 @@ end
 ----------------------------------------------------------------------
 -- FORMATION / VOID / TRACK (alts)
 ----------------------------------------------------------------------
-local function followOwner()
+followOwner = function()
     if IsOwner then return end
     if State.InVoid then
         local hrp = getHRP()
@@ -1657,8 +1659,8 @@ end
 local function cmdUnLoopKill()
     State.LoopKill = nil
     State.LoopKillKnife = false
-    setStealthVisible(true)
-    ensureVisible()
+    if setStealthVisible then setStealthVisible(true) end
+    if ensureVisible then ensureVisible() end
     clearCamlock()
     if not IsOwner then State.Tracking = true end
     notify("LoopKill OFF")
@@ -2336,7 +2338,7 @@ local function cmdFix()
     StateBenx = false
     pcall(function()
         if setStealthVisible then setStealthVisible(true) end
-        ensureVisible()
+        if ensureVisible then ensureVisible() end
     end)
     pcall(function()
         local h = getHum()
