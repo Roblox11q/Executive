@@ -67,8 +67,8 @@ STATUS_COLORS = {
 }
 # States that block buyers from /loader and block script inject
 MAINTENANCE_BLOCK_STATES = frozenset({"down", "updating"})
-# Base channel name without the status dot prefix
-STATUS_CHANNEL_BASE_NAME = os.getenv("STATUS_CHANNEL_BASE_NAME", "status")
+# Channel name format: "{dot}｜Stand"  e.g. 🟢｜Stand
+STATUS_CHANNEL_LABEL = os.getenv("STATUS_CHANNEL_LABEL", "Stand")
 STATUS_FILE = Path(__file__).resolve().parent / "data" / "system_status.json"
 DEPLOY_FILE = Path(__file__).resolve().parent / "data" / "last_deploy.json"
 # Files watched for automatic changelog on restart/redeploy
@@ -695,12 +695,11 @@ async def staff_check(interaction: discord.Interaction) -> bool:
 
 
 def _status_channel_name(status: str) -> str:
-    """Channel name with status dot: 🟢status / 🔴status / etc."""
+    """Channel name: 🟢｜Stand  /  🔴｜Stand  /  🔵｜Stand  /  🟡｜Stand"""
     dot = STATUS_DOTS.get(status, "🟢")
-    base = STATUS_CHANNEL_BASE_NAME.strip().lstrip("🟢🔴🔵🟡•-| ") or "status"
-    # Discord channel names: lowercase, no spaces ideally
-    safe = "".join(c if c.isalnum() or c in "-_" else "-" for c in base.lower())[:80]
-    return f"{dot}｜{safe}"
+    label = (STATUS_CHANNEL_LABEL or "Stand").strip() or "Stand"
+    # Discord allows emoji + fullwidth bar + text
+    return f"{dot}｜{label}"
 
 
 async def update_status_channel(
