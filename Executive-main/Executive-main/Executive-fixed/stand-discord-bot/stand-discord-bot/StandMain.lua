@@ -302,6 +302,80 @@ local function getAimPos(plr)
     return nil
 end
 
+-- Silent aim: force Mouse.Hit / Target onto locked player so guns actually hit
+local AimLockPlayer = nil
+
+local function setAimLock(plr)
+    AimLockPlayer = plr
+end
+
+local function clearAimLock()
+    AimLockPlayer = nil
+end
+
+local silentAimHooked = false
+local function ensureSilentAim()
+    if silentAimHooked then return end
+    silentAimHooked = true
+
+    local mouse = nil
+    pcall(function() mouse = LocalPlayer:GetMouse() end)
+
+    -- hookmetamethod silent aim (works on most executors)
+    pcall(function()
+        if not (hookmetamethod and newcclosure) then return end
+        if not mouse then return end
+        local oldIndex
+        oldIndex = hookmetamethod(game, "__index", newcclosure(function(self, key)
+            if AimLockPlayer ~= nil and self == mouse then
+                local k = key
+                if k == "Hit" or k == "hit" then
+                    local aim = getAimPos(AimLockPlayer)
+                    if aim then return CFrame.new(aim) end
+                elseif k == "Target" or k == "target" then
+                    local ch = getChar(AimLockPlayer)
+                    if ch then
+                        return ch:FindFirstChild("Head") or getHRP(AimLockPlayer) or ch
+                    end
+                elseif k == "UnitRay" then
+                    local aim = getAimPos(AimLockPlayer)
+                    if aim and Camera then
+                        local origin = Camera.CFrame.Position
+                        local dir = (aim - origin)
+                        if dir.Magnitude > 0 then
+                            return Ray.new(origin, dir.Unit * 999)
+                        end
+                    end
+                end
+            end
+            return oldIndex(self, key)
+        end))
+    end)
+
+    -- always: keep mouse remotes + camera on target while locked
+    RunService.RenderStepped:Connect(function()
+        local plr = AimLockPlayer
+        if not plr then return end
+        if not getChar(plr) then return end
+        local aim = getAimPos(plr)
+        if not aim then return end
+        fireMouse(aim)
+        pcall(function()
+            if Camera and Camera.CameraType ~= Enum.CameraType.Scriptable then
+                Camera.CFrame = CFrame.new(Camera.CFrame.Position, aim)
+            end
+        end)
+        pcall(function()
+            local my = getHRP()
+            if my then
+                local pos = my.Position
+                my.CFrame = CFrame.new(pos, Vector3.new(aim.X, pos.Y, aim.Z))
+            end
+        end)
+    end)
+end
+
+
 local function setAttacking(on)
     pcall(function()
         local be = getChar() and getChar():FindFirstChild("BodyEffects")
@@ -443,6 +517,7 @@ local function clearCamlock()
     CamTarget = nil
     State.Camlock = false
     CamlockUntil = 0
+    clearAimLock()
     pcall(function() RunService:UnbindFromRenderStep(CAM_BIND) end)
 end
 
@@ -469,6 +544,8 @@ local function setCamlock(plr, seconds)
     if not plr then return end
     CamTarget = plr.Name
     State.Camlock = true
+    setAimLock(plr)
+    pcall(ensureSilentAim)
     CamlockUntil = (seconds and seconds > 0) and (tick() + seconds) or 0
     pcall(function()
         RunService:UnbindFromRenderStep(CAM_BIND)
@@ -708,6 +785,8 @@ local function shootTarget(plr)
         return
     end
     State.Armed = true
+    setAimLock(plr)
+    pcall(ensureSilentAim)
     setCamlock(plr, 4)
 
     -- face target + get into range
@@ -1018,6 +1097,7 @@ local function applyMuscle()
 end
 
 local function startAutoPerks()
+pcall(ensureSilentAim)
     if IsOwner then return end
     task.spawn(function()
         local t0 = tick()
@@ -1465,6 +1545,7 @@ LocalPlayer.CharacterAdded:Connect(function()
 end)
 
 startAutoPerks()
+pcall(ensureSilentAim)
 
 print("[Stand] Main v2 loaded |", IsOwner and "OWNER" or ("ALT slot " .. tostring(MySlot)),
     "| prefix", Prefix, "| owner", OwnerName)
