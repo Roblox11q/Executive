@@ -2,9 +2,11 @@
 """Stand Loader Configurator Bot - Render + Supabase."""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -68,6 +70,9 @@ MAINTENANCE_BLOCK_STATES = frozenset({"down", "updating"})
 # Base channel name without the status dot prefix
 STATUS_CHANNEL_BASE_NAME = os.getenv("STATUS_CHANNEL_BASE_NAME", "status")
 STATUS_FILE = Path(__file__).resolve().parent / "data" / "system_status.json"
+DEPLOY_FILE = Path(__file__).resolve().parent / "data" / "last_deploy.json"
+# Files watched for automatic changelog on restart/redeploy
+_WATCHED_FILES = ("bot.py", "StandMain.lua", "requirements.txt", "render.yaml")
 
 # Track last status (persisted so restarts keep maintenance lock)
 _current_status: str = "up"
@@ -773,6 +778,7 @@ async def post_changelog(
     *,
     version: str = "",
     by: Optional[discord.abc.User] = None,
+    automatic: bool = False,
 ) -> Optional[str]:
     """Post a changelog embed to the changelog channel. Returns error or None."""
     channel = bot.get_channel(CHANGELOG_CHANNEL_ID)
@@ -791,9 +797,11 @@ async def post_changelog(
         color=0x9B59B6,
     )
     if version and version.strip():
-        embed.add_field(name="Version", value=f"`{version.strip()}`", inline=True)
+        embed.add_field(name="Build", value=f"`{version.strip()}`", inline=True)
     if by:
         embed.add_field(name="Posted by", value=str(by), inline=True)
+    elif automatic:
+        embed.add_field(name="Posted by", value="Auto (deploy)", inline=True)
     embed.set_footer(text="Executive Stand — Changelog")
 
     try:
@@ -801,6 +809,162 @@ async def post_changelog(
     except Exception as e:
         return f"Failed to post changelog: {e}"
     return None
+
+
+def _file_sha256(path: Path) -> Optional[str]:
+    try:
+        if not path.is_file():
+            return None
+        h = hashlib.sha256()
+        with path.open("rb") as f:
+            for chunk in iter(lambda: f.read(65536), b""):
+                h.update(chunk)
+        return h.hexdigest()
+    except Exception:
+        return None
+
+
+def _compute_deploy_snapshot() -> dict:
+    """Hash watched project files for change detection."""
+    base = Path(__file__).resolve().parent
+    files: dict[str, dict] = {}
+    for name in _WATCHED_FILES:
+        p = base / name
+        digest = _file_sha256(p)
+        if digest:
+            try:
+                size = p.stat().st_size
+            except OSError:
+                size = 0
+            files[name] = {"sha256": digest, "size": size}
+    # Combined build id from all hashes
+    combo = hashlib.sha256()
+    for name in sorted(files.keys()):
+        combo.update(name.encode())
+        combo.update(files[name]["sha256"].encode())
+    return {
+        "build": combo.hexdigest()[:12],
+        "files": files,
+        "at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+    }
+
+
+def _load_last_deploy() -> dict:
+    try:
+        if DEPLOY_FILE.is_file():
+            return json.loads(DEPLOY_FILE.read_text(encoding="utf-8"))
+    except Exception as e:
+        print("load last_deploy error:", e)
+    return {}
+
+
+def _save_last_deploy(snap: dict) -> None:
+    try:
+        DEPLOY_FILE.parent.mkdir(parents=True, exist_ok=True)
+        DEPLOY_FILE.write_text(json.dumps(snap, indent=2), encoding="utf-8")
+    except Exception as e:
+        print("save last_deploy error:", e)
+
+
+def _auto_changelog_notes(prev: dict, curr: dict) -> tuple[str, str]:
+    """
+    Build title + notes automatically from file hash changes.
+    Returns (title, notes).
+    """
+    prev_files = (prev or {}).get("files") or {}
+    curr_files = (curr or {}).get("files") or {}
+    build = curr.get("build") or "unknown"
+    when = curr.get("at") or datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+    changed: list[str] = []
+    added: list[str] = []
+    removed: list[str] = []
+
+    for name, meta in curr_files.items():
+        old = prev_files.get(name)
+        if not old:
+            added.append(name)
+        elif old.get("sha256") != meta.get("sha256"):
+            old_sz = old.get("size") or 0
+            new_sz = meta.get("size") or 0
+            delta = new_sz - old_sz
+            sign = "+" if delta >= 0 else ""
+            changed.append(f"• `{name}` updated ({sign}{delta} bytes)")
+
+    for name in prev_files:
+        if name not in curr_files:
+            removed.append(name)
+
+    lines: list[str] = [
+        f"**Automatic deploy detected** at `{when}`",
+        f"Build id: `{build}`",
+        "",
+    ]
+    if changed:
+        lines.append("**Changed files**")
+        lines.extend(changed)
+        lines.append("")
+    if added:
+        lines.append("**New files**")
+        lines.extend(f"• `{n}`" for n in added)
+        lines.append("")
+    if removed:
+        lines.append("**Removed files**")
+        lines.extend(f"• `{n}`" for n in removed)
+        lines.append("")
+
+    if not changed and not added and not removed:
+        lines.append("_No watched file changes (first run or identical deploy)._")
+    else:
+        lines.append("Users: run `/loader` again and re-inject alts after this update.")
+
+    title = f"Auto update — build `{build}`"
+    if changed:
+        # Short hint from first changed file names
+        names = [c.split("`")[1] for c in changed if "`" in c][:3]
+        if names:
+            title = f"Auto update — {', '.join(names)}"
+
+    return title, "\n".join(lines).strip()
+
+
+async def auto_changelog_on_deploy() -> None:
+    """
+    On every bot start: if bot.py / StandMain.lua / etc. changed since last run,
+    post a changelog automatically (no staff title/notes required).
+    """
+    curr = _compute_deploy_snapshot()
+    prev = _load_last_deploy()
+    prev_build = (prev or {}).get("build")
+    curr_build = curr.get("build")
+
+    if prev_build and prev_build == curr_build:
+        print(f"Deploy unchanged build={curr_build} — no auto changelog")
+        return
+
+    title, notes = _auto_changelog_notes(prev, curr)
+    first = not prev_build
+    if first:
+        title = f"Deploy online — build `{curr_build}`"
+        notes = (
+            f"**Bot started** at `{curr.get('at')}`\n"
+            f"Build id: `{curr_build}`\n\n"
+            f"Tracking: {', '.join(f'`{n}`' for n in curr.get('files', {})) or '—'}\n"
+            f"_Future redeploys that change these files will post here automatically._"
+        )
+
+    err = await post_changelog(
+        title=title,
+        notes=notes,
+        version=str(curr_build or ""),
+        automatic=True,
+    )
+    if err:
+        print("auto changelog error:", err)
+    else:
+        print(f"Auto changelog posted build={curr_build} first={first}")
+
+    _save_last_deploy(curr)
 
 
 @bot.event
@@ -824,6 +988,12 @@ async def on_ready():
             print("on_ready status update:", err)
     except Exception as e:
         print("on_ready status error:", e)
+
+    # Automatic changelog whenever watched files change between deploys
+    try:
+        await auto_changelog_on_deploy()
+    except Exception as e:
+        print("on_ready auto changelog error:", e)
 
 
 @bot.tree.command(name="setuploader", description="Set owner account + license key")
@@ -1255,11 +1425,11 @@ async def status_cmd(
 
 @bot.tree.command(
     name="changelog",
-    description="[Staff] Post an update / changelog entry to the changelog channel",
+    description="[Staff] Optional manual changelog (auto posts on every deploy)",
 )
 @app_commands.describe(
-    title="Changelog title (e.g. v2.4 — Knife + Bring)",
-    notes="What changed (use new lines; Discord markdown OK)",
+    title="Optional title (auto-deploy already posts without this)",
+    notes="Optional notes",
     version="Optional version tag",
     set_updating="If true, also set status channel to 🔵 Updating first",
     set_up_after="If true, set status channel to 🟢 Up after posting",
