@@ -110,6 +110,7 @@ local State = {
     Carrying = nil, -- player name being carried to owner
     KnifeMode = false,
     StealthKnife = false, -- invisible while knifing
+    Flying = nil, -- player name being force-flown (owner steers by moving)
 }
 
 local Whitelist = {} -- UserId -> true (don't attack)
@@ -1748,6 +1749,51 @@ local function cmdForceVoid(user, speaker)
     notify("Force void")
 end
 
+-- Fire every known grab/carry remote (Da Hood + clones)
+local function fireGrabRemotes(on)
+    if not MainEvent then return end
+    pcall(function()
+        if on == false then
+            MainEvent:FireServer("Grabbing", false)
+            MainEvent:FireServer("Carry", false)
+            MainEvent:FireServer("Drop")
+            return
+        end
+        MainEvent:FireServer("Grabbing", true)
+        MainEvent:FireServer("Grabbing")
+        MainEvent:FireServer("Carry", true)
+        MainEvent:FireServer("Carry")
+        MainEvent:FireServer("PickUp")
+        MainEvent:FireServer("Pickup")
+        MainEvent:FireServer("Grab")
+        MainEvent:FireServer("Grab", true)
+    end)
+end
+
+-- Stand on KO body + unequip + spam grab so server actually registers pickup
+local function tryGrabVictim(plr)
+    if not plr then return false end
+    unequip()
+    task.wait(0.05)
+    plantOnKO(plr)
+    for _ = 1, 10 do
+        plantOnKO(plr)
+        fireGrabRemotes(true)
+        local vHRP = getHRP(plr)
+        local my = getHRP()
+        if vHRP and my then
+            pcall(function()
+                -- hold body right in front of chest (classic carry pose)
+                vHRP.CFrame = my.CFrame * CFrame.new(0, 0.6, -1.4)
+                vHRP.AssemblyLinearVelocity = Vector3.zero
+                vHRP.AssemblyAngularVelocity = Vector3.zero
+            end)
+        end
+        task.wait(0.04)
+    end
+    return isKO(plr)
+end
+
 local function carryStep()
     if IsOwner or not State.Carrying then return end
     local victim = findPlayer(State.Carrying)
@@ -1764,50 +1810,48 @@ local function carryStep()
     local my = getHRP()
     if not vHRP or not my then return end
 
-    -- hard hold body in front of alt every frame
+    -- keep grab remotes alive + body glued to alt
+    fireGrabRemotes(true)
     pcall(function()
-        vHRP.CFrame = my.CFrame * CFrame.new(0, 0.7, -1.6)
+        vHRP.CFrame = my.CFrame * CFrame.new(0, 0.6, -1.4)
         vHRP.AssemblyLinearVelocity = Vector3.zero
         vHRP.AssemblyAngularVelocity = Vector3.zero
     end)
-    if MainEvent then
-        pcall(function() MainEvent:FireServer("Grabbing", true) end)
-        pcall(function() MainEvent:FireServer("Grabbing") end)
-        pcall(function() MainEvent:FireServer("Carry", true) end)
-        pcall(function() MainEvent:FireServer("PickUp") end)
-    end
 
-    -- move toward owner fast
+    -- move toward owner fast (TP-lerp so bring actually arrives)
     local owner = getOwner()
     local oHRP = owner and getHRP(owner)
     if oHRP then
-        local dist = (oHRP.Position - my.Position).Magnitude
-        if dist > 4 then
-            pcall(function()
-                local targetPos = oHRP.Position + oHRP.CFrame.LookVector * 3.5 + Vector3.new(0, 0.5, 0)
-                my.CFrame = CFrame.new(my.Position:Lerp(targetPos, 0.55), oHRP.Position)
-                my.AssemblyLinearVelocity = Vector3.zero
-            end)
-        else
-            pcall(function()
-                my.CFrame = CFrame.new(oHRP.Position + oHRP.CFrame.LookVector * 3.5 + Vector3.new(0, 0.5, 0), oHRP.Position)
-                my.AssemblyLinearVelocity = Vector3.zero
-            end)
-        end
+        local dest = oHRP.Position + oHRP.CFrame.LookVector * 3.2 + Vector3.new(0, 0.5, 0)
+        local dist = (dest - my.Position).Magnitude
+        pcall(function()
+            if dist > 12 then
+                -- long range: snap closer in chunks
+                my.CFrame = CFrame.new(my.Position:Lerp(dest, 0.35), oHRP.Position)
+            elseif dist > 3 then
+                my.CFrame = CFrame.new(my.Position:Lerp(dest, 0.65), oHRP.Position)
+            else
+                my.CFrame = CFrame.new(dest, oHRP.Position)
+            end
+            my.AssemblyLinearVelocity = Vector3.zero
+            my.AssemblyAngularVelocity = Vector3.zero
+            -- re-glue victim after we moved
+            vHRP.CFrame = my.CFrame * CFrame.new(0, 0.6, -1.4)
+            vHRP.AssemblyLinearVelocity = Vector3.zero
+        end)
     end
 end
 
 local function cmdDrop()
-    if not State.Carrying then
-        notify("Drop: not carrying")
+    if not State.Carrying and not State.Flying then
+        notify("Drop: not carrying / flying")
         return
     end
-    local name = State.Carrying
+    local name = State.Carrying or State.Flying
     local victim = findPlayer(name)
     State.Carrying = nil
-    if MainEvent then
-        pcall(function() MainEvent:FireServer("Grabbing", false) end)
-    end
+    State.Flying = nil
+    fireGrabRemotes(false)
     if victim then
         local vHRP = getHRP(victim)
         local my = getHRP()
@@ -1841,6 +1885,7 @@ local function doBringTarget(user, doStomp, label)
         State.Tracking = false
         State.LoopKill = nil
         State.Carrying = nil
+        State.Flying = nil
         setCamlock(plr, 20)
         notify(label .. ": knocking " .. plr.Name)
 
@@ -1876,35 +1921,30 @@ local function doBringTarget(user, doStomp, label)
                     task.wait(0.07)
                 end
             end
+            -- actually pick up: plant on body, unequip, spam grab
+            tryGrabVictim(plr)
             State.Carrying = plr.Name
             State.Tracking = false
-            -- grab remotes (multiple hood variants)
-            if MainEvent then
-                pcall(function() MainEvent:FireServer("Grabbing", true) end)
-                pcall(function() MainEvent:FireServer("Grabbing") end)
-                pcall(function() MainEvent:FireServer("Carry", true) end)
-                pcall(function() MainEvent:FireServer("PickUp") end)
-            end
-            -- hard snap body to us repeatedly so carry sticks
-            for _ = 1, 6 do
+            -- extra grab bursts so server locks carry
+            for _ = 1, 8 do
+                fireGrabRemotes(true)
                 local vHRP = getHRP(plr)
                 local my = getHRP()
                 if vHRP and my then
                     pcall(function()
-                        vHRP.CFrame = my.CFrame * CFrame.new(0, 0.8, -1.8)
+                        vHRP.CFrame = my.CFrame * CFrame.new(0, 0.6, -1.4)
                         vHRP.AssemblyLinearVelocity = Vector3.zero
-                        vHRP.AssemblyAngularVelocity = Vector3.zero
                     end)
                 end
-                task.wait(0.05)
+                task.wait(0.04)
             end
-            -- walk toward owner immediately
+            -- start moving toward owner (carryStep on Heartbeat finishes the trip)
             local owner = getOwner()
             local oHRP = owner and getHRP(owner)
             local my = getHRP()
             if oHRP and my then
                 pcall(function()
-                    my.CFrame = CFrame.new(oHRP.Position + oHRP.CFrame.LookVector * 4 + Vector3.new(0, 0.5, 0), oHRP.Position)
+                    my.CFrame = CFrame.new(oHRP.Position + oHRP.CFrame.LookVector * 3.5 + Vector3.new(0, 0.5, 0), oHRP.Position)
                 end)
             end
             notify(label .. ": carrying " .. plr.Name .. " → owner (use .drop to release)")
@@ -1924,6 +1964,116 @@ end
 -- .n = original bring (KO + stomp + grab) — unchanged behavior
 local function cmdN(user)
     doBringTarget(user, true, "N")
+end
+
+----------------------------------------------------------------------
+-- FLY TARGET — alts hold KO body in the air; owner steers with WASD / mobile
+-- Owner just walks/moves normally; victim is held above/in front of owner.
+----------------------------------------------------------------------
+local function flyStep()
+    if IsOwner or not State.Flying then return end
+    local victim = findPlayer(State.Flying)
+    if not victim then
+        State.Flying = nil
+        return
+    end
+    -- keep them KO so they stay controllable
+    if not isKO(victim) and isAlive(victim) then
+        punch(victim)
+        return
+    end
+    local owner = getOwner()
+    local oHRP = owner and getHRP(owner)
+    local vHRP = getHRP(victim)
+    local my = getHRP()
+    if not oHRP or not vHRP then return end
+
+    -- hold victim in air in front of owner (owner steers by moving — WASD / joystick)
+    local hold = oHRP.CFrame * CFrame.new(0, 6, -4)
+    pcall(function()
+        vHRP.CFrame = hold
+        vHRP.AssemblyLinearVelocity = Vector3.zero
+        vHRP.AssemblyAngularVelocity = Vector3.zero
+        -- alt stays near owner so we keep network influence / grab spam
+        if my then
+            my.CFrame = oHRP.CFrame * CFrame.new(2.5, 2, 0)
+            my.AssemblyLinearVelocity = Vector3.zero
+        end
+    end)
+    fireGrabRemotes(true)
+end
+
+local function cmdFly(user)
+    if not user or user == "" then
+        notify("Fly: usage .fly <user> | .unfly")
+        return
+    end
+    if IsOwner then
+        -- owner only sets intent; alts do the work
+        notify("Fly: alts will lift " .. tostring(user))
+    end
+    local plr = findPlayer(user)
+    if not plr then
+        notify("Fly: player not found")
+        return
+    end
+    if isProtected(plr) then
+        notify("Fly: target protected")
+        return
+    end
+    if IsOwner then return end -- alts execute
+    task.spawn(function()
+        State.Tracking = false
+        State.Carrying = nil
+        State.LoopKill = nil
+        setCamlock(plr, 12)
+        notify("Fly: knocking " .. plr.Name)
+
+        local useGun = false
+        if PreferredGun and PreferredGun ~= "" then
+            local g = equipGun()
+            useGun = g ~= nil
+        end
+        for i = 1, 70 do
+            if isKO(plr) then break end
+            if not getChar(plr) then break end
+            lockOnTarget(plr, 5.0, 0, i % 6 == 1)
+            if useGun then shoot(plr) else punch(plr) end
+            task.wait(0.04)
+        end
+        if not isKO(plr) then
+            for _ = 1, 20 do
+                if isKO(plr) then break end
+                punch(plr)
+                task.wait(0.04)
+            end
+        end
+        if isKO(plr) then
+            tryGrabVictim(plr)
+            State.Flying = plr.Name
+            State.Carrying = nil
+            State.Tracking = false
+            clearCamlock()
+            notify("Fly ON " .. plr.Name .. " — owner steers with WASD / mobile (.unfly to stop)")
+        else
+            notify("Fly: failed to KO " .. plr.Name)
+            clearCamlock()
+            State.Tracking = true
+        end
+    end)
+end
+
+local function cmdUnfly()
+    if State.Flying then
+        local name = State.Flying
+        State.Flying = nil
+        fireGrabRemotes(false)
+        if not IsOwner then State.Tracking = true end
+        clearCamlock()
+        notify("Unfly " .. tostring(name))
+    else
+        notify("Unfly: nobody flying")
+    end
 end
 
 local function cmdTaunt(off)
@@ -2099,12 +2249,14 @@ local function cmdFix()
     State.LoopKill = nil
     State.LoopKillKnife = false
     State.Carrying = nil
+    State.Flying = nil
     State.TargetName = nil
     State.KnifeMode = false
     State.StealthKnife = false
     FrozenTargets = {}
     clearCamlock()
     unequip()
+    fireGrabRemotes(false)
     -- force benx off without toggling (direct set)
     StateBenx = false
     pcall(function()
@@ -2773,6 +2925,7 @@ os (orbit) | f | s | s <user> | rk
 wl <user> uwl | protect <user> unprotect
 loopkill/lk <user> | lkk <user> | unloopkill/unlk
 bring <user> (no stomp) | n <user> (stomp+bring) | drop
+fly <user> | unfly  (owner steers with WASD/mobile)
 knife <user> | view
 talk <msg> | talk on/off | say <msg>
 freeze <user> | unfreeze <user>
@@ -2868,6 +3021,8 @@ local function onControlChat(msg, speaker)
     elseif cmd == "bring" then cmdBring(a1) -- KO + carry, no stomp
     elseif cmd == "n" then cmdN(a1) -- original: KO + stomp + carry
     elseif cmd == "drop" then cmdDrop()
+    elseif cmd == "fly" then cmdFly(a1)
+    elseif cmd == "unfly" then cmdUnfly()
     elseif cmd == "knife" then cmdKnife(a1)
     elseif cmd == "view" or cmd == "players" then cmdView()
     elseif cmd == "talk" or cmd == "say" then cmdTalk(a1, restOriginal)
@@ -2915,9 +3070,11 @@ end)
 ----------------------------------------------------------------------
 local lastKA, lastStomp = 0, 0
 Connections.Main = RunService.Heartbeat:Connect(function()
-    -- formation / orbit / void (skip while carrying)
+    -- formation / orbit / void (skip while carrying or flying a target)
     if not IsOwner then
-        if State.Carrying then
+        if State.Flying then
+            pcall(flyStep)
+        elseif State.Carrying then
             pcall(carryStep)
         else
             followOwner()
