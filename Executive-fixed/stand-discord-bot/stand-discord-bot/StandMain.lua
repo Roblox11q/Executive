@@ -1384,11 +1384,8 @@ local function cmdKnock(user)
                 task.wait(0.12)
             end
         end
-        clearCamlock()
-        State.Tracking = savedTrack
-        if not State.InVoid and savedTrack and not IsOwner then
-            followOwner()
-        end
+        -- one-shot: always return to owner after stomp (not loopkill)
+        returnToOwner()
         notify("Knock done " .. plr.Name)
     end)
 end
@@ -1438,8 +1435,7 @@ local function cmdRage(user)
                 task.wait(0.1)
             end
         end
-        clearCamlock()
-        State.Tracking = savedTrack
+        returnToOwner()
         notify("Rage done " .. plr.Name)
     end)
 end
@@ -1499,7 +1495,7 @@ local function cmdSweep()
                 end
             end
         end
-        State.Tracking = savedTrack
+        returnToOwner()
         notify("Sweep done")
     end)
 end
@@ -1520,7 +1516,6 @@ local function cmdStompUser(user)
         return
     end
     task.spawn(function()
-        local savedTrack = State.Tracking
         State.Tracking = false
         setCamlock(plr, 6)
         -- if not already KO, knock them first
@@ -1550,11 +1545,7 @@ local function cmdStompUser(user)
                 task.wait(0.12)
             end
         end
-        clearCamlock()
-        State.Tracking = savedTrack
-        if not State.InVoid and savedTrack and not IsOwner then
-            followOwner()
-        end
+        returnToOwner()
     end)
 end
 
