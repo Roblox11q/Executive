@@ -2023,11 +2023,11 @@ findKnife = function()
 end
 
 -- Expand knife / character hit parts so swings reach the target
--- DERS HOOD + Hood Customs: much larger vertical hitbox so knife reaches from underground
+-- DERS HOOD + Hood Customs: huge vertical hitbox so knife reaches up from under feet
 expandKnifeHitbox = function(knife, scale)
     -- bigger default on DERS / Hood Customs so underground swings connect
     if IsDersHood or IsHoodCustoms then
-        scale = scale or 6.5
+        scale = scale or 8.0
     else
         scale = scale or 3.5
     end
@@ -2041,11 +2041,11 @@ expandKnifeHitbox = function(knife, scale)
                     local orig = part:GetAttribute("StandOrigSize")
                     if typeof(orig) == "Vector3" then
                         if IsDersHood or IsHoodCustoms then
-                            -- tall Y so blade reaches up from under the ground
+                            -- very tall Y so blade overlaps target from under their feet
                             part.Size = Vector3.new(
-                                math.max(orig.X * scale, 6),
-                                math.max(orig.Y * scale * 1.8, 12),
-                                math.max(orig.Z * scale, 8)
+                                math.max(orig.X * scale, 8),
+                                math.max(orig.Y * scale * 2.5, 18),
+                                math.max(orig.Z * scale, 10)
                             )
                         else
                             part.Size = orig * scale
@@ -2055,9 +2055,11 @@ expandKnifeHitbox = function(knife, scale)
                     end
                     part.Massless = true
                     part.CanCollide = false
+                    pcall(function() part.CanTouch = true end)
+                    pcall(function() part.CanQuery = true end)
                 end
             end
-            -- Handle / blade common names
+            -- Handle / blade common names — force tall hitboxes
             for _, name in ipairs({"Handle", "Blade", "Hitbox", "Knife", "Part"}) do
                 local p = knife:FindFirstChild(name)
                 if p and p:IsA("BasePart") then
@@ -2068,9 +2070,9 @@ expandKnifeHitbox = function(knife, scale)
                     if typeof(orig) == "Vector3" then
                         if IsDersHood or IsHoodCustoms then
                             p.Size = Vector3.new(
-                                math.max(orig.X * scale, 6),
-                                math.max(orig.Y * scale * 2.0, 14),
-                                math.max(orig.Z * scale, 10)
+                                math.max(orig.X * scale, 8),
+                                math.max(orig.Y * scale * 3.0, 20),
+                                math.max(orig.Z * scale, 12)
                             )
                         else
                             p.Size = Vector3.new(
@@ -2082,24 +2084,38 @@ expandKnifeHitbox = function(knife, scale)
                     end
                     p.Massless = true
                     p.CanCollide = false
+                    pcall(function() p.CanTouch = true end)
+                    pcall(function() p.CanQuery = true end)
                 end
             end
         end
-        -- also slightly expand local arms / HRP for melee reach
+        -- expand arms + HRP so server proximity / touch checks still pass from under
         local c = getChar()
         if c then
-            for _, name in ipairs({"RightHand", "LeftHand", "Right Arm", "Left Arm", "HumanoidRootPart"}) do
+            for _, name in ipairs({"RightHand", "LeftHand", "Right Arm", "Left Arm", "HumanoidRootPart", "UpperTorso", "Torso"}) do
                 local p = c:FindFirstChild(name)
                 if p and p:IsA("BasePart") then
                     if not p:GetAttribute("StandOrigSize") then
                         p:SetAttribute("StandOrigSize", p.Size)
                     end
                     local orig = p:GetAttribute("StandOrigSize")
-                    if typeof(orig) == "Vector3" and name ~= "HumanoidRootPart" then
-                        local armScale = (IsDersHood or IsHoodCustoms) and 3.5 or 2.2
-                        p.Size = orig * armScale
+                    if typeof(orig) == "Vector3" then
+                        if name == "HumanoidRootPart" then
+                            if IsDersHood or IsHoodCustoms then
+                                -- tall HRP so distance checks from under feet still count as "in range"
+                                p.Size = Vector3.new(
+                                    math.max(orig.X * 2.5, 4),
+                                    math.max(orig.Y * 6, 14),
+                                    math.max(orig.Z * 2.5, 4)
+                                )
+                            end
+                        else
+                            local armScale = (IsDersHood or IsHoodCustoms) and 4.0 or 2.2
+                            p.Size = orig * armScale
+                        end
                         p.Massless = true
                         p.CanCollide = false
+                        pcall(function() p.CanTouch = true end)
                     end
                 end
             end
@@ -2107,8 +2123,9 @@ expandKnifeHitbox = function(knife, scale)
     end)
 end
 
--- Instant TP onto target (knife only — closer than gun lock)
--- DERS HOOD + Hood Customs: TP under the ground so bot is protected and expanded hitbox reaches up
+-- Instant TP for knife
+-- DERS HOOD + Hood Customs: under the target's feet (close enough that expanded hitbox + HRP register hits)
+-- Deeper underground is only used BETWEEN swings (see attack loops)
 knifeInstantTP = function(plr)
     local my = getHRP()
     local their = getHRP(plr)
@@ -2121,8 +2138,9 @@ knifeInstantTP = function(plr)
     local lookAt = (head and head.Position) or (their.Position + Vector3.new(0, 1.2, 0))
     local pos
     if IsDersHood or IsHoodCustoms then
-        -- under the target so bot stays underground (harder to kill) while big knife hitbox reaches up
-        pos = their.Position + Vector3.new(0, -9.5, 0)
+        -- just under their feet — still in melee range for server distance checks
+        -- tall knife + HRP hitbox reach up into the target body
+        pos = their.Position + Vector3.new(0, -3.0, 0)
     else
         -- stand right on them / slightly in front for max knife range
         pos = their.Position + Vector3.new(0, 0.2, 0) - their.CFrame.LookVector * 0.8
@@ -2192,16 +2210,16 @@ knifeAttackTarget = function(plr, swings)
     if not knife then return end
     knife = equipTool(knife, 0.6)
     if not knife then return end
-    -- DERS / Hood Customs get max vertical hitbox for underground hits
-    local hitScale = (IsDersHood or IsHoodCustoms) and 6.5 or 3.8
+    -- DERS / Hood Customs: max vertical hitbox for under-feet hits
+    local hitScale = (IsDersHood or IsHoodCustoms) and 8.0 or 3.8
     expandKnifeHitbox(knife, hitScale)
     setStealthVisible(false)
     for i = 1, swings do
         if isKO(plr) or not getChar(plr) then break end
-        -- TP in → hit → stay/offset underground (DERS + Hood Customs)
+        -- TP under feet (in range) → hit → dive deep underground between swings
         knifeInstantTP(plr)
         local aim = getTargetAimPos(plr)
-        if aim then for _ = 1, 3 do fireMouse(aim) end end
+        if aim then for _ = 1, 5 do fireMouse(aim) end end
         aimAt(plr)
         if not isToolEquipped(knife) then
             knife = equipTool(findKnife(), 0.3) or knife
@@ -2209,18 +2227,24 @@ knifeAttackTarget = function(plr, swings)
         end
         activateTool(knife)
         if MainEvent then
+            -- spam hit remotes so server registers from under feet
             pcall(function() MainEvent:FireServer("Hit", plr.Character) end)
+            pcall(function() MainEvent:FireServer("Hit", plr) end)
             pcall(function() MainEvent:FireServer("Punch") end)
             pcall(function() MainEvent:FireServer("Knife") end)
             pcall(function() MainEvent:FireServer("Slash") end)
+            pcall(function() MainEvent:FireServer("Combat") end)
+            if aim then
+                pcall(function() MainEvent:FireServer(MouseRemote, aim) end)
+            end
         end
-        task.wait(0.03)
-        -- stay underground (DERS + Hood Customs) so bot doesn't die; others blink away
+        task.wait(0.04)
+        -- dive deep underground between swings so bot is hard to kill
         pcall(function()
             local my = getHRP()
             local their = getHRP(plr)
             if my and their then
-                local underY = (IsDersHood or IsHoodCustoms) and -10 or -8
+                local underY = (IsDersHood or IsHoodCustoms) and -14 or -8
                 my.CFrame = CFrame.new(their.Position + Vector3.new(0, underY, 0))
                 my.AssemblyLinearVelocity = Vector3.zero
             end
@@ -2264,8 +2288,8 @@ local function cmdKnife(user)
             State.Tracking = savedTrack
             return
         end
-        -- DERS / Hood Customs: max vertical hitbox for underground knife
-        local hitScale = (IsDersHood or IsHoodCustoms) and 6.5 or 3.8
+        -- DERS / Hood Customs: max vertical hitbox for under-feet knife
+        local hitScale = (IsDersHood or IsHoodCustoms) and 8.0 or 3.8
         expandKnifeHitbox(knife, hitScale)
         setStealthVisible(false)
 
@@ -2273,12 +2297,13 @@ local function cmdKnife(user)
             if isKO(plr) then break end
             if not getChar(plr) then break end
 
+            -- under feet (in range) so hits register
             knifeInstantTP(plr)
-            setStealthVisible(false) -- keep invisible every swing
+            setStealthVisible(false)
 
             local aim = getTargetAimPos(plr)
             if aim then
-                for _ = 1, 4 do fireMouse(aim) end
+                for _ = 1, 5 do fireMouse(aim) end
             end
             aimAt(plr)
 
@@ -2289,24 +2314,34 @@ local function cmdKnife(user)
             activateTool(knife)
             if MainEvent then
                 pcall(function() MainEvent:FireServer("Hit", plr.Character) end)
+                pcall(function() MainEvent:FireServer("Hit", plr) end)
                 pcall(function() MainEvent:FireServer("Punch") end)
                 pcall(function() MainEvent:FireServer("Knife") end)
                 pcall(function() MainEvent:FireServer("Slash") end)
+                pcall(function() MainEvent:FireServer("Combat") end)
+                if aim then
+                    pcall(function() MainEvent:FireServer(MouseRemote, aim) end)
+                end
             end
-            task.wait(0.03)
-            -- stay under target (DERS + Hood Customs) so bot doesn't die; expanded hitbox reaches up
+            task.wait(0.04)
+            -- dive deep underground between swings so bot doesn't die
             pcall(function()
                 local my = getHRP()
                 local their = getHRP(plr)
                 if my and their then
-                    local underY = (IsDersHood or IsHoodCustoms) and -11 or -10
+                    local underY = (IsDersHood or IsHoodCustoms) and -14 or -10
                     my.CFrame = CFrame.new(their.Position + Vector3.new(0, underY, 0))
                     my.AssemblyLinearVelocity = Vector3.zero
                 end
             end)
-            task.wait(0.025)
+            task.wait(0.02)
+            -- second swing from under feet again
             knifeInstantTP(plr)
             activateTool(knife)
+            if MainEvent then
+                pcall(function() MainEvent:FireServer("Hit", plr.Character) end)
+                pcall(function() MainEvent:FireServer("Knife") end)
+            end
             task.wait(0.03)
         end
 
