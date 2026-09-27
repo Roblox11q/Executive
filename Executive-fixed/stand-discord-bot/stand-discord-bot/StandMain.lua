@@ -1,5 +1,5 @@
 --[[
-    STAND BOT MAIN — Da Hood + DERS/Des Hood + Hood Customs
+    STAND BOT MAIN — Da Hood + DERS/Des Hood + Hood Customs + Da Strike
     Controlled by owner chat commands (Prefix from config)
     Inject on ALTS only — owner just types commands in public chat.
     Supported places:
@@ -8,6 +8,7 @@
       - DERS HOOD        (96247461091106)
       - Des Hood         (128413479081937)
       - Hood Customs     (9825515356)
+      - Da Strike        (134196333708867)
 ]]
 
 local Config = rawget(_G, "StandConfig") or (getgenv and getgenv().StandConfig) or nil
@@ -33,11 +34,11 @@ local Camera = Workspace.CurrentCamera
 local OwnerName = Config.Owner or ""
 local Prefix = Config.Prefix or "."
 local PreferredGun = Config.Gun or "[DoubleBarrel]"
--- normalize so bot config "[DoubleBarrel]" still finds Da Hood / DERS HOOD's "[Double-Barrel SG]"
+-- normalize so bot config "[DoubleBarrel]" still finds Da Hood / DERS HOOD / Da Strike "[Double-Barrel SG]"
 do
     local pid = game.PlaceId
-    -- Da Hood-style places (including DERS HOOD clones)
-    local daHoodStyle = (pid == 2788229376 or pid == 16033173781 or pid == 96247461091106 or pid == 128413479081937)
+    -- Da Hood-style places (including DERS HOOD clones + Da Strike)
+    local daHoodStyle = (pid == 2788229376 or pid == 16033173781 or pid == 96247461091106 or pid == 128413479081937 or pid == 134196333708867)
     local g = tostring(PreferredGun)
     local low = string.lower(g:gsub("[%[%]]", ""):gsub("%s+", ""))
     if low == "doublebarrel" or low == "doublebarrelsg" or low == "db" then
@@ -202,7 +203,8 @@ local PlaceId = game.PlaceId
 -- Da Hood + ranked + DERS HOOD (same MainEvent / mouse remote family)
 local IsDaHood = (PlaceId == 2788229376 or PlaceId == 16033173781)
 local IsDersHood = (PlaceId == 96247461091106 or PlaceId == 128413479081937) -- DERS HOOD + Des Hood
-local IsDaHoodStyle = IsDaHood or IsDersHood -- shared remotes & gun names
+local IsDaStrike = (PlaceId == 134196333708867) -- Da Strike (hood-style clone)
+local IsDaHoodStyle = IsDaHood or IsDersHood or IsDaStrike -- shared remotes & gun names
 local IsHoodCustoms = (PlaceId == 9825515356)
 local IsHoodGame = IsDaHoodStyle or IsHoodCustoms or true -- default to hood-style remotes
 
@@ -236,6 +238,7 @@ end)
 local placeLabel =
     (PlaceId == 128413479081937 and "Des Hood")
     or (PlaceId == 96247461091106 and "DERS HOOD")
+    or (IsDaStrike and "Da Strike")
     or (IsDaHood and "Da Hood")
     or (IsHoodCustoms and "Hood Customs")
     or "unknown hood"
@@ -2425,6 +2428,7 @@ end
 
 findKnife = function()
     -- Da Hood uses "Knife"; Hood Customs often uses "[Knife]"
+    -- Da Strike and some clones also use Katana as melee
     local exact = findToolByName("[Knife]", true) or findToolByName("Knife", true)
     if exact then return exact end
     local c = getChar()
@@ -2440,11 +2444,34 @@ findKnife = function()
         or findToolByName("Combat Knife", false)
 end
 
+-- Katana (Da Strike + some hood clones) — same melee path as knife
+local function findKatana()
+    local exact = findToolByName("[Katana]", true)
+        or findToolByName("Katana", true)
+        or findToolByName("[katana]", true)
+    if exact then return exact end
+    local c = getChar()
+    local bag = LocalPlayer:FindFirstChild("Backpack")
+    for _, container in ipairs({c, bag}) do
+        if container then
+            for _, name in ipairs({"[Katana]", "Katana", "[katana]", "katana", "Katana Sword", "[Katana Sword]"}) do
+                local t = container:FindFirstChild(name)
+                if t and t:IsA("Tool") then return t end
+            end
+        end
+    end
+    return findToolByName("[Katana]", false)
+        or findToolByName("Katana", false)
+        or findToolByName("katana", false)
+        or findToolByName("Katana Sword", false)
+        or findToolByName("[Katana Sword]", false)
+end
+
 -- Expand knife / character hit parts so swings reach the target
 -- DERS HOOD + Hood Customs: huge vertical hitbox so knife reaches up from under feet
 expandKnifeHitbox = function(knife, scale)
-    -- bigger default on DERS / Hood Customs so underground swings connect
-    if IsDersHood or IsHoodCustoms then
+    -- bigger default on DERS / Hood Customs / Da Strike so underground swings connect
+    if IsDersHood or IsHoodCustoms or IsDaStrike then
         scale = scale or 8.0
     else
         scale = scale or 3.5
@@ -2458,7 +2485,7 @@ expandKnifeHitbox = function(knife, scale)
                     end
                     local orig = part:GetAttribute("StandOrigSize")
                     if typeof(orig) == "Vector3" then
-                        if IsDersHood or IsHoodCustoms then
+                        if IsDersHood or IsHoodCustoms or IsDaStrike then
                             -- very tall Y so blade overlaps target from under their feet
                             part.Size = Vector3.new(
                                 math.max(orig.X * scale, 8),
@@ -2478,7 +2505,7 @@ expandKnifeHitbox = function(knife, scale)
                 end
             end
             -- Handle / blade common names — force tall hitboxes
-            for _, name in ipairs({"Handle", "Blade", "Hitbox", "Knife", "Part"}) do
+            for _, name in ipairs({"Handle", "Blade", "Hitbox", "Knife", "Katana", "Part"}) do
                 local p = knife:FindFirstChild(name)
                 if p and p:IsA("BasePart") then
                     if not p:GetAttribute("StandOrigSize") then
@@ -2486,7 +2513,7 @@ expandKnifeHitbox = function(knife, scale)
                     end
                     local orig = p:GetAttribute("StandOrigSize")
                     if typeof(orig) == "Vector3" then
-                        if IsDersHood or IsHoodCustoms then
+                        if IsDersHood or IsHoodCustoms or IsDaStrike then
                             p.Size = Vector3.new(
                                 math.max(orig.X * scale, 8),
                                 math.max(orig.Y * scale * 3.0, 20),
@@ -2519,7 +2546,7 @@ expandKnifeHitbox = function(knife, scale)
                     local orig = p:GetAttribute("StandOrigSize")
                     if typeof(orig) == "Vector3" then
                         if name == "HumanoidRootPart" then
-                            if IsDersHood or IsHoodCustoms then
+                            if IsDersHood or IsHoodCustoms or IsDaStrike then
                                 -- tall HRP so distance checks from under feet still count as "in range"
                                 p.Size = Vector3.new(
                                     math.max(orig.X * 2.5, 4),
@@ -2528,7 +2555,7 @@ expandKnifeHitbox = function(knife, scale)
                                 )
                             end
                         else
-                            local armScale = (IsDersHood or IsHoodCustoms) and 4.0 or 2.2
+                            local armScale = (IsDersHood or IsHoodCustoms or IsDaStrike) and 4.0 or 2.2
                             p.Size = orig * armScale
                         end
                         p.Massless = true
@@ -2555,7 +2582,7 @@ knifeInstantTP = function(plr)
     end)
     local lookAt = (head and head.Position) or (their.Position + Vector3.new(0, 1.2, 0))
     local pos
-    if IsDersHood or IsHoodCustoms then
+    if IsDersHood or IsHoodCustoms or IsDaStrike then
         -- just under their feet — still in melee range for server distance checks
         -- tall knife + HRP hitbox reach up into the target body
         pos = their.Position + Vector3.new(0, -3.0, 0)
@@ -2656,6 +2683,39 @@ local function ensureKnifeEquipped(timeout)
     return findKnife() and equipTool(findKnife(), 0.4) or nil
 end
 
+-- Always re-find + equip katana (Da Strike / melee clones)
+local function ensureKatanaEquipped(timeout)
+    timeout = timeout or 1.0
+    local t0 = tick()
+    local kat = nil
+    while tick() - t0 < timeout do
+        local c = getChar()
+        local bag = LocalPlayer:FindFirstChild("Backpack")
+        if c and (bag or c:FindFirstChildOfClass("Tool")) then
+            kat = findKatana()
+            if kat then
+                if kat.Parent == c then
+                    return kat
+                end
+                pcall(function()
+                    local h = getHum()
+                    if h then h:UnequipTools() end
+                end)
+                task.wait(0.05)
+                kat = findKatana()
+                if kat then
+                    kat = equipTool(kat, 0.55)
+                    if kat and isToolEquipped(kat) then
+                        return kat
+                    end
+                end
+            end
+        end
+        task.wait(0.08)
+    end
+    return findKatana() and equipTool(findKatana(), 0.4) or nil
+end
+
 -- Single stealth knife attack burst (used by .knife and .lkk)
 knifeAttackTarget = function(plr, swings)
     swings = swings or 8
@@ -2663,7 +2723,7 @@ knifeAttackTarget = function(plr, swings)
     local knife = ensureKnifeEquipped(1.2)
     if not knife then return end
     -- DERS / Hood Customs: max vertical hitbox for under-feet hits
-    local hitScale = (IsDersHood or IsHoodCustoms) and 8.0 or 3.8
+    local hitScale = (IsDersHood or IsHoodCustoms or IsDaStrike) and 8.0 or 3.8
     expandKnifeHitbox(knife, hitScale)
     setStealthVisible(false)
     for i = 1, swings do
@@ -2697,7 +2757,7 @@ knifeAttackTarget = function(plr, swings)
             local my = getHRP()
             local their = getHRP(plr)
             if my and their then
-                local underY = (IsDersHood or IsHoodCustoms) and -14 or -8
+                local underY = (IsDersHood or IsHoodCustoms or IsDaStrike) and -14 or -8
                 my.CFrame = CFrame.new(their.Position + Vector3.new(0, underY, 0))
                 my.AssemblyLinearVelocity = Vector3.zero
             end
@@ -2735,7 +2795,7 @@ local function cmdKnife(user)
             return
         end
         -- DERS / Hood Customs: max vertical hitbox for under-feet knife
-        local hitScale = (IsDersHood or IsHoodCustoms) and 8.0 or 3.8
+        local hitScale = (IsDersHood or IsHoodCustoms or IsDaStrike) and 8.0 or 3.8
         expandKnifeHitbox(knife, hitScale)
         setStealthVisible(false)
 
@@ -2776,7 +2836,7 @@ local function cmdKnife(user)
                 local my = getHRP()
                 local their = getHRP(plr)
                 if my and their then
-                    local underY = (IsDersHood or IsHoodCustoms) and -14 or -10
+                    local underY = (IsDersHood or IsHoodCustoms or IsDaStrike) and -14 or -10
                     my.CFrame = CFrame.new(their.Position + Vector3.new(0, underY, 0))
                     my.AssemblyLinearVelocity = Vector3.zero
                 end
@@ -2816,6 +2876,130 @@ local function cmdKnife(user)
         end
         returnToOwner()
         notify("Knife done " .. plr.Name)
+    end)
+end
+
+-- .katana / .kat <user>  →  stealth katana kill (Da Strike + any game with Katana tool)
+local function cmdKatana(user)
+    local plr = findPlayer(user)
+    if not plr then
+        notify("Katana: player not found")
+        return
+    end
+    if isProtected(plr) then
+        notify("Katana: target protected")
+        return
+    end
+    task.spawn(function()
+        local savedTrack = State.Tracking
+        State.Tracking = false
+        if State.InVoid then State.InVoid = false end
+        setCamlock(plr, 14)
+        notify("Katana (stealth): " .. plr.Name)
+
+        -- prefer real Katana; fall back to Knife if no katana in backpack
+        local melee = ensureKatanaEquipped(1.5)
+        local usingKatana = melee ~= nil
+        if not melee or not isToolEquipped(melee) then
+            task.wait(0.2)
+            melee = ensureKatanaEquipped(1.2)
+            usingKatana = melee ~= nil
+        end
+        if not melee or not isToolEquipped(melee) then
+            -- fallback to knife so the command still works
+            melee = ensureKnifeEquipped(1.2)
+            usingKatana = false
+        end
+        if not melee or not isToolEquipped(melee) then
+            notify("Katana: failed to equip Katana/Knife — check backpack")
+            clearCamlock()
+            State.Tracking = savedTrack
+            return
+        end
+
+        local hitScale = (IsDersHood or IsHoodCustoms or IsDaStrike) and 8.0 or 3.8
+        expandKnifeHitbox(melee, hitScale)
+        setStealthVisible(false)
+
+        for i = 1, 50 do
+            if isKO(plr) then break end
+            if not getChar(plr) then break end
+
+            knifeInstantTP(plr)
+            setStealthVisible(false)
+
+            local aim = getTargetAimPos(plr)
+            if aim then
+                for _ = 1, 5 do fireMouse(aim) end
+            end
+            aimAt(plr)
+
+            if not melee or not isToolEquipped(melee) or (i % 5 == 1) then
+                if usingKatana then
+                    melee = ensureKatanaEquipped(0.7)
+                else
+                    melee = ensureKnifeEquipped(0.7)
+                end
+                if melee then expandKnifeHitbox(melee, hitScale) end
+            end
+            if melee then activateTool(melee) end
+            if MainEvent then
+                pcall(function() MainEvent:FireServer("Hit", plr.Character) end)
+                pcall(function() MainEvent:FireServer("Hit", plr) end)
+                pcall(function() MainEvent:FireServer("Punch") end)
+                pcall(function() MainEvent:FireServer("Knife") end)
+                pcall(function() MainEvent:FireServer("Slash") end)
+                pcall(function() MainEvent:FireServer("Katana") end)
+                pcall(function() MainEvent:FireServer("Combat") end)
+                pcall(function() MainEvent:FireServer("Melee") end)
+                if aim then
+                    pcall(function() MainEvent:FireServer(MouseRemote, aim) end)
+                end
+            end
+            task.wait(0.04)
+            pcall(function()
+                local my = getHRP()
+                local their = getHRP(plr)
+                if my and their then
+                    local underY = (IsDersHood or IsHoodCustoms or IsDaStrike) and -14 or -10
+                    my.CFrame = CFrame.new(their.Position + Vector3.new(0, underY, 0))
+                    my.AssemblyLinearVelocity = Vector3.zero
+                end
+            end)
+            task.wait(0.02)
+            knifeInstantTP(plr)
+            if not melee or not isToolEquipped(melee) then
+                melee = usingKatana and ensureKatanaEquipped(0.5) or ensureKnifeEquipped(0.5)
+            end
+            if melee then activateTool(melee) end
+            if MainEvent then
+                pcall(function() MainEvent:FireServer("Hit", plr.Character) end)
+                pcall(function() MainEvent:FireServer("Knife") end)
+                pcall(function() MainEvent:FireServer("Katana") end)
+                pcall(function() MainEvent:FireServer("Slash") end)
+            end
+            task.wait(0.03)
+        end
+
+        for _ = 1, 8 do
+            if isKO(plr) then break end
+            task.wait(0.05)
+        end
+        if isKO(plr) then
+            notify("Katana KO — stomping " .. plr.Name)
+            setStealthVisible(true)
+            quickStomp(plr, 6)
+        else
+            notify("Katana: no KO flag — try .stomp " .. plr.Name)
+        end
+        State.TargetName = nil
+        State.KnifeMode = false
+        State.StealthKnife = false
+        if not (State.Carrying and string.lower(tostring(State.Carrying)) == string.lower(plr.Name)) then
+            State.Carrying = nil
+        end
+        returnToOwner()
+        notify("Katana done " .. plr.Name)
     end)
 end
 
@@ -2991,7 +3175,7 @@ wl <user> uwl | protect <user> unprotect
 loopkill/lk <user> | lkk <user> | unloopkill/unlk
 bring <user> (no stomp) | n <user> (stomp+bring) | drop
 fly <user> | unfly  (owner steers with WASD/mobile)
-knife <user> | view
+knife <user> | katana/kat <user> | view
 talk <msg> | talk on/off | say <msg>
 freeze <user> | unfreeze <user>
 benx <user> | unbenx | pkick <user> | forcevoid <user>
@@ -3089,6 +3273,7 @@ local function onControlChat(msg, speaker)
     elseif cmd == "fly" then cmdFly(a1)
     elseif cmd == "unfly" then cmdUnfly()
     elseif cmd == "knife" then cmdKnife(a1)
+    elseif cmd == "katana" or cmd == "kat" or cmd == "katanakill" then cmdKatana(a1)
     elseif cmd == "view" or cmd == "players" then cmdView()
     elseif cmd == "talk" or cmd == "say" then cmdTalk(a1, restOriginal)
     elseif cmd == "freeze" then cmdFreeze(a1)
