@@ -400,7 +400,7 @@ local function forceHit(plr, gun)
             cam.Focus = CFrame.new(aim)
         end
     end)
-    if gun then
+    if gun and isToolEquipped(gun) then
         pcall(function() gun:Activate() end)
     end
     if MainEvent then
@@ -413,7 +413,7 @@ local function forceHit(plr, gun)
             pcall(function() MainEvent:FireServer("Fire", gun.Name) end)
         end
     end
-    if gun then
+    if gun and isToolEquipped(gun) then
         pcall(function()
             for _, v in ipairs(gun:GetDescendants()) do
                 local n = string.lower(v.Name)
@@ -751,14 +751,60 @@ end
 
 local function activateTool(tool)
     if not tool then return false end
+    -- never Activate unless tool is actually on character (stops Tool:Activate warning)
     if not isToolEquipped(tool) then
         tool = equipTool(tool, 0.45)
     end
-    if tool and isToolEquipped(tool) then
-        pcall(function() tool:Activate() end)
-        return true
+    if not tool then return false end
+    local c = getChar()
+    if not c or tool.Parent ~= c then
+        return false
     end
-    return false
+    pcall(function() tool:Activate() end)
+    return true
+end
+
+-- Force alt back onto owner (used after knife / knock so bot doesn't stick on corpse)
+local function returnToOwner()
+    if IsOwner then return end
+    clearCamlock()
+    State.TargetName = nil
+    State.InVoid = false
+    State.Tracking = true
+    setStealthVisible(true)
+    ensureVisible()
+    pcall(function()
+        local h = getHum()
+        if h then
+            h.PlatformStand = false
+            h.Sit = false
+            h:ChangeState(Enum.HumanoidStateType.Running)
+            h:UnequipTools()
+        end
+    end)
+    local owner = getOwner()
+    local oHRP = owner and getHRP(owner)
+    local my = getHRP()
+    if oHRP and my then
+        local offset = SLOT_CF[MySlot] or SLOT_CF[2]
+        for _ = 1, 4 do
+            pcall(function()
+                local char = getChar()
+                local cf = oHRP.CFrame * offset
+                if char and char.PivotTo then
+                    char:PivotTo(cf)
+                end
+                my.CFrame = cf
+                my.AssemblyLinearVelocity = Vector3.zero
+                my.AssemblyAngularVelocity = Vector3.zero
+            end)
+            task.wait(0.05)
+            oHRP = getHRP(owner)
+            my = getHRP()
+            if not oHRP or not my then break end
+        end
+    end
+    followOwner()
 end
 
 -- ONLY the preferred gun from config — never random other tools
@@ -1087,7 +1133,9 @@ local function stomp(plr)
         if tool and not isToolEquipped(tool) then
             tool = equipTool(tool, 0.35) or equipCombat()
         end
-        activateTool(tool)
+        if tool and isToolEquipped(tool) then
+            activateTool(tool)
+        end
         pressStompKey()
         fireStompRemotes(plr)
         -- keep feet on body between fires (anti-tp pulls you off)
@@ -2537,18 +2585,19 @@ local function cmdKnife(user)
         else
             notify("Knife: no KO flag — try .stomp " .. plr.Name)
         end
-        setStealthVisible(true)
-        ensureVisible()
-        -- put knife back so next .knife can equip cleanly
-        pcall(function()
-            local h = getHum()
-            if h then h:UnequipTools() end
-        end)
-        clearCamlock()
-        State.Tracking = savedTrack
-        if not State.InVoid and savedTrack and not IsOwner then
-            followOwner()
+        -- ALWAYS leave the corpse and return to owner (fixes bot stuck following dead target)
+        State.TargetName = nil
+        State.LoopKill = nil
+        State.LoopKillKnife = false
+        State.KnifeMode = false
+        State.StealthKnife = false
+        -- only keep carrying if .n/.bring set it; knife itself should not keep us on corpse
+        if State.Carrying and string.lower(tostring(State.Carrying)) == string.lower(plr.Name) then
+            -- leave corpse for bring/n to handle; still snap off body
+        else
+            State.Carrying = nil
         end
+        returnToOwner()
         notify("Knife done " .. plr.Name)
     end)
 end
