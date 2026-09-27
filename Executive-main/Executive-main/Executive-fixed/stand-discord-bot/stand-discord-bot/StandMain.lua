@@ -165,6 +165,8 @@ local CamTarget    = nil
 local CamlockUntil = 0
 local lastChatMsg, lastChatAt = "", 0
 local HealthWatch  = {} -- [userId] = lastHealth (sentry)
+local KoWatch      = {} -- [userId] = wasKO
+local ArmorWatch   = {} -- [userId] = last armor value
 local LastSentryAt = 0
 
 ----------------------------------------------------------------------
@@ -1523,12 +1525,29 @@ local function parseOnOff(arg, current)
     return not current
 end
 
+local function baselineSentryPlayer(plr)
+    if not plr then return end
+    local hum = getHum(plr)
+    if not hum then return end
+    HealthWatch[plr.UserId] = hum.Health
+    KoWatch[plr.UserId] = isKO(plr)
+    local armor = 0
+    local c = getChar(plr)
+    local be = c and c:FindFirstChild("BodyEffects")
+    if be then
+        for _, name in ipairs({"Armor", "Defence", "Defense", "Helmet", "CurrentArmor"}) do
+            local v = be:FindFirstChild(name)
+            if v and typeof(v.Value) == "number" then armor = armor + v.Value end
+        end
+    end
+    ArmorWatch[plr.UserId] = armor
+end
+
 local function cmdSentry(arg)
     State.Sentry = parseOnOff(arg, State.Sentry)
     if State.Sentry then State.Sentry2 = false end
-    -- reset health baseline so next hit is detected cleanly
     local o = getOwner()
-    if o and getHum(o) then HealthWatch[o.UserId] = getHum(o).Health end
+    baselineSentryPlayer(o)
     notify("Sentry " .. (State.Sentry and "ON" or "OFF")
         .. " (knock who shoots owner)"
         .. (State.Sentry and (o and (" | owner=" .. o.Name) or " | WARNING: no owner set") or ""))
@@ -1538,7 +1557,7 @@ local function cmdSentry2(arg)
     State.Sentry2 = parseOnOff(arg, State.Sentry2)
     if State.Sentry2 then State.Sentry = false end
     local o = getOwner()
-    if o and getHum(o) then HealthWatch[o.UserId] = getHum(o).Health end
+    baselineSentryPlayer(o)
     notify("Sentry2 " .. (State.Sentry2 and "ON" or "OFF")
         .. " (knock+stomp who shoots owner)"
         .. (State.Sentry2 and (o and (" | owner=" .. o.Name) or " | WARNING: no owner set") or ""))
@@ -1546,9 +1565,7 @@ end
 
 local function cmdBSentry(arg)
     State.BSentry = parseOnOff(arg, State.BSentry)
-    if getHum(LocalPlayer) then
-        HealthWatch[LocalPlayer.UserId] = getHum(LocalPlayer).Health
-    end
+    baselineSentryPlayer(LocalPlayer)
     notify("BSentry " .. (State.BSentry and "ON" or "OFF") .. " (knock+stomp who shoots stand)")
 end
 
@@ -1556,7 +1573,7 @@ local function cmdAssist(user)
     local plr = findPlayer(user)
     if not plr then notify("Assist: not found") return end
     State.AssistName = plr.Name
-    if getHum(plr) then HealthWatch[plr.UserId] = getHum(plr).Health end
+    baselineSentryPlayer(plr)
     notify("Assist ON " .. plr.Name .. " (sentry covers them too)")
 end
 
@@ -1749,47 +1766,104 @@ local function findAttacker(victim)
     return closest
 end
 
+local function readArmor(plr)
+    local c = getChar(plr)
+    if not c then return 0 end
+    local be = c:FindFirstChild("BodyEffects")
+    if not be then return 0 end
+    local sum = 0
+    for _, name in ipairs({"Armor", "Defence", "Defense", "Helmet", "CurrentArmor"}) do
+        local v = be:FindFirstChild(name)
+        if v and typeof(v.Value) == "number" then
+            sum = sum + v.Value
+        end
+    end
+    return sum
+end
+
 local function onVictimDamaged(victim, doStomp)
     if State.SentryBusy then return end
-    if tick() - LastSentryAt < 0.6 then return end
+    if tick() - LastSentryAt < 0.45 then return end
     local attacker = findAttacker(victim)
+    if not attacker then
+        -- last resort: any armed player within 100 studs of victim
+        local vHRP = getHRP(victim)
+        if vHRP then
+            local best, bestD = nil, 100
+            for _, plr in ipairs(Players:GetPlayers()) do
+                if plr ~= victim and plr ~= LocalPlayer and not isProtected(plr) and isAlive(plr) then
+                    local hrp = getHRP(plr)
+                    local ch = getChar(plr)
+                    if hrp and ch then
+                        local armed = false
+                        for _, c in ipairs(ch:GetChildren()) do
+                            if c:IsA("Tool") then armed = true break end
+                        end
+                        if armed then
+                            local d = (hrp.Position - vHRP.Position).Magnitude
+                            if d < bestD then bestD = d best = plr end
+                        end
+                    end
+                end
+            end
+            attacker = best
+        end
+    end
     if attacker then
         LastSentryAt = tick()
         sentryReact(attacker, doStomp)
     else
-        notify("Sentry: hit detected, no attacker found")
+        notify("Sentry: damage on " .. (victim and victim.Name or "?") .. " — no shooter found")
     end
 end
 
--- Poll health every frame (HealthChanged on other players is unreliable)
+-- Multi-signal poll: health, KO, armor (Da Hood style)
 local function sentryTick()
     if IsOwner then return end
     if State.SentryBusy then return end
-    if not (State.Sentry or State.Sentry2 or State.BSentry or State.AssistName) then return end
+    if not (State.Sentry or State.Sentry2 or State.BSentry) then return end
 
     local function check(plr, doStomp)
         if not plr then return end
         local hum = getHum(plr)
-        if not hum then return end
+        local char = getChar(plr)
+        if not hum or not char then return end
         local key = plr.UserId
+
         local hp = hum.Health
-        local prev = HealthWatch[key]
-        if prev == nil then
+        local prevHp = HealthWatch[key]
+        local knocked = isKO(plr)
+        local wasKO = KoWatch[key]
+        local armor = readArmor(plr)
+        local prevArmor = ArmorWatch[key]
+
+        if prevHp == nil then
             HealthWatch[key] = hp
+            KoWatch[key] = knocked
+            ArmorWatch[key] = armor
             return
         end
-        -- damage taken (ignore tiny regen noise)
-        if hp < prev - 1 then
-            HealthWatch[key] = hp
+
+        local hit = false
+        -- 1) health dropped
+        if hp < prevHp - 0.5 then hit = true end
+        -- 2) just got knocked
+        if knocked and not wasKO then hit = true end
+        -- 3) armor/defense dropped (hood games)
+        if prevArmor ~= nil and armor < prevArmor - 1 then hit = true end
+
+        HealthWatch[key] = hp
+        KoWatch[key] = knocked
+        ArmorWatch[key] = armor
+
+        if hit then
             onVictimDamaged(plr, doStomp)
-        elseif hp > prev then
-            HealthWatch[key] = hp -- healed / respawned
         end
     end
 
     local owner = getOwner()
     if owner and (State.Sentry or State.Sentry2) then
-        check(owner, State.Sentry2)
+        check(owner, State.Sentry2 and true or false)
     end
     if State.BSentry then
         check(LocalPlayer, true)
@@ -1797,26 +1871,24 @@ local function sentryTick()
     if State.AssistName and (State.Sentry or State.Sentry2 or State.BSentry) then
         local ap = findPlayer(State.AssistName)
         if ap then
-            local stomp = State.Sentry2 or State.BSentry
-            check(ap, stomp)
+            check(ap, (State.Sentry2 or State.BSentry) and true or false)
         end
     end
 end
 
 local function refreshSentryWatches()
-    -- reset baselines so we don't false-trigger after respawn
-    local owner = getOwner()
-    if owner and getHum(owner) then
-        HealthWatch[owner.UserId] = getHum(owner).Health
+    local function baseline(plr)
+        if not plr then return end
+        local hum = getHum(plr)
+        if not hum then return end
+        HealthWatch[plr.UserId] = hum.Health
+        KoWatch[plr.UserId] = isKO(plr)
+        ArmorWatch[plr.UserId] = readArmor(plr)
     end
-    if getHum(LocalPlayer) then
-        HealthWatch[LocalPlayer.UserId] = getHum(LocalPlayer).Health
-    end
+    baseline(getOwner())
+    baseline(LocalPlayer)
     if State.AssistName then
-        local ap = findPlayer(State.AssistName)
-        if ap and getHum(ap) then
-            HealthWatch[ap.UserId] = getHum(ap).Health
-        end
+        baseline(findPlayer(State.AssistName))
     end
 end
 
