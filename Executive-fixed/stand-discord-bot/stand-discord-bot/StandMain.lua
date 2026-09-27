@@ -773,6 +773,56 @@ local function activateTool(tool)
     return true
 end
 
+-- Fire every RemoteEvent / RemoteFunction inside the knife tool (Hood Customs
+-- and many clones put the real hit logic on tool.Remote, not MainEvent alone).
+local function fireToolHit(tool, plr)
+    if not tool or not plr then return end
+    local targetChar = getChar(plr)
+    local targetHum = getHum(plr)
+    local targetHRP = getHRP(plr)
+    local aim = getTargetAimPos(plr)
+
+    local function tryFire(remote)
+        if not remote then return end
+        -- common arg patterns used by hood knife tools
+        pcall(function() remote:FireServer("Hit") end)
+        pcall(function() remote:FireServer("Hit", targetHum) end)
+        pcall(function() remote:FireServer("Hit", targetChar) end)
+        pcall(function() remote:FireServer("Hit", targetHRP) end)
+        pcall(function() remote:FireServer("Slash") end)
+        pcall(function() remote:FireServer("Slash", targetHum) end)
+        pcall(function() remote:FireServer("Knife") end)
+        pcall(function() remote:FireServer("Attack") end)
+        pcall(function() remote:FireServer("Attack", targetChar) end)
+        pcall(function() remote:FireServer(true) end)
+        pcall(function() remote:FireServer(targetChar) end)
+        pcall(function() remote:FireServer(targetHum) end)
+        if aim then
+            pcall(function() remote:FireServer(aim) end)
+            pcall(function() remote:FireServer("Hit", aim) end)
+        end
+        if remote:IsA("RemoteFunction") then
+            pcall(function() remote:InvokeServer("Hit", targetHum) end)
+            pcall(function() remote:InvokeServer(targetChar) end)
+        end
+    end
+
+    pcall(function()
+        for _, d in ipairs(tool:GetDescendants()) do
+            if d:IsA("RemoteEvent") or d:IsA("RemoteFunction") then
+                tryFire(d)
+            end
+        end
+        -- also direct children named Remote / Hit / Attack
+        for _, name in ipairs({"Remote", "Hit", "Attack", "Knife", "Slash", "Combat"}) do
+            local r = tool:FindFirstChild(name, true)
+            if r and (r:IsA("RemoteEvent") or r:IsA("RemoteFunction")) then
+                tryFire(r)
+            end
+        end
+    end)
+end
+
 -- Force alt back onto owner (used after knife / knock so bot doesn't stick on corpse)
 local function returnToOwner()
     if IsOwner then return end
@@ -2560,6 +2610,45 @@ local function knifeTargetCF(plr)
     return CFrame.new(pos, lookAt)
 end
 
+-- Physics attachment so server is more likely to accept position (raw CFrame often gets snapped)
+local knifeAlign = nil
+local function ensureKnifeAlign(my)
+    if knifeAlign and knifeAlign.Parent == my then return knifeAlign end
+    pcall(function()
+        if knifeAlign then knifeAlign:Destroy() end
+    end)
+    local ok, att = pcall(function()
+        local a0 = my:FindFirstChild("StandKnifeAtt") or Instance.new("Attachment")
+        a0.Name = "StandKnifeAtt"
+        a0.Parent = my
+        local ap = my:FindFirstChild("StandKnifeAlign") or Instance.new("AlignPosition")
+        ap.Name = "StandKnifeAlign"
+        ap.Attachment0 = a0
+        ap.Mode = Enum.PositionAlignmentMode.OneAttachment
+        ap.MaxForce = 1e9
+        ap.MaxVelocity = 1e4
+        ap.Responsiveness = 200
+        ap.Parent = my
+        return ap
+    end)
+    if ok then knifeAlign = att end
+    return knifeAlign
+end
+
+local function clearKnifeAlign()
+    pcall(function()
+        if knifeAlign then knifeAlign:Destroy() end
+        knifeAlign = nil
+        local my = getHRP()
+        if my then
+            local a = my:FindFirstChild("StandKnifeAtt")
+            if a then a:Destroy() end
+            local ap = my:FindFirstChild("StandKnifeAlign")
+            if ap then ap:Destroy() end
+        end
+    end)
+end
+
 knifeInstantTP = function(plr)
     local my = getHRP()
     local cf = knifeTargetCF(plr)
@@ -2572,13 +2661,18 @@ knifeInstantTP = function(plr)
             h:ChangeState(Enum.HumanoidStateType.Running)
         end
         local char = getChar()
-        for _ = 1, 4 do
+        for _ = 1, 3 do
             if char and char.PivotTo then
                 char:PivotTo(cf)
             end
             my.CFrame = cf
             my.AssemblyLinearVelocity = Vector3.zero
             my.AssemblyAngularVelocity = Vector3.zero
+        end
+        local ap = ensureKnifeAlign(my)
+        if ap then
+            ap.Position = cf.Position
+            ap.Enabled = true
         end
     end)
     return true
@@ -2693,7 +2787,10 @@ knifeAttackTarget = function(plr, swings)
         local aim = getTargetAimPos(plr)
         if aim then for _ = 1, 4 do fireMouse(aim) end end
         aimAt(plr)
-        if knife then activateTool(knife) end
+        if knife then
+            activateTool(knife)
+            fireToolHit(knife, plr)
+        end
         if MainEvent then
             pcall(function() MainEvent:FireServer("Hit", plr.Character) end)
             pcall(function() MainEvent:FireServer("Knife") end)
@@ -2757,6 +2854,11 @@ local function cmdKnife(user)
                 my.CFrame = cf
                 my.AssemblyLinearVelocity = Vector3.zero
                 my.AssemblyAngularVelocity = Vector3.zero
+                local ap = ensureKnifeAlign(my)
+                if ap then
+                    ap.Position = cf.Position
+                    ap.Enabled = true
+                end
             end)
         end)
 
@@ -2782,6 +2884,8 @@ local function cmdKnife(user)
 
             if knife then
                 activateTool(knife)
+                -- CRITICAL: Hood Customs / clones put hit logic on remotes INSIDE the tool
+                fireToolHit(knife, plr)
             end
 
             if MainEvent then
@@ -2796,13 +2900,21 @@ local function cmdKnife(user)
                 end
             end
 
-            -- also try clicking via VirtualInput if available (some places key off input)
+            -- VirtualInput click (some places key off mouse button, not Activate)
             pcall(function()
                 local vim = game:GetService("VirtualInputManager")
                 if vim then
                     vim:SendMouseButtonEvent(0, 0, 0, true, game, 0)
-                    task.wait(0.02)
+                    task.wait(0.015)
                     vim:SendMouseButtonEvent(0, 0, 0, false, game, 0)
+                end
+            end)
+            pcall(function()
+                local vu = game:GetService("VirtualUser")
+                if vu then
+                    vu:Button1Down(Vector2.new(0, 0))
+                    task.wait(0.015)
+                    vu:Button1Up(Vector2.new(0, 0))
                 end
             end)
 
@@ -2833,6 +2945,7 @@ local function cmdKnife(user)
         if not (State.Carrying and string.lower(tostring(State.Carrying)) == string.lower(plr.Name)) then
             State.Carrying = nil
         end
+        clearKnifeAlign()
         clearCamlock()
         State.Tracking = true
         returnToOwner()
