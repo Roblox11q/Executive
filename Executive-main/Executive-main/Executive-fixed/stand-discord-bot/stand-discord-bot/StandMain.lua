@@ -164,6 +164,8 @@ local Connections  = {}
 local CamTarget    = nil
 local CamlockUntil = 0
 local lastChatMsg, lastChatAt = "", 0
+local HealthWatch  = {} -- [userId] = lastHealth (sentry)
+local LastSentryAt = 0
 
 ----------------------------------------------------------------------
 -- CHARACTER HELPERS
@@ -1524,8 +1526,9 @@ end
 local function cmdSentry(arg)
     State.Sentry = parseOnOff(arg, State.Sentry)
     if State.Sentry then State.Sentry2 = false end
-    refreshSentryWatches()
+    -- reset health baseline so next hit is detected cleanly
     local o = getOwner()
+    if o and getHum(o) then HealthWatch[o.UserId] = getHum(o).Health end
     notify("Sentry " .. (State.Sentry and "ON" or "OFF")
         .. " (knock who shoots owner)"
         .. (State.Sentry and (o and (" | owner=" .. o.Name) or " | WARNING: no owner set") or ""))
@@ -1534,8 +1537,8 @@ end
 local function cmdSentry2(arg)
     State.Sentry2 = parseOnOff(arg, State.Sentry2)
     if State.Sentry2 then State.Sentry = false end
-    refreshSentryWatches()
     local o = getOwner()
+    if o and getHum(o) then HealthWatch[o.UserId] = getHum(o).Health end
     notify("Sentry2 " .. (State.Sentry2 and "ON" or "OFF")
         .. " (knock+stomp who shoots owner)"
         .. (State.Sentry2 and (o and (" | owner=" .. o.Name) or " | WARNING: no owner set") or ""))
@@ -1543,7 +1546,9 @@ end
 
 local function cmdBSentry(arg)
     State.BSentry = parseOnOff(arg, State.BSentry)
-    refreshSentryWatches()
+    if getHum(LocalPlayer) then
+        HealthWatch[LocalPlayer.UserId] = getHum(LocalPlayer).Health
+    end
     notify("BSentry " .. (State.BSentry and "ON" or "OFF") .. " (knock+stomp who shoots stand)")
 end
 
@@ -1551,6 +1556,7 @@ local function cmdAssist(user)
     local plr = findPlayer(user)
     if not plr then notify("Assist: not found") return end
     State.AssistName = plr.Name
+    if getHum(plr) then HealthWatch[plr.UserId] = getHum(plr).Health end
     notify("Assist ON " .. plr.Name .. " (sentry covers them too)")
 end
 
@@ -1742,9 +1748,6 @@ local function findAttacker(victim)
     end
     return closest
 end
-
-local HealthWatch = {} -- [userId] = lastHealth
-local LastSentryAt = 0
 
 local function onVictimDamaged(victim, doStomp)
     if State.SentryBusy then return end
