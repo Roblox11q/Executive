@@ -34,6 +34,100 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
 TABLE = "stand_configs"
 BLACKLIST_TABLE = "stand_blacklist"
 
+# Status / changelog channels
+STATUS_CHANNEL_ID = int(os.getenv("STATUS_CHANNEL_ID", "1553592357814018139") or "1553592357814018139")
+CHANGELOG_CHANNEL_ID = int(os.getenv("CHANGELOG_CHANNEL_ID", "1553592489728933934") or "1553592489728933934")
+# Public URL of this bot (Render) so loaders can poll /api/status during inject
+PUBLIC_BOT_URL = (
+    os.getenv("PUBLIC_BOT_URL")
+    or os.getenv("RENDER_EXTERNAL_URL")
+    or ""
+).rstrip("/")
+
+# 🟢 up | 🔴 down | 🔵 updating | 🟡 detected
+STATUS_DOTS = {
+    "up": "🟢",
+    "down": "🔴",
+    "updating": "🔵",
+    "detected": "🟡",
+}
+STATUS_LABELS = {
+    "up": "Online",
+    "down": "Down / Maintenance",
+    "updating": "Updating",
+    "detected": "Detected",
+}
+STATUS_COLORS = {
+    "up": 0x2ECC71,       # green
+    "down": 0xE74C3C,     # red
+    "updating": 0x3498DB, # blue
+    "detected": 0xF1C40F, # yellow
+}
+# States that block buyers from /loader and block script inject
+MAINTENANCE_BLOCK_STATES = frozenset({"down", "updating"})
+# Base channel name without the status dot prefix
+STATUS_CHANNEL_BASE_NAME = os.getenv("STATUS_CHANNEL_BASE_NAME", "status")
+STATUS_FILE = Path(__file__).resolve().parent / "data" / "system_status.json"
+
+# Track last status (persisted so restarts keep maintenance lock)
+_current_status: str = "up"
+_status_note: str = ""
+
+
+def _load_persisted_status() -> None:
+    global _current_status, _status_note
+    try:
+        if STATUS_FILE.is_file():
+            data = json.loads(STATUS_FILE.read_text(encoding="utf-8"))
+            st = str(data.get("status") or "up").lower().strip()
+            if st in STATUS_DOTS:
+                _current_status = st
+            _status_note = str(data.get("note") or "")
+    except Exception as e:
+        print("load status file error:", e)
+
+
+def _save_persisted_status() -> None:
+    try:
+        STATUS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        STATUS_FILE.write_text(
+            json.dumps(
+                {
+                    "status": _current_status,
+                    "note": _status_note,
+                    "updated_at": __import__("datetime").datetime.utcnow().isoformat() + "Z",
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+    except Exception as e:
+        print("save status file error:", e)
+
+
+def get_system_status() -> str:
+    return _current_status if _current_status in STATUS_DOTS else "up"
+
+
+def is_maintenance() -> bool:
+    """True when buyers must not use the product (down or updating)."""
+    return get_system_status() in MAINTENANCE_BLOCK_STATES
+
+
+def maintenance_message() -> str:
+    st = get_system_status()
+    label = STATUS_LABELS.get(st, st)
+    dot = STATUS_DOTS.get(st, "🔴")
+    extra = f"\n{_status_note}" if _status_note else ""
+    return (
+        f"{dot} **System is {label}** (`{st}`).\n"
+        f"The script and loader are **disabled** until status is 🟢 Online."
+        f"{extra}"
+    )
+
+
+_load_persisted_status()
+
 supabase: Optional[Client] = None
 if SUPABASE_URL and SUPABASE_KEY:
     supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -241,8 +335,10 @@ def generate_loader(cfg: dict) -> str:
     a("    if shared then shared.StandConfig = StandConfig end")
     a("end)")
     a("")
-    a("-- KEY VALIDATION")
+    a("-- KEY VALIDATION + MAINTENANCE GATE")
     a(f"local KEY_API_BASE = {api_base}")
+    status_api = lua_str(PUBLIC_BOT_URL or KEY_API_BASE or "")
+    a(f"local STATUS_API_BASE = {status_api}")
     a("local function getHWID()")
     a("    local h = \"unknown\"")
     a("    pcall(function()")
@@ -259,6 +355,49 @@ def generate_loader(cfg: dict) -> str:
     a("    local ok, res = pcall(req, opts)")
     a("    if not ok then return nil, tostring(res) end")
     a("    return res, nil")
+    a("end")
+    a("")
+    a("-- Block inject while Discord status is down / updating")
+    a("local function checkMaintenance()")
+    a("    if type(STATUS_API_BASE) ~= \"string\" or STATUS_API_BASE == \"\" then")
+    a("        return true, \"skip\"")
+    a("    end")
+    a("    local HttpService = game:GetService(\"HttpService\")")
+    a("    local res, err = httpRequest({")
+    a("        Url = STATUS_API_BASE .. \"/api/status\",")
+    a("        Method = \"GET\",")
+    a("    })")
+    a("    if not res then")
+    a("        -- if status API unreachable, allow (do not soft-lock all users on network blip)")
+    a("        warn(\"[Stand] Status check failed:\", err)")
+    a("        return true, \"unreachable\"")
+    a("    end")
+    a("    local code = res.StatusCode or res.Status or 0")
+    a("    local raw = res.Body or res.body or \"\"")
+    a("    local okj, data = pcall(function() return HttpService:JSONDecode(raw) end)")
+    a("    if code >= 200 and code < 300 and okj and type(data) == \"table\" then")
+    a("        local st = string.lower(tostring(data.status or \"up\"))")
+    a("        if st == \"down\" or st == \"updating\" then")
+    a("            local msg = tostring(data.message or data.note or (\"System is \" .. st))")
+    a("            return false, msg")
+    a("        end")
+    a("        return true, st")
+    a("    end")
+    a("    return true, \"ok\"")
+    a("end")
+    a("")
+    a("print(\"[Stand] Checking system status...\")")
+    a("local mok, mmsg = checkMaintenance()")
+    a("if not mok then")
+    a("    warn(\"[Stand] Blocked — maintenance:\", mmsg)")
+    a("    pcall(function()")
+    a("        game:GetService(\"StarterGui\"):SetCore(\"SendNotification\", {")
+    a("            Title = \"Stand — Maintenance\",")
+    a("            Text = tostring(mmsg),")
+    a("            Duration = 8,")
+    a("        })")
+    a("    end)")
+    a("    return")
     a("end")
     a("")
     a("local function validateKey()")
@@ -524,6 +663,13 @@ async def buyer_check(interaction: discord.Interaction) -> bool:
             ephemeral=True,
         )
         return False
+    # Maintenance / updating: block all non-staff buyers (loader + config)
+    if is_maintenance() and not has_staff_role(interaction):
+        await interaction.response.send_message(
+            maintenance_message(),
+            ephemeral=True,
+        )
+        return False
     if has_buyer_role(interaction):
         return True
     await interaction.response.send_message(
@@ -543,6 +689,120 @@ async def staff_check(interaction: discord.Interaction) -> bool:
     return False
 
 
+def _status_channel_name(status: str) -> str:
+    """Channel name with status dot: 🟢status / 🔴status / etc."""
+    dot = STATUS_DOTS.get(status, "🟢")
+    base = STATUS_CHANNEL_BASE_NAME.strip().lstrip("🟢🔴🔵🟡•-| ") or "status"
+    # Discord channel names: lowercase, no spaces ideally
+    safe = "".join(c if c.isalnum() or c in "-_" else "-" for c in base.lower())[:80]
+    return f"{dot}｜{safe}"
+
+
+async def update_status_channel(
+    status: str,
+    *,
+    note: str = "",
+    by: Optional[discord.abc.User] = None,
+    announce: bool = True,
+) -> Optional[str]:
+    """
+    Rename status channel with colored dot and optionally post an embed.
+    status: up | down | updating | detected
+    Persists status so loaders + Discord commands stay blocked across restarts.
+    Returns error string or None on success.
+    """
+    global _current_status, _status_note
+    status = (status or "up").lower().strip()
+    if status not in STATUS_DOTS:
+        return f"Invalid status `{status}`. Use: up, down, updating, detected"
+
+    _current_status = status
+    if note is not None and str(note).strip():
+        _status_note = str(note).strip()
+    elif status == "up":
+        _status_note = ""
+    _save_persisted_status()
+
+    channel = bot.get_channel(STATUS_CHANNEL_ID)
+    if channel is None:
+        try:
+            channel = await bot.fetch_channel(STATUS_CHANNEL_ID)
+        except Exception as e:
+            return f"Cannot fetch status channel: {e}"
+
+    new_name = _status_channel_name(status)
+    try:
+        if hasattr(channel, "edit"):
+            await channel.edit(name=new_name, reason=f"Status → {status}")
+    except Exception as e:
+        print("status channel rename error:", e)
+
+    label = STATUS_LABELS.get(status, status)
+    color = STATUS_COLORS.get(status, 0x95A5A6)
+    dot = STATUS_DOTS.get(status, "⚪")
+    blocked = status in MAINTENANCE_BLOCK_STATES
+
+    if announce and isinstance(channel, discord.TextChannel):
+        desc = note.strip() if note and note.strip() else None
+        embed = discord.Embed(
+            title=f"{dot} System Status — {label}",
+            color=color,
+            description=desc,
+        )
+        embed.add_field(name="Status", value=f"{dot} **{label}** (`{status}`)", inline=True)
+        embed.add_field(
+            name="Script access",
+            value="**Blocked** for users" if blocked else "**Open**",
+            inline=True,
+        )
+        if by:
+            embed.add_field(name="Updated by", value=str(by), inline=True)
+        embed.set_footer(text="Executive Stand")
+        try:
+            await channel.send(embed=embed)
+        except Exception as e:
+            print("status channel message error:", e)
+            return f"Saved status but failed to post: {e}"
+
+    return None
+
+
+async def post_changelog(
+    title: str,
+    notes: str,
+    *,
+    version: str = "",
+    by: Optional[discord.abc.User] = None,
+) -> Optional[str]:
+    """Post a changelog embed to the changelog channel. Returns error or None."""
+    channel = bot.get_channel(CHANGELOG_CHANNEL_ID)
+    if channel is None:
+        try:
+            channel = await bot.fetch_channel(CHANGELOG_CHANNEL_ID)
+        except Exception as e:
+            return f"Cannot fetch changelog channel: {e}"
+
+    if not isinstance(channel, discord.TextChannel):
+        return "Changelog channel is not a text channel"
+
+    embed = discord.Embed(
+        title=f"📝 {title.strip() or 'Update'}",
+        description=notes.strip() or "_No details provided._",
+        color=0x9B59B6,
+    )
+    if version and version.strip():
+        embed.add_field(name="Version", value=f"`{version.strip()}`", inline=True)
+    if by:
+        embed.add_field(name="Posted by", value=str(by), inline=True)
+    embed.set_footer(text="Executive Stand — Changelog")
+
+    try:
+        await channel.send(embed=embed)
+    except Exception as e:
+        return f"Failed to post changelog: {e}"
+    return None
+
+
 @bot.event
 async def on_ready():
     try:
@@ -552,6 +812,18 @@ async def on_ready():
         print("Sync error:", e)
     print(f"Logged in as {bot.user}")
     print(f"Buyer role: {BUYER_ROLE_ID} | Supabase: {'yes' if supabase else 'NO'}")
+    print(f"System status: {get_system_status()} | maintenance_block={is_maintenance()}")
+    # Refresh status channel from persisted state (do NOT force online — keep maintenance locks)
+    try:
+        err = await update_status_channel(
+            get_system_status(),
+            note=_status_note or f"Bot process online — status `{get_system_status()}`",
+            announce=True,
+        )
+        if err:
+            print("on_ready status update:", err)
+    except Exception as e:
+        print("on_ready status error:", e)
 
 
 @bot.tree.command(name="setuploader", description="Set owner account + license key")
@@ -941,22 +1213,146 @@ async def setrank_cmd(
     )
 
 
+@bot.tree.command(
+    name="status",
+    description="[Staff] Set maintenance / system status (updates status channel dot)",
+)
+@app_commands.describe(
+    state="up=🟢 online | down=🔴 maintenance | updating=🔵 | detected=🟡",
+    note="Optional message posted in the status channel",
+)
+@app_commands.choices(state=[
+    app_commands.Choice(name="🟢 Up / Online", value="up"),
+    app_commands.Choice(name="🔴 Down / Maintenance", value="down"),
+    app_commands.Choice(name="🔵 Updating", value="updating"),
+    app_commands.Choice(name="🟡 Detected", value="detected"),
+])
+async def status_cmd(
+    interaction: discord.Interaction,
+    state: app_commands.Choice[str],
+    note: Optional[str] = None,
+):
+    if not await staff_check(interaction):
+        return
+    await interaction.response.defer(ephemeral=True)
+    err = await update_status_channel(
+        state.value,
+        note=note or "",
+        by=interaction.user,
+        announce=True,
+    )
+    if err:
+        await interaction.followup.send(f"Failed: {err}", ephemeral=True)
+        return
+    dot = STATUS_DOTS.get(state.value, "")
+    label = STATUS_LABELS.get(state.value, state.value)
+    await interaction.followup.send(
+        f"Status set to {dot} **{label}** (`{state.value}`).\n"
+        f"Channel <#{STATUS_CHANNEL_ID}> updated.",
+        ephemeral=True,
+    )
+
+
+@bot.tree.command(
+    name="changelog",
+    description="[Staff] Post an update / changelog entry to the changelog channel",
+)
+@app_commands.describe(
+    title="Changelog title (e.g. v2.4 — Knife + Bring)",
+    notes="What changed (use new lines; Discord markdown OK)",
+    version="Optional version tag",
+    set_updating="If true, also set status channel to 🔵 Updating first",
+    set_up_after="If true, set status channel to 🟢 Up after posting",
+)
+async def changelog_cmd(
+    interaction: discord.Interaction,
+    title: str,
+    notes: str,
+    version: Optional[str] = None,
+    set_updating: Optional[bool] = False,
+    set_up_after: Optional[bool] = True,
+):
+    if not await staff_check(interaction):
+        return
+    await interaction.response.defer(ephemeral=True)
+
+    if set_updating:
+        await update_status_channel(
+            "updating",
+            note=f"Deploying: {title}",
+            by=interaction.user,
+            announce=True,
+        )
+
+    err = await post_changelog(
+        title=title,
+        notes=notes,
+        version=version or "",
+        by=interaction.user,
+    )
+    if err:
+        await interaction.followup.send(f"Changelog failed: {err}", ephemeral=True)
+        return
+
+    if set_up_after:
+        await update_status_channel(
+            "up",
+            note=f"Update live: {title}",
+            by=interaction.user,
+            announce=True,
+        )
+
+    await interaction.followup.send(
+        f"Changelog posted in <#{CHANGELOG_CHANNEL_ID}>.\n"
+        f"Title: **{title}**"
+        + (f" (`{version}`)" if version else ""),
+        ephemeral=True,
+    )
+
+
 async def _start_http():
-    """Minimal HTTP server so Render free Web Service stays up."""
+    """Minimal HTTP server so Render free Web Service stays up + status API for loaders."""
     from aiohttp import web
 
     async def health(_request):
+        st = get_system_status()
+        if st in MAINTENANCE_BLOCK_STATES:
+            return web.Response(
+                text=f"Stand Discord bot — {st}",
+                status=503,
+            )
         return web.Response(text="Stand Discord bot online")
+
+    async def api_status(_request):
+        st = get_system_status()
+        blocked = st in MAINTENANCE_BLOCK_STATES
+        payload = {
+            "status": st,
+            "label": STATUS_LABELS.get(st, st),
+            "blocked": blocked,
+            "message": (
+                _status_note
+                or (
+                    "System is under maintenance. Try again later."
+                    if blocked
+                    else "Online"
+                )
+            ),
+            "note": _status_note,
+        }
+        return web.json_response(payload, status=503 if blocked else 200)
 
     app = web.Application()
     app.router.add_get("/", health)
     app.router.add_get("/health", health)
+    app.router.add_get("/api/status", api_status)
+    app.router.add_get("/api/v1/status", api_status)
     runner = web.AppRunner(app)
     await runner.setup()
     port = int(os.environ.get("PORT", "10000"))
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-    print(f"HTTP health server on 0.0.0.0:{port}")
+    print(f"HTTP health + /api/status on 0.0.0.0:{port} | status={get_system_status()}")
 
 
 async def _amain():
