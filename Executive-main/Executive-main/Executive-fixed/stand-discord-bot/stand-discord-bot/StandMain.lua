@@ -435,22 +435,15 @@ local function expandKnifeParts(knife)
 end
 
 ----------------------------------------------------------------------
--- CAMLOCK
+-- CAMLOCK (never set CameraType.Scriptable — breaks gun rays + CameraModule)
 ----------------------------------------------------------------------
 local CAM_BIND = "StandCamlock"
-local origCamType = nil
 
 local function clearCamlock()
     CamTarget = nil
     State.Camlock = false
     CamlockUntil = 0
     pcall(function() RunService:UnbindFromRenderStep(CAM_BIND) end)
-    pcall(function()
-        if Camera and origCamType ~= nil then
-            Camera.CameraType = origCamType
-        end
-    end)
-    origCamType = nil
 end
 
 local function camlockStep()
@@ -460,15 +453,16 @@ local function camlockStep()
         return
     end
     local plr = CamTarget and findPlayer(CamTarget)
-    if not plr or not isAlive(plr) then return end
+    if not plr then return end
     local aim = getAimPos(plr)
     if not aim then return end
+    fireMouse(aim)
+    -- soft look without breaking CameraModule
     pcall(function()
-        if Camera then
+        if Camera and Camera.CameraType ~= Enum.CameraType.Scriptable then
             Camera.CFrame = CFrame.new(Camera.CFrame.Position, aim)
         end
     end)
-    fireMouse(aim)
 end
 
 local function setCamlock(plr, seconds)
@@ -477,14 +471,8 @@ local function setCamlock(plr, seconds)
     State.Camlock = true
     CamlockUntil = (seconds and seconds > 0) and (tick() + seconds) or 0
     pcall(function()
-        if Camera and origCamType == nil then
-            origCamType = Camera.CameraType
-            Camera.CameraType = Enum.CameraType.Scriptable
-        end
-    end)
-    pcall(function()
         RunService:UnbindFromRenderStep(CAM_BIND)
-        RunService:BindToRenderStep(CAM_BIND, Enum.RenderPriority.Camera.Value + 1, camlockStep)
+        RunService:BindToRenderStep(CAM_BIND, Enum.RenderPriority.Last.Value, camlockStep)
     end)
 end
 
@@ -597,12 +585,11 @@ local function reloadGun(gun)
         end
     end)
 
-    -- 2) MainEvent family
+    -- 2) MainEvent family (Da Hood: Reload + tool instance is the real one)
     if MainEvent then
-        pcall(function() MainEvent:FireServer("Reload") end)
-        pcall(function() MainEvent:FireServer("Reload", gun.Name) end)
         pcall(function() MainEvent:FireServer("Reload", gun) end)
-        pcall(function() MainEvent:FireServer("reload") end)
+        pcall(function() MainEvent:FireServer("Reload", gun.Name) end)
+        pcall(function() MainEvent:FireServer("Reload") end)
     end
     if UnreliableMainEvent then
         pcall(function() UnreliableMainEvent:FireServer("Reload") end)
@@ -693,7 +680,14 @@ local function autoReloadTick()
     end
 
     if equipped then
-        reloadGun(equipped)
+        local need = true
+        local ammo = equipped:FindFirstChild("Ammo", true)
+        if ammo and (ammo:IsA("NumberValue") or ammo:IsA("IntValue")) then
+            need = (ammo.Value <= 0)
+        end
+        if need then
+            reloadGun(equipped)
+        end
     end
 end
 
@@ -708,50 +702,102 @@ local function shootTarget(plr)
         notify("No gun: " .. PreferredGun)
         return
     end
-    gun = equipTool(gun, 0.7)
-    if not gun then return end
+    gun = equipTool(gun, 0.8)
+    if not gun then
+        notify("Could not equip gun")
+        return
+    end
     State.Armed = true
+    setCamlock(plr, 4)
 
-    setCamlock(plr, 2.5)
-    local aim = getAimPos(plr)
-    if aim then
-        for _ = 1, 6 do fireMouse(aim) end
+    -- face target + get into range
+    local function faceAndClose()
+        local my = getHRP()
+        local their = getHRP(plr)
+        if not my or not their then return end
+        local aim = getAimPos(plr) or their.Position
+        local dist = (my.Position - their.Position).Magnitude
+        -- double barrel is short range — stay ~8-14 studs in front
+        local ideal = 10
+        if dist > 18 or dist < 4 then
+            local dir = (my.Position - their.Position)
+            if dir.Magnitude < 0.1 then dir = their.CFrame.LookVector end
+            dir = dir.Unit
+            local pos = their.Position + dir * ideal + Vector3.new(0, 0.5, 0)
+            pcall(function()
+                local ch = getChar()
+                local cf = CFrame.new(pos, aim)
+                if ch and ch.PivotTo then ch:PivotTo(cf) end
+                my.CFrame = cf
+                my.AssemblyLinearVelocity = Vector3.zero
+            end)
+        else
+            pcall(function()
+                my.CFrame = CFrame.new(my.Position, aim)
+            end)
+        end
+    end
+
+    faceAndClose()
+    reloadGun(gun)
+    task.wait(0.15)
+
+    for shot = 1, 10 do
+        if not isAlive(plr) or isKO(plr) then break end
+        if gun.Parent ~= getChar() then
+            gun = equipTool(findGun(), 0.5)
+            if not gun then break end
+        end
+
+        faceAndClose()
+        local aim = getAimPos(plr)
+        if not aim then break end
+
+        -- spam mouse aim BEFORE shot (critical for hits)
+        for _ = 1, 8 do
+            fireMouse(aim)
+        end
+        pcall(function()
+            local be = getChar() and getChar():FindFirstChild("BodyEffects")
+            local mp = be and be:FindFirstChild("MousePos")
+            if mp then mp.Value = aim end
+        end)
+
+        -- look with camera softly
+        pcall(function()
+            if Camera then
+                Camera.CFrame = CFrame.new(Camera.CFrame.Position, aim)
+            end
+        end)
+
+        activateTool(gun)
+
+        -- mouse click (some guns key off input not Activate)
+        pcall(function()
+            local vim = game:GetService("VirtualInputManager")
+            if vim then
+                vim:SendMouseButtonEvent(0, 0, 0, true, game, 0)
+                task.wait(0.03)
+                vim:SendMouseButtonEvent(0, 0, 0, false, game, 0)
+            end
+        end)
+
+        if MainEvent then
+            pcall(function() MainEvent:FireServer(MouseRemote, aim) end)
+            pcall(function() MainEvent:FireServer("Shoot", aim) end)
+            pcall(function() MainEvent:FireServer("Hit", getChar(plr)) end)
+        end
+
+        if shot % 4 == 0 then
+            reloadGun(gun)
+            task.wait(0.2)
+        end
+        task.wait(0.14)
     end
 
     reloadGun(gun)
-
-    for shot = 1, 8 do
-        if not isAlive(plr) or isKO(plr) then break end
-        aim = getAimPos(plr)
-        if aim then
-            for _ = 1, 4 do fireMouse(aim) end
-        end
-        activateTool(gun)
-        if shot % 3 == 0 then reloadGun(gun) end
-        if MainEvent then
-            pcall(function() MainEvent:FireServer("Shoot", aim) end)
-            pcall(function() MainEvent:FireServer("Hit", getChar(plr)) end)
-            pcall(function() MainEvent:FireServer("Hit", plr) end)
-            if aim then
-                pcall(function() MainEvent:FireServer(MouseRemote, aim) end)
-            end
-        end
-        local my, their = getHRP(), getHRP(plr)
-        if my and their then
-            local dist = (my.Position - their.Position).Magnitude
-            if dist > 25 then
-                pcall(function()
-                    local behind = their.Position - their.CFrame.LookVector * 4 + Vector3.new(0, 1, 0)
-                    my.CFrame = CFrame.new(behind, their.Position)
-                    my.AssemblyLinearVelocity = Vector3.zero
-                end)
-            end
-        end
-        task.wait(0.12)
-    end
 end
 
-----------------------------------------------------------------------
 -- COMBAT: STOMP
 ----------------------------------------------------------------------
 local function stompTarget(plr, times)
