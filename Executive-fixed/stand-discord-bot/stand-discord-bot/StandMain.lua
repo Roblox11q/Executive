@@ -1775,15 +1775,17 @@ local function cmdDrop()
     notify("Dropped " .. tostring(name))
 end
 
-local function cmdBring(user)
+-- shared bring logic: doStomp=true keeps old behavior (for .n), false = just bring (for .bring)
+local function doBringTarget(user, doStomp, label)
+    label = label or (doStomp and "N" or "Bring")
     if IsOwner then return end
     local plr = findPlayer(user)
     if not plr then
-        notify("Bring: player not found")
+        notify(label .. ": player not found")
         return
     end
     if isProtected(plr) then
-        notify("Bring: target protected")
+        notify(label .. ": target protected")
         return
     end
     task.spawn(function()
@@ -1792,7 +1794,7 @@ local function cmdBring(user)
         State.LoopKill = nil
         State.Carrying = nil
         setCamlock(plr, 20)
-        notify("Bring: knocking " .. plr.Name)
+        notify(label .. ": knocking " .. plr.Name)
 
         local useGun = false
         if PreferredGun and PreferredGun ~= "" then
@@ -1819,9 +1821,12 @@ local function cmdBring(user)
         end
 
         if isKO(plr) then
-            for _ = 1, 8 do
-                stomp(plr)
-                task.wait(0.07)
+            -- .n keeps stomp; .bring skips stomp and only carries
+            if doStomp then
+                for _ = 1, 8 do
+                    stomp(plr)
+                    task.wait(0.07)
+                end
             end
             State.Carrying = plr.Name
             State.Tracking = false
@@ -1854,13 +1859,23 @@ local function cmdBring(user)
                     my.CFrame = CFrame.new(oHRP.Position + oHRP.CFrame.LookVector * 4 + Vector3.new(0, 0.5, 0), oHRP.Position)
                 end)
             end
-            notify("Bring: carrying " .. plr.Name .. " → owner (use .drop to release)")
+            notify(label .. ": carrying " .. plr.Name .. " → owner (use .drop to release)")
         else
-            notify("Bring: failed to KO " .. plr.Name)
+            notify(label .. ": failed to KO " .. plr.Name)
             State.Tracking = savedTrack
             clearCamlock()
         end
     end)
+end
+
+-- .bring = KO + grab only (no stomp)
+local function cmdBring(user)
+    doBringTarget(user, false, "Bring")
+end
+
+-- .n = original bring (KO + stomp + grab) — unchanged behavior
+local function cmdN(user)
+    doBringTarget(user, true, "N")
 end
 
 local function cmdTaunt(off)
@@ -1885,6 +1900,9 @@ local function cmdArmor()
         if MainEvent then
             MainEvent:FireServer("BuyArmor")
             MainEvent:FireServer("Purchase", "High-Medium Armor")
+            MainEvent:FireServer("Purchase", "Armor")
+            MainEvent:FireServer("Buy", "Armor")
+            MainEvent:FireServer("Buy", "High-Medium Armor")
         end
         for _, obj in ipairs(Workspace:GetDescendants()) do
             if obj:IsA("ClickDetector") then
@@ -1893,6 +1911,131 @@ local function cmdArmor()
                     pcall(function() fireclickdetector(obj) end)
                 end
             end
+        end
+    end)
+end
+
+local function cmdMask()
+    pcall(function()
+        if MainEvent then
+            MainEvent:FireServer("MaskOn")
+            MainEvent:FireServer("Mask")
+            MainEvent:FireServer("BuyMask")
+            MainEvent:FireServer("Purchase", "Mask")
+            MainEvent:FireServer("Buy", "Mask")
+        end
+        -- equip any mask tool if present
+        local mask = findToolByName("[Mask]", false)
+            or findToolByName("Mask", false)
+            or findToolByName("Ski Mask", false)
+            or findToolByName("Hockey Mask", false)
+        if mask then equipTool(mask, 0.5) end
+        for _, obj in ipairs(Workspace:GetDescendants()) do
+            if obj:IsA("ClickDetector") then
+                local n = string.lower(obj.Parent and obj.Parent.Name or "")
+                if string.find(n, "mask") then
+                    pcall(function() fireclickdetector(obj) end)
+                end
+            end
+        end
+    end)
+end
+
+-- Max / infinite armor via BodyEffects (Da Hood family)
+local function applyArmorMax()
+    pcall(function()
+        local c = getChar()
+        if not c then return end
+        local be = c:FindFirstChild("BodyEffects")
+        if not be then return end
+        for _, name in ipairs({"Armor", "Defense", "Defence", "ArmorValue", "MaxArmor"}) do
+            local v = be:FindFirstChild(name)
+            if v and (v:IsA("NumberValue") or v:IsA("IntValue")) then
+                v.Value = 100
+            end
+        end
+        -- nested folders some clones use
+        for _, d in ipairs(be:GetDescendants()) do
+            if d:IsA("NumberValue") or d:IsA("IntValue") then
+                local n = string.lower(d.Name)
+                if n == "armor" or n == "defense" or n == "defence" or n == "armorvalue" then
+                    d.Value = 100
+                end
+            end
+        end
+    end)
+end
+
+local function applyMuscle()
+    if not Config.Muscle then return end
+    pcall(function()
+        local size = tonumber(Config.MuscleSize) or 15000
+        local c = getChar()
+        if not c then return end
+        local be = c:FindFirstChild("BodyEffects")
+        if be then
+            for _, name in ipairs({"Muscle", "MuscleSize", "Strength", "Power"}) do
+                local v = be:FindFirstChild(name)
+                if v and (v:IsA("NumberValue") or v:IsA("IntValue")) then
+                    v.Value = size
+                end
+            end
+        end
+        if MainEvent then
+            pcall(function() MainEvent:FireServer("Muscle", size) end)
+            pcall(function() MainEvent:FireServer("BuyMuscle") end)
+        end
+    end)
+end
+
+-- Infinite armor loop (keeps Armor/Defense topped up)
+local InfArmorRunning = false
+local function startInfArmor()
+    if InfArmorRunning then return end
+    if not Config.Inf and not Config.ArmorMax then return end
+    InfArmorRunning = true
+    task.spawn(function()
+        while InfArmorRunning do
+            if Config.Inf or Config.ArmorMax then
+                applyArmorMax()
+                if Config.Inf then
+                    -- also rebuy so server-side armor stays full
+                    pcall(cmdArmor)
+                end
+            end
+            task.wait(Config.Inf and 1.2 or 3.0)
+        end
+    end)
+end
+
+-- Apply all auto perks from Discord config (mask, armor, max, inf, muscle)
+local function applyAutoPerks()
+    if IsOwner then return end
+    task.spawn(function()
+        -- wait for character + BodyEffects
+        local t0 = tick()
+        while tick() - t0 < 8 do
+            local c = getChar()
+            if c and c:FindFirstChild("HumanoidRootPart") then break end
+            task.wait(0.25)
+        end
+        task.wait(0.4)
+        if Config.AutoArmor then
+            cmdArmor()
+            task.wait(0.15)
+            cmdArmor()
+        end
+        if Config.ArmorMax or Config.Inf then
+            applyArmorMax()
+        end
+        if Config.AutoMask then
+            cmdMask()
+        end
+        if Config.Muscle then
+            applyMuscle()
+        end
+        if Config.Inf or Config.ArmorMax then
+            startInfArmor()
         end
     end)
 end
@@ -2202,13 +2345,47 @@ setStealthVisible = function(visible)
     end)
 end
 
+-- Always re-find + equip knife (fixes 2nd knife run having nothing equipped)
+local function ensureKnifeEquipped(timeout)
+    timeout = timeout or 1.0
+    local t0 = tick()
+    local knife = nil
+    while tick() - t0 < timeout do
+        -- character + backpack must exist
+        local c = getChar()
+        local bag = LocalPlayer:FindFirstChild("Backpack")
+        if c and (bag or c:FindFirstChildOfClass("Tool")) then
+            knife = findKnife()
+            if knife then
+                -- if already on character, done
+                if knife.Parent == c then
+                    return knife
+                end
+                -- unequip other tools first so equip isn't blocked
+                pcall(function()
+                    local h = getHum()
+                    if h then h:UnequipTools() end
+                end)
+                task.wait(0.05)
+                knife = findKnife()
+                if knife then
+                    knife = equipTool(knife, 0.55)
+                    if knife and isToolEquipped(knife) then
+                        return knife
+                    end
+                end
+            end
+        end
+        task.wait(0.08)
+    end
+    return findKnife() and equipTool(findKnife(), 0.4) or nil
+end
+
 -- Single stealth knife attack burst (used by .knife and .lkk)
 knifeAttackTarget = function(plr, swings)
     swings = swings or 8
     if not plr or isProtected(plr) then return end
-    local knife = findKnife()
-    if not knife then return end
-    knife = equipTool(knife, 0.6)
+    local knife = ensureKnifeEquipped(1.2)
     if not knife then return end
     -- DERS / Hood Customs: max vertical hitbox for under-feet hits
     local hitScale = (IsDersHood or IsHoodCustoms) and 8.0 or 3.8
@@ -2221,11 +2398,12 @@ knifeAttackTarget = function(plr, swings)
         local aim = getTargetAimPos(plr)
         if aim then for _ = 1, 5 do fireMouse(aim) end end
         aimAt(plr)
-        if not isToolEquipped(knife) then
-            knife = equipTool(findKnife(), 0.3) or knife
+        -- re-equip every swing so 2nd kill / respawn never leaves us empty-handed
+        if not knife or not isToolEquipped(knife) then
+            knife = ensureKnifeEquipped(0.6)
             if knife then expandKnifeHitbox(knife, hitScale) end
         end
-        activateTool(knife)
+        if knife then activateTool(knife) end
         if MainEvent then
             -- spam hit remotes so server registers from under feet
             pcall(function() MainEvent:FireServer("Hit", plr.Character) end)
@@ -2269,21 +2447,14 @@ local function cmdKnife(user)
         if State.InVoid then State.InVoid = false end
         setCamlock(plr, 14)
         notify("Knife (stealth): " .. plr.Name)
-        local knife = findKnife()
-        if not knife then
-            notify("Knife: [Knife] not found in backpack/character")
-            clearCamlock()
-            State.Tracking = savedTrack
-            return
-        end
-        knife = equipTool(knife, 1.0)
+        -- always re-find + equip (fixes 2nd knife having nothing equipped)
+        local knife = ensureKnifeEquipped(1.5)
         if not knife or not isToolEquipped(knife) then
-            task.wait(0.1)
-            knife = findKnife()
-            knife = equipTool(knife, 1.0)
+            task.wait(0.2)
+            knife = ensureKnifeEquipped(1.2)
         end
         if not knife or not isToolEquipped(knife) then
-            notify("Knife: failed to equip [Knife]")
+            notify("Knife: failed to equip [Knife] — check backpack")
             clearCamlock()
             State.Tracking = savedTrack
             return
@@ -2307,11 +2478,12 @@ local function cmdKnife(user)
             end
             aimAt(plr)
 
-            if not isToolEquipped(knife) then
-                knife = equipTool(findKnife(), 0.4) or knife
+            -- re-equip every few swings so tool never stays missing
+            if not knife or not isToolEquipped(knife) or (i % 5 == 1) then
+                knife = ensureKnifeEquipped(0.7)
                 if knife then expandKnifeHitbox(knife, hitScale) end
             end
-            activateTool(knife)
+            if knife then activateTool(knife) end
             if MainEvent then
                 pcall(function() MainEvent:FireServer("Hit", plr.Character) end)
                 pcall(function() MainEvent:FireServer("Hit", plr) end)
@@ -2337,7 +2509,10 @@ local function cmdKnife(user)
             task.wait(0.02)
             -- second swing from under feet again
             knifeInstantTP(plr)
-            activateTool(knife)
+            if not knife or not isToolEquipped(knife) then
+                knife = ensureKnifeEquipped(0.5)
+            end
+            if knife then activateTool(knife) end
             if MainEvent then
                 pcall(function() MainEvent:FireServer("Hit", plr.Character) end)
                 pcall(function() MainEvent:FireServer("Knife") end)
@@ -2364,6 +2539,11 @@ local function cmdKnife(user)
         end
         setStealthVisible(true)
         ensureVisible()
+        -- put knife back so next .knife can equip cleanly
+        pcall(function()
+            local h = getHum()
+            if h then h:UnequipTools() end
+        end)
         clearCamlock()
         State.Tracking = savedTrack
         if not State.InVoid and savedTrack and not IsOwner then
@@ -2543,7 +2723,7 @@ arm unarm | k | knock <user> | rage <user> | o <user>
 os (orbit) | f | s | s <user> | rk
 wl <user> uwl | protect <user> unprotect
 loopkill/lk <user> | lkk <user> | unloopkill/unlk
-bring <user> | drop
+bring <user> (no stomp) | n <user> (stomp+bring) | drop
 knife <user> | view
 talk <msg> | talk on/off | say <msg>
 freeze <user> | unfreeze <user>
@@ -2636,7 +2816,8 @@ local function onControlChat(msg, speaker)
     elseif cmd == "loopkill" or cmd == "lk" then cmdLoopKill(a1)
     elseif cmd == "lkk" then cmdLoopKillKnife(a1)
     elseif cmd == "unloopkill" or cmd == "unlk" then cmdUnLoopKill()
-    elseif cmd == "bring" then cmdBring(a1)
+    elseif cmd == "bring" then cmdBring(a1) -- KO + carry, no stomp
+    elseif cmd == "n" then cmdN(a1) -- original: KO + stomp + carry
     elseif cmd == "drop" then cmdDrop()
     elseif cmd == "knife" then cmdKnife(a1)
     elseif cmd == "view" or cmd == "players" then cmdView()
@@ -2792,9 +2973,9 @@ if Config.Anim and Config.Anim ~= "" and not IsOwner then
     end)
 end
 
--- auto armor on join
-if Config.AutoArmor and not IsOwner then
-    task.delay(2, cmdArmor)
+-- auto mask / armor / max / inf / muscle from Discord config on inject
+if not IsOwner then
+    task.delay(1.5, applyAutoPerks)
 end
 
 LocalPlayer.Idled:Connect(function()
@@ -3064,6 +3245,10 @@ LocalPlayer.CharacterAdded:Connect(function(char)
         end
         task.wait(0.3)
         createTierTag(LocalPlayer, MyRank)
+        -- re-apply Discord config perks after respawn (armor / mask / muscle / inf)
+        if not IsOwner then
+            applyAutoPerks()
+        end
     end)
 end)
 
