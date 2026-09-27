@@ -24,6 +24,7 @@ local Workspace         = game:GetService("Workspace")
 local UserInputService  = game:GetService("UserInputService")
 local VirtualUser       = game:GetService("VirtualUser")
 local StarterGui        = game:GetService("StarterGui")
+local TeleportService  = game:GetService("TeleportService")
 
 local LocalPlayer = Players.LocalPlayer
 local Camera      = Workspace.CurrentCamera
@@ -555,19 +556,53 @@ local function returnToOwner()
 end
 
 ----------------------------------------------------------------------
+----------------------------------------------------------------------
 -- COMBAT: RELOAD
 ----------------------------------------------------------------------
 local function reloadGun(gun)
     gun = gun or findGun()
-    if not gun then return end
+    if not gun then return false end
+
     local c = getChar()
+    local h = getHum()
+    if not c or not h then return false end
+
+    -- must be equipped for most hood places
     if gun.Parent ~= c then
-        gun = equipTool(gun, 0.4) or gun
+        pcall(function() h:UnequipTools() end)
+        task.wait(0.05)
+        pcall(function() h:EquipTool(gun) end)
+        local t0 = tick()
+        while tick() - t0 < 0.6 and gun.Parent ~= c do
+            task.wait(0.05)
+        end
     end
+    if gun.Parent ~= c then return false end
+
+    -- 1) press R (real reload input)
+    pcall(function()
+        local vim = game:GetService("VirtualInputManager")
+        if vim then
+            vim:SendKeyEvent(true, Enum.KeyCode.R, false, game)
+            task.wait(0.05)
+            vim:SendKeyEvent(false, Enum.KeyCode.R, false, game)
+        end
+    end)
+    pcall(function()
+        local vu = game:GetService("VirtualUser")
+        if vu then
+            vu:SetKeyDown("0x52") -- R
+            task.wait(0.05)
+            vu:SetKeyUp("0x52")
+        end
+    end)
+
+    -- 2) MainEvent family
     if MainEvent then
         pcall(function() MainEvent:FireServer("Reload") end)
         pcall(function() MainEvent:FireServer("Reload", gun.Name) end)
         pcall(function() MainEvent:FireServer("Reload", gun) end)
+        pcall(function() MainEvent:FireServer("reload") end)
     end
     if UnreliableMainEvent then
         pcall(function() UnreliableMainEvent:FireServer("Reload") end)
@@ -577,19 +612,37 @@ local function reloadGun(gun)
         pcall(function() MainFunction:InvokeServer("Reload") end)
         pcall(function() MainFunction:InvokeServer("Reload", gun.Name) end)
     end
+
+    -- 3) tool remotes / values
     pcall(function()
         for _, d in ipairs(gun:GetDescendants()) do
             if d:IsA("RemoteEvent") then
-                local n = string.lower(d.Name)
-                if n:find("reload") or n == "remote" then
-                    pcall(function() d:FireServer() end)
-                    pcall(function() d:FireServer("Reload") end)
+                pcall(function() d:FireServer() end)
+                pcall(function() d:FireServer("Reload") end)
+            elseif d:IsA("RemoteFunction") then
+                pcall(function() d:InvokeServer() end)
+                pcall(function() d:InvokeServer("Reload") end)
+            end
+        end
+        -- common ammo values — set high if present (client side, may not stick)
+        for _, name in ipairs({"Ammo", "ammo", "MaxAmmo", "Bullets", "Clip", "CLIENT"}) do
+            local v = gun:FindFirstChild(name, true)
+            if v and (v:IsA("NumberValue") or v:IsA("IntValue")) then
+                local mx = gun:FindFirstChild("MaxAmmo", true) or gun:FindFirstChild("Max", true)
+                if mx and (mx:IsA("NumberValue") or mx:IsA("IntValue")) then
+                    v.Value = mx.Value
+                elseif name == "CLIENT" then
+                    -- leave CLIENT alone (skin/id on some tools)
+                else
+                    v.Value = 25
                 end
             end
         end
     end)
+
+    -- 4) clear stuck reloading flags
     pcall(function()
-        local be = c and c:FindFirstChild("BodyEffects")
+        local be = c:FindFirstChild("BodyEffects")
         if be then
             local r = be:FindFirstChild("Reloading")
             if r and r:IsA("BoolValue") then r.Value = false end
@@ -597,34 +650,53 @@ local function reloadGun(gun)
             if rc and rc:IsA("BoolValue") then rc.Value = false end
         end
     end)
+
+    return true
 end
 
 local lastAutoReload = 0
 local function autoReloadTick()
     if not State.AutoReload then return end
     if State.KnifeBusy then return end
-    if tick() - lastAutoReload < 1.0 then return end
+    if tick() - lastAutoReload < 1.5 then return end
     lastAutoReload = tick()
+
     local c = getChar()
     if not c then return end
+
+    -- prefer currently equipped gun
     local equipped = nil
     for _, t in ipairs(c:GetChildren()) do
         if t:IsA("Tool") then
             local n = string.lower(t.Name)
             if n:find("barrel") or n:find("revolver") or n:find("shotgun")
                 or n:find("pistol") or n:find("rifle") or n:find("gun")
-                or n:find("tactical") or n:find("silencer")
+                or n:find("tactical") or n:find("silencer") or n:find("ak")
+                or n:find("smg") or n:find("ar")
                 or n == string.lower(PreferredGun:gsub("[%[%]]", "")) then
                 equipped = t
                 break
             end
         end
     end
-    if not equipped then equipped = findGun() end
-    if equipped then reloadGun(equipped) end
+
+    -- if armed or loopkill gun mode, equip preferred gun and reload
+    if not equipped and (State.Armed or (State.LoopKill and not State.LoopKillKnife)) then
+        equipped = findGun()
+        if equipped then
+            pcall(function()
+                local h = getHum()
+                if h then h:EquipTool(equipped) end
+            end)
+            task.wait(0.08)
+        end
+    end
+
+    if equipped then
+        reloadGun(equipped)
+    end
 end
 
-----------------------------------------------------------------------
 -- COMBAT: SHOOT
 ----------------------------------------------------------------------
 local function shootTarget(plr)
@@ -1118,6 +1190,7 @@ local function cmdMask()
 end
 
 local function cmdFix()
+    -- Full reset: stop all modes, clear tools, respawn character, return to formation
     clearCamlock()
     State.LoopKill = nil
     State.LoopKillKnife = false
@@ -1125,20 +1198,61 @@ local function cmdFix()
     State.TargetName = nil
     State.KnifeBusy = false
     State.InVoid = false
-    State.Tracking = true
+    State.Tracking = false  -- pause formation until respawn finishes
+    State.Armed = false
     setAttacking(false)
+
     pcall(function()
         local h = getHum()
         if h then
             h.PlatformStand = false
             h.Sit = false
             h.WalkSpeed = 16
+            h.JumpPower = 50
+            h.JumpHeight = 7.2
             h:ChangeState(Enum.HumanoidStateType.GettingUp)
             h:UnequipTools()
         end
     end)
-    if not IsOwner then returnToOwner() end
-    notify("Fix")
+
+    -- hard respawn
+    pcall(function()
+        LocalPlayer:LoadCharacter()
+    end)
+
+    task.spawn(function()
+        local t0 = tick()
+        while tick() - t0 < 8 do
+            if getHRP() and getHum() and getHum().Health > 0 then break end
+            task.wait(0.15)
+        end
+        task.wait(0.35)
+        -- re-apply perks after respawn
+        if Config.AutoArmor then pcall(buyArmor) end
+        if Config.ArmorMax or Config.Inf then pcall(applyArmorMax) end
+        if Config.AutoMask then pcall(buyMask) end
+        State.Tracking = true
+        if not IsOwner then
+            returnToOwner()
+        end
+        notify("Fix - respawned")
+    end)
+end
+
+local function cmdKick()
+    -- Leave server and rejoin same place / same job if possible
+    notify("Rejoining...")
+    task.spawn(function()
+        task.wait(0.2)
+        local ok = pcall(function()
+            TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, LocalPlayer)
+        end)
+        if not ok then
+            pcall(function()
+                TeleportService:Teleport(game.PlaceId, LocalPlayer)
+            end)
+        end
+    end)
 end
 
 local function cmdHelp()
@@ -1152,7 +1266,7 @@ local function cmdHelp()
     print("  " .. Prefix .. "wl <user>  |  uwl [user]")
     print("  " .. Prefix .. "target <user>  |  untarget")
     print("  " .. Prefix .. "armor / mask / reload / autoreload")
-    print("  " .. Prefix .. "fix / help")
+    print("  " .. Prefix .. "fix / kick / help")
 end
 
 ----------------------------------------------------------------------
@@ -1205,6 +1319,7 @@ local function onControlChat(msg, speaker)
         State.AutoReload = not State.AutoReload
         notify("AutoReload " .. (State.AutoReload and "ON" or "OFF"))
     elseif cmd == "fix" then cmdFix()
+    elseif cmd == "kick" or cmd == "rejoin" then cmdKick()
     elseif cmd == "help" or cmd == "cmds" then cmdHelp()
     end
 end
