@@ -99,7 +99,8 @@ print("[Stand] Place", PlaceId, placeLabel, "| MouseRemote =", MouseRemote)
 ----------------------------------------------------------------------
 -- SLOT / OWNER
 ----------------------------------------------------------------------
-local SLOT_CF = {
+-- Ground formation (Y = 0)
+local SLOT_CF_GROUND = {
     [1] = CFrame.new(-3.5, 0, 0.5),
     [2] = CFrame.new( 3.5, 0, 0.5),
     [3] = CFrame.new( 0,   0, 3.5),
@@ -108,6 +109,19 @@ local SLOT_CF = {
     [6] = CFrame.new( 0,   0, 6),
     [0] = CFrame.new( 2.5, 0, 2.5),
 }
+
+-- Floating summon formation: Y = height above owner, +Z = behind owner
+local SLOT_CF_AIR = {
+    [1] = CFrame.new(-3.2, 4.8, 2.8),  -- left float, slightly behind
+    [2] = CFrame.new( 3.2, 4.8, 2.8),  -- right float, slightly behind
+    [3] = CFrame.new( 0,   5.5, 4.0),  -- center behind, higher
+    [4] = CFrame.new( 0,   4.2,-3.0),  -- front float
+    [5] = CFrame.new(-5.5, 5.2, 3.5),  -- far left float
+    [6] = CFrame.new( 0,   6.5, 5.5),  -- high center back
+    [0] = CFrame.new( 2.5, 4.5, 2.5),  -- default float behind-right
+}
+
+local SLOT_CF = SLOT_CF_AIR  -- default: floating (use .air to toggle)
 
 local function getMySlot()
     local alts = Config.Alts or {}
@@ -136,6 +150,7 @@ local State = {
     LoopKillBusy  = false,
     AutoReload    = true,
     Sweep         = false,
+    Air           = true,  -- floating summon formation (toggle with .air)
 }
 
 local Whitelist    = {}
@@ -157,6 +172,78 @@ end
 local function getHum(p)
     local c = getChar(p)
     return c and c:FindFirstChildOfClass("Humanoid")
+end
+
+----------------------------------------------------------------------
+-- IDLE ANIMATION (from Discord /config anim)
+----------------------------------------------------------------------
+local IdleTrack = nil
+
+local function normalizeAnimId(id)
+    if type(id) ~= "string" and type(id) ~= "number" then return nil end
+    local s = tostring(id):gsub("%s+", "")
+    if s == "" or s == "nil" or s == "0" then return nil end
+    if s:match("^%d+$") then
+        return "rbxassetid://" .. s
+    end
+    if s:match("^rbxassetid://%d+") or s:match("^https?://") then
+        return s
+    end
+    -- bare number with junk or http-ish
+    local num = s:match("(%d+)")
+    if num then return "rbxassetid://" .. num end
+    return nil
+end
+
+local function applyIdleAnim()
+    local animId = normalizeAnimId(Config.Anim)
+    if not animId then return end
+
+    local char = getChar()
+    if not char then return end
+    local hum = getHum()
+    if not hum then return end
+
+    -- Stop previous track if any
+    if IdleTrack then
+        pcall(function() IdleTrack:Stop(0.1) end)
+        IdleTrack = nil
+    end
+
+    local ok, err = pcall(function()
+        -- Reduce conflict with default Animate script
+        local animate = char:FindFirstChild("Animate")
+        if animate and animate:IsA("LocalScript") then
+            pcall(function()
+                animate.Disabled = true
+            end)
+        end
+
+        local animator = hum:FindFirstChildOfClass("Animator")
+        if not animator then
+            animator = Instance.new("Animator")
+            animator.Parent = hum
+        end
+
+        -- Stop other idle-priority tracks so ours sticks
+        for _, t in ipairs(animator:GetPlayingAnimationTracks()) do
+            if t.Priority == Enum.AnimationPriority.Idle or t.Priority == Enum.AnimationPriority.Core then
+                pcall(function() t:Stop(0.1) end)
+            end
+        end
+
+        local anim = Instance.new("Animation")
+        anim.AnimationId = animId
+
+        local track = animator:LoadAnimation(anim)
+        track.Looped = true
+        track.Priority = Enum.AnimationPriority.Action  -- higher than Idle so it wins
+        track:Play(0.15)
+        IdleTrack = track
+    end)
+    if not ok then
+        warn("[Stand] Failed to play idle anim:", animId, err)
+    end
 end
 
 local function isKO(p)
@@ -1181,6 +1268,21 @@ local function cmdTrack()
     notify("Track " .. (State.Tracking and "ON" or "OFF"))
 end
 
+local function cmdAir(arg)
+    if arg == "on" or arg == "1" or arg == "true" then
+        State.Air = true
+    elseif arg == "off" or arg == "0" or arg == "false" then
+        State.Air = false
+    else
+        State.Air = not State.Air
+    end
+    SLOT_CF = State.Air and SLOT_CF_AIR or SLOT_CF_GROUND
+    if not IsOwner and State.Tracking and not State.InVoid then
+        returnToOwner()
+    end
+    notify("Air " .. (State.Air and "ON (floating)" or "OFF (ground)"))
+end
+
 local function cmdPos(slot)
     local n = tonumber(slot)
     if n and SLOT_CF[n] then
@@ -1494,7 +1596,7 @@ end
 local function cmdHelp()
     notify("See F9 for command list")
     print("[Stand] Commands:")
-    print("  " .. Prefix .. "void / call / track / pos <1-6>")
+    print("  " .. Prefix .. "void / call / track / air [on|off] / pos <1-6>")
     print("  " .. Prefix .. "arm / unarm")
     print("  " .. Prefix .. "knock <user>  |  stomp <user>  |  knife <user>")
     print("  " .. Prefix .. "lk <user>  |  lkk <user>  |  unlk")
@@ -1532,6 +1634,7 @@ local function onControlChat(msg, speaker)
     if cmd == "void" then cmdVoid()
     elseif cmd == "call" or cmd == "come" then cmdCall()
     elseif cmd == "track" or cmd == "follow" then cmdTrack()
+    elseif cmd == "air" or cmd == "float" or cmd == "summon" then cmdAir(a1)
     elseif cmd == "pos" or cmd == "slot" then cmdPos(a1)
     elseif cmd == "arm" then cmdArm()
     elseif cmd == "unarm" then cmdUnarm()
@@ -1655,11 +1758,26 @@ LocalPlayer.CharacterAdded:Connect(function()
     if Config.AutoArmor then buyArmor() end
     if Config.ArmorMax or Config.Inf then applyArmorMax() end
     if Config.AutoMask then buyMask() end
+    if Config.Muscle then applyMuscle() end
+    applyIdleAnim()
+end)
+
+-- Initial character (already spawned)
+task.spawn(function()
+    local t0 = tick()
+    while tick() - t0 < 8 do
+        if getHum() then
+            task.wait(0.8)
+            applyIdleAnim()
+            break
+        end
+        task.wait(0.25)
+    end
 end)
 
 startAutoPerks()
 pcall(ensureSilentAim)
 
 print("[Stand] Main v2 loaded |", IsOwner and "OWNER" or ("ALT slot " .. tostring(MySlot)),
-    "| prefix", Prefix, "| owner", OwnerName)
+    "| prefix", Prefix, "| owner", OwnerName, "| anim", tostring(Config.Anim or "none"))
 notify(IsOwner and "Owner ready" or ("Alt slot " .. tostring(MySlot)))
