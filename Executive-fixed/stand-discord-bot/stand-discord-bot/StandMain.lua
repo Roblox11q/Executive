@@ -2545,30 +2545,25 @@ end
 
 -- Instant TP for knife — must land CLOSE so server distance checks pass.
 -- Pure client CFrame only works if we stay overlapping the target long enough for Activate + remotes.
-knifeInstantTP = function(plr)
-    local my = getHRP()
+-- Returns the CFrame to glue the bot onto the target for melee.
+local function knifeTargetCF(plr)
     local their = getHRP(plr)
-    if not my or not their then return false end
+    if not their then return nil end
     local head = nil
     pcall(function()
         local c = getChar(plr)
         head = c and c:FindFirstChild("Head")
     end)
     local lookAt = (head and head.Position) or (their.Position + Vector3.new(0, 1.2, 0))
-    local pos
-    if IsHoodCustoms then
-        -- Hood Customs: stand ON the target body (slightly inside torso).
-        -- Under-feet TPs get rejected by server range checks → swings with 0 damage.
-        pos = their.Position + Vector3.new(0, 0.35, 0)
-    elseif IsDersHood then
-        -- DERS: slightly under feet still works with tall hitboxes
-        pos = their.Position + Vector3.new(0, -1.5, 0)
-    else
-        -- Da Hood style: on them / slightly in front
-        pos = their.Position + Vector3.new(0, 0.25, 0) - their.CFrame.LookVector * 0.6
-    end
-    local cf = CFrame.new(pos, lookAt)
-    -- spam CFrame several times so network ownership + replication stick
+    -- Overlap torso tightly — server range checks need us basically inside them
+    local pos = their.Position + Vector3.new(0, 0.15, 0)
+    return CFrame.new(pos, lookAt)
+end
+
+knifeInstantTP = function(plr)
+    local my = getHRP()
+    local cf = knifeTargetCF(plr)
+    if not my or not cf then return false end
     pcall(function()
         local h = getHum()
         if h then
@@ -2577,7 +2572,7 @@ knifeInstantTP = function(plr)
             h:ChangeState(Enum.HumanoidStateType.Running)
         end
         local char = getChar()
-        for _ = 1, 3 do
+        for _ = 1, 4 do
             if char and char.PivotTo then
                 char:PivotTo(cf)
             end
@@ -2664,65 +2659,51 @@ local function ensureKnifeEquipped(timeout)
     return findKnife() and equipTool(findKnife(), 0.4) or nil
 end
 
--- Single stealth knife attack burst (used by .knife and .lkk)
--- Hold ON the target while swinging so server range checks pass (deep dives = 0 damage).
+-- Knife burst used by .lkk (loopkill knife)
 knifeAttackTarget = function(plr, swings)
-    swings = swings or 10
+    swings = swings or 12
     if not plr or isProtected(plr) then return end
-    local knife = ensureKnifeEquipped(1.2)
+    local knife = ensureKnifeEquipped(1.0)
     if not knife then return end
-    local hitScale = (IsDersHood or IsHoodCustoms) and 8.0 or 3.8
-    expandKnifeHitbox(knife, hitScale)
-    setStealthVisible(false)
+    expandKnifeHitbox(knife, 6.0)
+    setStealthVisible(true)
+    ensureVisible()
+
+    local lockConn
+    lockConn = RunService.Heartbeat:Connect(function()
+        if not plr or isKO(plr) or not getChar(plr) then return end
+        local my = getHRP()
+        local cf = knifeTargetCF(plr)
+        if not my or not cf then return end
+        pcall(function()
+            local char = getChar()
+            if char and char.PivotTo then char:PivotTo(cf) end
+            my.CFrame = cf
+            my.AssemblyLinearVelocity = Vector3.zero
+            my.AssemblyAngularVelocity = Vector3.zero
+        end)
+    end)
+
     for i = 1, swings do
         if isKO(plr) or not getChar(plr) then break end
-        -- stay glued to target for the swing
-        knifeInstantTP(plr)
-        local aim = getTargetAimPos(plr)
-        if aim then for _ = 1, 6 do fireMouse(aim) end end
-        aimAt(plr)
         if not knife or not isToolEquipped(knife) then
-            knife = ensureKnifeEquipped(0.5)
-            if knife then expandKnifeHitbox(knife, hitScale) end
+            knife = ensureKnifeEquipped(0.4)
+            if knife then expandKnifeHitbox(knife, 6.0) end
         end
-        -- double Activate + remote spam while still overlapping
-        if knife then
-            activateTool(knife)
-            task.wait(0.02)
-            activateTool(knife)
-        end
+        local aim = getTargetAimPos(plr)
+        if aim then for _ = 1, 4 do fireMouse(aim) end end
+        aimAt(plr)
+        if knife then activateTool(knife) end
         if MainEvent then
             pcall(function() MainEvent:FireServer("Hit", plr.Character) end)
-            pcall(function() MainEvent:FireServer("Hit", plr) end)
-            pcall(function() MainEvent:FireServer("Punch") end)
             pcall(function() MainEvent:FireServer("Knife") end)
-            pcall(function() MainEvent:FireServer("Slash") end)
-            pcall(function() MainEvent:FireServer("Combat") end)
-            if IsHoodCustoms then
-                pcall(function() MainEvent:FireServer("KnifeHit", plr.Character) end)
-                pcall(function() MainEvent:FireServer("Melee", plr.Character) end)
-            end
-            if aim then
-                pcall(function() MainEvent:FireServer(MouseRemote, aim) end)
-            end
+            pcall(function() MainEvent:FireServer("Punch") end)
+            if aim then pcall(function() MainEvent:FireServer(MouseRemote, aim) end) end
         end
-        -- brief micro-offset only every few swings (not deep underground)
-        if i % 4 == 0 then
-            pcall(function()
-                local my = getHRP()
-                local their = getHRP(plr)
-                if my and their then
-                    my.CFrame = CFrame.new(their.Position + Vector3.new(0, -2.5, 0))
-                    my.AssemblyLinearVelocity = Vector3.zero
-                end
-            end)
-            task.wait(0.03)
-            knifeInstantTP(plr)
-        else
-            task.wait(0.05)
-            knifeInstantTP(plr) -- re-stick so we never drift
-        end
+        task.wait(0.08)
     end
+
+    if lockConn then pcall(function() lockConn:Disconnect() end) end
 end
 
 local function cmdKnife(user)
@@ -2740,99 +2721,120 @@ local function cmdKnife(user)
         State.Tracking = false
         if State.InVoid then State.InVoid = false end
         setCamlock(plr, 14)
-        notify("Knife (stealth): " .. plr.Name)
+        notify("Knife: " .. plr.Name)
+
         local knife = ensureKnifeEquipped(1.5)
         if not knife or not isToolEquipped(knife) then
-            task.wait(0.2)
+            task.wait(0.15)
             knife = ensureKnifeEquipped(1.2)
         end
         if not knife or not isToolEquipped(knife) then
-            notify("Knife: failed to equip [Knife] — check backpack")
+            notify("Knife: failed to equip [Knife] — buy/equip knife in backpack first")
             clearCamlock()
             State.Tracking = savedTrack
             return
         end
-        local hitScale = (IsDersHood or IsHoodCustoms) and 8.0 or 3.8
-        expandKnifeHitbox(knife, hitScale)
-        setStealthVisible(false)
 
-        -- Stay ON the target while swinging. Deep underground between hits
-        -- made the server think the bot was far away → 0 damage (and owner
-        -- never saw the bot move).
-        for i = 1, 40 do
+        local hitScale = 6.0
+        expandKnifeHitbox(knife, hitScale)
+
+        -- VISIBLE during knife so server + other clients see us on the target.
+        -- Stealth (full transparency) was making hits fail and owner couldn't see the bot move.
+        setStealthVisible(true)
+        ensureVisible()
+
+        -- Heartbeat lock: force CFrame every frame so anti-teleport can't snap us away
+        -- before Activate() registers. This is the difference between "swings only" and real damage.
+        local lockConn
+        lockConn = RunService.Heartbeat:Connect(function()
+            if not plr or isKO(plr) or not getChar(plr) then return end
+            local my = getHRP()
+            local cf = knifeTargetCF(plr)
+            if not my or not cf then return end
+            pcall(function()
+                local char = getChar()
+                if char and char.PivotTo then char:PivotTo(cf) end
+                my.CFrame = cf
+                my.AssemblyLinearVelocity = Vector3.zero
+                my.AssemblyAngularVelocity = Vector3.zero
+            end)
+        end)
+
+        local t0 = tick()
+        local maxTime = 6.0 -- hard cap so we never stick forever
+        local swing = 0
+        while tick() - t0 < maxTime do
             if isKO(plr) then break end
             if not getChar(plr) then break end
+            swing = swing + 1
 
-            knifeInstantTP(plr)
-            setStealthVisible(false)
-
-            local aim = getTargetAimPos(plr)
-            if aim then
-                for _ = 1, 6 do fireMouse(aim) end
-            end
-            aimAt(plr)
-
-            if not knife or not isToolEquipped(knife) or (i % 4 == 1) then
-                knife = ensureKnifeEquipped(0.6)
+            -- keep tool equipped
+            if not knife or not isToolEquipped(knife) or (swing % 5 == 1) then
+                knife = ensureKnifeEquipped(0.5)
                 if knife then expandKnifeHitbox(knife, hitScale) end
             end
 
-            -- double Activate while still overlapping target
+            local aim = getTargetAimPos(plr)
+            if aim then
+                for _ = 1, 4 do fireMouse(aim) end
+            end
+            aimAt(plr)
+
             if knife then
                 activateTool(knife)
-                task.wait(0.02)
-                activateTool(knife)
             end
+
             if MainEvent then
                 pcall(function() MainEvent:FireServer("Hit", plr.Character) end)
                 pcall(function() MainEvent:FireServer("Hit", plr) end)
-                pcall(function() MainEvent:FireServer("Punch") end)
                 pcall(function() MainEvent:FireServer("Knife") end)
+                pcall(function() MainEvent:FireServer("Punch") end)
                 pcall(function() MainEvent:FireServer("Slash") end)
                 pcall(function() MainEvent:FireServer("Combat") end)
-                if IsHoodCustoms then
-                    pcall(function() MainEvent:FireServer("KnifeHit", plr.Character) end)
-                    pcall(function() MainEvent:FireServer("Melee", plr.Character) end)
-                end
                 if aim then
                     pcall(function() MainEvent:FireServer(MouseRemote, aim) end)
                 end
             end
 
-            -- micro-offset only every 5th swing (not -14 studs)
-            if i % 5 == 0 then
-                pcall(function()
-                    local my = getHRP()
-                    local their = getHRP(plr)
-                    if my and their then
-                        my.CFrame = CFrame.new(their.Position + Vector3.new(0, -2.2, 0))
-                        my.AssemblyLinearVelocity = Vector3.zero
-                    end
-                end)
-                task.wait(0.03)
-            else
-                task.wait(0.05)
-            end
-            knifeInstantTP(plr) -- re-glue so server always sees us near target
+            -- also try clicking via VirtualInput if available (some places key off input)
+            pcall(function()
+                local vim = game:GetService("VirtualInputManager")
+                if vim then
+                    vim:SendMouseButtonEvent(0, 0, 0, true, game, 0)
+                    task.wait(0.02)
+                    vim:SendMouseButtonEvent(0, 0, 0, false, game, 0)
+                end
+            end)
+
+            task.wait(0.08)
         end
 
-        for _ = 1, 10 do
+        if lockConn then
+            pcall(function() lockConn:Disconnect() end)
+            lockConn = nil
+        end
+
+        for _ = 1, 12 do
             if isKO(plr) then break end
             task.wait(0.05)
         end
         if isKO(plr) then
             notify("Knife KO — stomping " .. plr.Name)
             setStealthVisible(true)
-            quickStomp(plr, 6)
+            ensureVisible()
+            quickStomp(plr, 8)
         else
-            notify("Knife: no KO flag — try .stomp " .. plr.Name)
+            notify("Knife: no KO — try .stomp " .. plr.Name)
         end
+
         State.TargetName = nil
         State.KnifeMode = false
         State.StealthKnife = false
         if not (State.Carrying and string.lower(tostring(State.Carrying)) == string.lower(plr.Name)) then
             State.Carrying = nil
         end
+        clearCamlock()
+        State.Tracking = true
         returnToOwner()
         notify("Knife done " .. plr.Name)
     end)
