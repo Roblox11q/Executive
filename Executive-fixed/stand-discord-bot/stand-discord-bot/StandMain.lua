@@ -873,7 +873,7 @@ end
 -- DERS HOOD: allow more aggressive instant TP for guns only
 local lastBodyLock = 0
 local TP_COOLDOWN = 1.25
-local TP_COOLDOWN_DERS = 0.35 -- faster instant TP for guns on DERS HOOD only
+local TP_COOLDOWN_DERS = 0.05 -- near-zero cooldown — DERS guns TP every shot
 local StateBenx = false
 
 local function ensureVisible()
@@ -907,7 +907,7 @@ local function getBehindPos(plr, behindDist)
 end
 
 -- force=true: one instant TP (cooldown). else: walk only
--- DERS HOOD only: lower TP cooldown so guns get near-instant lock
+-- DERS HOOD: always-on instant TP, point-blank range, almost no cooldown
 local function lockOnTarget(plr, behindDist, height, force)
     local my = getHRP()
     local their = getHRP(plr)
@@ -916,8 +916,16 @@ local function lockOnTarget(plr, behindDist, height, force)
     if State.InVoid then State.InVoid = false end
     ensureVisible()
 
+    -- DERS: glue almost on top of them for point-blank kills
+    if IsDersHood then
+        behindDist = behindDist and math.min(behindDist, 3.0) or 2.8
+    end
     local pos = getBehindPos(plr, behindDist or 7.0)
     if not pos then return false end
+    -- optional height offset (DERS stays level for hitscan guns)
+    if height and height ~= 0 then
+        pos = pos + Vector3.new(0, height, 0)
+    end
     local head = nil
     pcall(function()
         local c = getChar(plr)
@@ -928,10 +936,10 @@ local function lockOnTarget(plr, behindDist, height, force)
 
     local now = tick()
     local dist = (my.Position - pos).Magnitude
-    -- Instant TP for guns is more aggressive on DERS HOOD only
     local cd = IsDersHood and TP_COOLDOWN_DERS or TP_COOLDOWN
-    local minDist = IsDersHood and 2.5 or 4
-    local canTP = force and (now - lastBodyLock) >= cd and dist > minDist
+    local minDist = IsDersHood and 0.8 or 4
+    -- DERS: force TP whenever force=true (ignore tiny distance)
+    local canTP = force and (now - lastBodyLock) >= cd and (IsDersHood or dist > minDist)
 
     if canTP then
         lastBodyLock = now
@@ -949,9 +957,10 @@ local function lockOnTarget(plr, behindDist, height, force)
             my.AssemblyLinearVelocity = Vector3.zero
             my.AssemblyAngularVelocity = Vector3.zero
         end)
-        -- wait for server to accept position (stops UNSYNCED_SERVER)
-        -- shorter wait on DERS HOOD so guns stay glued
-        task.wait(IsDersHood and 0.08 or 0.2)
+        -- DERS: no settle wait — spam TP every frame for OP lock
+        if not IsDersHood then
+            task.wait(0.2)
+        end
         return true
     end
 
@@ -991,12 +1000,18 @@ local function punch(plr)
     if not plr or isWL(plr) then return end
     if State.ProtectName and string.lower(plr.Name) == string.lower(State.ProtectName) then return end
     setCamlock(plr, 0.8)
-    if not lockOnTarget(plr, 5.0, 0, true) then return end
+    local dist = IsDersHood and 2.5 or 5.0
+    if not lockOnTarget(plr, dist, 0, true) then return end
     aimAt(plr)
     activateTool(equipCombat())
     if MainEvent then
         pcall(function() MainEvent:FireServer("Punch") end)
         pcall(function() MainEvent:FireServer("Hit", plr.Character) end)
+        pcall(function() MainEvent:FireServer("Hit", plr) end)
+        if IsDersHood then
+            pcall(function() MainEvent:FireServer("Combat") end)
+            pcall(function() MainEvent:FireServer("Punch") end)
+        end
     end
 end
 
@@ -1154,6 +1169,18 @@ local function stomp(plr)
     end
 end
 
+-- Short fixed stomp burst — NEVER waits for corpse/respawn (then caller should returnToOwner)
+local function quickStomp(plr, times)
+    times = times or (IsDersHood and 5 or 6)
+    if not plr then return end
+    for i = 1, times do
+        -- stop early only if character is fully gone (not merely still KO)
+        if not getChar(plr) then break end
+        stomp(plr)
+        task.wait(IsDersHood and 0.06 or 0.08)
+    end
+end
+
 local function softReload(gun)
     -- reload IN PLACE only — never teleports / void
     if not gun then return end
@@ -1195,16 +1222,19 @@ local function shoot(plr)
         if not gun then return end
     end
 
-    -- closer range = more reliable hits on Hood Customs
-    lockOnTarget(plr, 5.5, 0, true)
+    -- DERS: point-blank instant TP every shot; others mid-range
+    local lockDist = IsDersHood and 2.6 or 5.5
+    lockOnTarget(plr, lockDist, 0, true)
     local aim0 = getTargetAimPos(plr)
     if aim0 then
-        for _ = 1, 4 do fireMouse(aim0) end
+        for _ = 1, (IsDersHood and 8 or 4) do fireMouse(aim0) end
     end
     aimAt(plr)
 
-    for i = 1, 14 do
+    local shots = IsDersHood and 22 or 14
+    for i = 1, shots do
         if not isAlive(plr) then break end
+        if isKO(plr) then break end
         gun = findToolByName(PreferredGun, false)
         if not gun or not isToolEquipped(gun) then
             gun = equipGun()
@@ -1215,16 +1245,22 @@ local function shoot(plr)
             gun = equipGun()
             if not gun then break end
         end
-        -- DERS HOOD only: re-instant-TP often so guns stay locked; others walk only
-        local forceTP = IsDersHood and (i % 3 == 1)
-        lockOnTarget(plr, 5.5, 0, forceTP)
+        -- DERS: instant TP every single shot — glued to target
+        local forceTP = IsDersHood or (i % 4 == 1)
+        lockOnTarget(plr, lockDist, 0, forceTP)
         local aim = getTargetAimPos(plr) or aimAt(plr)
         forceHit(plr, gun)
         activateTool(gun)
-        task.wait(0.02)
-        forceHit(plr, gun)
-        activateTool(gun)
-        task.wait(0.03)
+        if IsDersHood then
+            forceHit(plr, gun)
+            activateTool(gun)
+            task.wait(0.015)
+        else
+            task.wait(0.02)
+            forceHit(plr, gun)
+            activateTool(gun)
+            task.wait(0.03)
+        end
     end
 end
 
@@ -1365,26 +1401,22 @@ local function cmdKnock(user)
         State.Tracking = false
         setCamlock(plr, 8)
         -- one instant TP behind target, then shoot
-        lockOnTarget(plr, 7.0, 0, true)
+        lockOnTarget(plr, IsDersHood and 2.8 or 7.0, 0, true)
         aimAt(plr)
-        task.wait(0.05)
-        for i = 1, 45 do
-            if not isAlive(plr) then break end
+        task.wait(0.03)
+        for i = 1, (IsDersHood and 30 or 45) do
+            if not isAlive(plr) or isKO(plr) then break end
             if useGun then
                 shoot(plr)
             else
                 punch(plr)
             end
-            task.wait(0.05)
+            task.wait(IsDersHood and 0.03 or 0.05)
         end
         if isKO(plr) then
-            for _ = 1, 12 do
-                if not isKO(plr) then break end
-                stomp(plr)
-                task.wait(0.12)
-            end
+            quickStomp(plr, 5)
         end
-        -- one-shot: always return to owner after stomp (not loopkill)
+        -- one-shot: return immediately after stomp — do NOT wait for respawn
         returnToOwner()
         notify("Knock done " .. plr.Name)
     end)
@@ -1430,10 +1462,7 @@ local function cmdRage(user)
             task.wait(0.05)
         end
         if isKO(plr) then
-            for _ = 1, 8 do
-                stomp(plr)
-                task.wait(0.1)
-            end
+            quickStomp(plr, 5)
         end
         returnToOwner()
         notify("Rage done " .. plr.Name)
@@ -1487,10 +1516,7 @@ local function cmdSweep()
                         task.wait(0.06)
                     end
                     if isKO(plr) then
-                        for _ = 1, 5 do
-                            stomp(plr)
-                            task.wait(0.1)
-                        end
+                        quickStomp(plr, 4)
                     end
                 end
             end
@@ -1529,21 +1555,12 @@ local function cmdStompUser(user)
             end
         end
         if isKO(plr) then
-            for _ = 1, 14 do
-                if not getChar(plr) then break end
-                -- keep stomping even if KO flag flickers on DERS HOOD
-                stomp(plr)
-                task.wait(0.12)
-            end
+            quickStomp(plr, 6)
             notify("Stomp done " .. plr.Name)
         else
-            -- still try stomp a few times in case KO flag is client-desynced
-            notify("Stomp: no KO flag — forcing stomp attempts on " .. plr.Name)
-            for _ = 1, 8 do
-                if not getChar(plr) then break end
-                stomp(plr)
-                task.wait(0.12)
-            end
+            -- short force attempts — do not wait for corpse/respawn
+            notify("Stomp: no KO flag — forcing short stomp on " .. plr.Name)
+            quickStomp(plr, 4)
         end
         returnToOwner()
     end)
@@ -1942,10 +1959,7 @@ local function doBringTarget(user, doStomp, label)
         if isKO(plr) then
             -- .n keeps stomp; .bring skips stomp and only carries
             if doStomp then
-                for _ = 1, 8 do
-                    stomp(plr)
-                    task.wait(0.07)
-                end
+                quickStomp(plr, 5)
             end
             -- actually pick up: plant on body, unequip, spam grab
             tryGrabVictim(plr)
@@ -2789,25 +2803,15 @@ local function cmdKnife(user)
         if isKO(plr) then
             notify("Knife KO — stomping " .. plr.Name)
             setStealthVisible(true) -- visible while stomping so server registers contact
-            for _ = 1, 22 do
-                if not isKO(plr) and not getChar(plr) then break end
-                if not isKO(plr) then break end
-                stomp(plr)
-                task.wait(0.08)
-            end
+            quickStomp(plr, 6) -- fixed short burst — never wait for respawn
         else
             notify("Knife: no KO flag — try .stomp " .. plr.Name)
         end
-        -- ALWAYS leave the corpse and return to owner (fixes bot stuck following dead target)
+        -- ALWAYS leave the corpse immediately (do not wait for target respawn)
         State.TargetName = nil
-        State.LoopKill = nil
-        State.LoopKillKnife = false
         State.KnifeMode = false
         State.StealthKnife = false
-        -- only keep carrying if .n/.bring set it; knife itself should not keep us on corpse
-        if State.Carrying and string.lower(tostring(State.Carrying)) == string.lower(plr.Name) then
-            -- leave corpse for bring/n to handle; still snap off body
-        else
+        if not (State.Carrying and string.lower(tostring(State.Carrying)) == string.lower(plr.Name)) then
             State.Carrying = nil
         end
         returnToOwner()
