@@ -809,10 +809,11 @@ local function fireMeleeHit(tool, plr)
     local function fireAll(remote, isFn)
         if not remote then return end
         local function send(...)
+            local args = {...}
             if isFn then
-                pcall(function() remote:InvokeServer(...) end)
+                pcall(function() remote:InvokeServer(unpack(args)) end)
             else
-                pcall(function() remote:FireServer(...) end)
+                pcall(function() remote:FireServer(unpack(args)) end)
             end
         end
         send("Hit")
