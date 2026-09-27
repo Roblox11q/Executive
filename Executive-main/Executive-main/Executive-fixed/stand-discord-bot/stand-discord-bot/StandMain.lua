@@ -132,7 +132,8 @@ local State = {
     LoopKill      = nil,
     LoopKillKnife = false,
     KnifeBusy     = false,
-    LoopKillBusy  = false, -- prevents Heartbeat from stacking attacks
+    LoopKillBusy  = false,
+    AutoReload    = true,
 }
 
 local Whitelist    = {}
@@ -554,6 +555,76 @@ local function returnToOwner()
 end
 
 ----------------------------------------------------------------------
+-- COMBAT: RELOAD
+----------------------------------------------------------------------
+local function reloadGun(gun)
+    gun = gun or findGun()
+    if not gun then return end
+    local c = getChar()
+    if gun.Parent ~= c then
+        gun = equipTool(gun, 0.4) or gun
+    end
+    if MainEvent then
+        pcall(function() MainEvent:FireServer("Reload") end)
+        pcall(function() MainEvent:FireServer("Reload", gun.Name) end)
+        pcall(function() MainEvent:FireServer("Reload", gun) end)
+    end
+    if UnreliableMainEvent then
+        pcall(function() UnreliableMainEvent:FireServer("Reload") end)
+        pcall(function() UnreliableMainEvent:FireServer("Reload", gun.Name) end)
+    end
+    if MainFunction then
+        pcall(function() MainFunction:InvokeServer("Reload") end)
+        pcall(function() MainFunction:InvokeServer("Reload", gun.Name) end)
+    end
+    pcall(function()
+        for _, d in ipairs(gun:GetDescendants()) do
+            if d:IsA("RemoteEvent") then
+                local n = string.lower(d.Name)
+                if n:find("reload") or n == "remote" then
+                    pcall(function() d:FireServer() end)
+                    pcall(function() d:FireServer("Reload") end)
+                end
+            end
+        end
+    end)
+    pcall(function()
+        local be = c and c:FindFirstChild("BodyEffects")
+        if be then
+            local r = be:FindFirstChild("Reloading")
+            if r and r:IsA("BoolValue") then r.Value = false end
+            local rc = be:FindFirstChild("Reloading_CLIENT")
+            if rc and rc:IsA("BoolValue") then rc.Value = false end
+        end
+    end)
+end
+
+local lastAutoReload = 0
+local function autoReloadTick()
+    if not State.AutoReload then return end
+    if State.KnifeBusy then return end
+    if tick() - lastAutoReload < 1.0 then return end
+    lastAutoReload = tick()
+    local c = getChar()
+    if not c then return end
+    local equipped = nil
+    for _, t in ipairs(c:GetChildren()) do
+        if t:IsA("Tool") then
+            local n = string.lower(t.Name)
+            if n:find("barrel") or n:find("revolver") or n:find("shotgun")
+                or n:find("pistol") or n:find("rifle") or n:find("gun")
+                or n:find("tactical") or n:find("silencer")
+                or n == string.lower(PreferredGun:gsub("[%[%]]", "")) then
+                equipped = t
+                break
+            end
+        end
+    end
+    if not equipped then equipped = findGun() end
+    if equipped then reloadGun(equipped) end
+end
+
+----------------------------------------------------------------------
 -- COMBAT: SHOOT
 ----------------------------------------------------------------------
 local function shootTarget(plr)
@@ -575,18 +646,16 @@ local function shootTarget(plr)
         for _ = 1, 6 do fireMouse(aim) end
     end
 
-    if MainEvent then
-        pcall(function() MainEvent:FireServer("Reload") end)
-        pcall(function() MainEvent:FireServer("Reload", gun.Name) end)
-    end
+    reloadGun(gun)
 
-    for _ = 1, 8 do
+    for shot = 1, 8 do
         if not isAlive(plr) or isKO(plr) then break end
         aim = getAimPos(plr)
         if aim then
             for _ = 1, 4 do fireMouse(aim) end
         end
         activateTool(gun)
+        if shot % 3 == 0 then reloadGun(gun) end
         if MainEvent then
             pcall(function() MainEvent:FireServer("Shoot", aim) end)
             pcall(function() MainEvent:FireServer("Hit", getChar(plr)) end)
@@ -1082,7 +1151,8 @@ local function cmdHelp()
     print("  " .. Prefix .. "protect <user>  |  unprotect")
     print("  " .. Prefix .. "wl <user>  |  uwl [user]")
     print("  " .. Prefix .. "target <user>  |  untarget")
-    print("  " .. Prefix .. "armor / mask / fix / help")
+    print("  " .. Prefix .. "armor / mask / reload / autoreload")
+    print("  " .. Prefix .. "fix / help")
 end
 
 ----------------------------------------------------------------------
@@ -1128,6 +1198,12 @@ local function onControlChat(msg, speaker)
     elseif cmd == "untarget" or cmd == "unt" then cmdUntarget()
     elseif cmd == "armor" then cmdArmor()
     elseif cmd == "mask" then cmdMask()
+    elseif cmd == "reload" then
+        reloadGun(findGun())
+        notify("Reload")
+    elseif cmd == "autoreload" then
+        State.AutoReload = not State.AutoReload
+        notify("AutoReload " .. (State.AutoReload and "ON" or "OFF"))
     elseif cmd == "fix" then cmdFix()
     elseif cmd == "help" or cmd == "cmds" then cmdHelp()
     end
@@ -1165,6 +1241,7 @@ Connections.Main = RunService.Heartbeat:Connect(function()
     if not State.KnifeBusy and not State.LoopKillBusy then
         followOwner()
     end
+    autoReloadTick()
 
     -- LoopKill: single-flight worker (never stack shootTarget every frame)
     if State.LoopKill and not State.LoopKillBusy and not State.KnifeBusy then
