@@ -132,6 +132,7 @@ local State = {
     LoopKill      = nil,
     LoopKillKnife = false,
     KnifeBusy     = false,
+    LoopKillBusy  = false, -- prevents Heartbeat from stacking attacks
 }
 
 local Whitelist    = {}
@@ -956,16 +957,38 @@ local function cmdLoopKill(user, useKnife)
     end
     State.LoopKill = plr.Name
     State.LoopKillKnife = useKnife and true or false
+    State.LoopKillBusy = false
     State.Tracking = false
-    notify("LoopKill " .. (useKnife and "knife " or "") .. "ON " .. plr.Name)
+    notify("LoopKill " .. (useKnife and "knife " or "gun ") .. "ON " .. plr.Name)
 end
 
 local function cmdUnLoopKill()
     State.LoopKill = nil
     State.LoopKillKnife = false
+    State.LoopKillBusy = false
     clearCamlock()
     if not IsOwner then State.Tracking = true end
     notify("LoopKill OFF")
+end
+
+-- One full attack cycle for loopkill (gun or knife). Called once at a time.
+local function loopKillCycle(plr)
+    if not plr then return end
+    if State.LoopKillKnife then
+        -- knifeTarget is async and sets KnifeBusy; wait until done
+        if State.KnifeBusy then return end
+        knifeTarget(plr)
+        local t0 = tick()
+        while State.KnifeBusy and tick() - t0 < 12 and State.LoopKill do
+            task.wait(0.2)
+        end
+    else
+        shootTarget(plr)
+        task.wait(0.25)
+        if isKO(plr) then
+            stompTarget(plr, 6)
+        end
+    end
 end
 
 local function cmdProtect(user)
@@ -1029,6 +1052,7 @@ local function cmdFix()
     clearCamlock()
     State.LoopKill = nil
     State.LoopKillKnife = false
+    State.LoopKillBusy = false
     State.TargetName = nil
     State.KnifeBusy = false
     State.InVoid = false
@@ -1138,23 +1162,60 @@ end)
 ----------------------------------------------------------------------
 Connections.Main = RunService.Heartbeat:Connect(function()
     if IsOwner then return end
-    if not State.KnifeBusy then
+    if not State.KnifeBusy and not State.LoopKillBusy then
         followOwner()
     end
-    if State.LoopKill and not State.KnifeBusy and not isKO(LocalPlayer) then
-        local lk = findPlayer(State.LoopKill)
-        if lk and not isProtected(lk) then
-            if isAlive(lk) then
-                setCamlock(lk, 0.8)
-                if State.LoopKillKnife then
-                    if not State.KnifeBusy then knifeTarget(lk) end
-                else
-                    task.spawn(function() shootTarget(lk) end)
-                end
-            elseif isKO(lk) then
-                stompTarget(lk, 4)
-            end
+
+    -- LoopKill: single-flight worker (never stack shootTarget every frame)
+    if State.LoopKill and not State.LoopKillBusy and not State.KnifeBusy then
+        local hum = getHum()
+        if hum and hum.Health <= 0 then return end
+        local name = State.LoopKill
+        local lk = findPlayer(name)
+        if not lk then
+            -- target left; keep name, wait for rejoin
+            return
         end
+        local prot = isProtected(lk)
+        if prot then
+            notify("LoopKill stopped: protected " .. lk.Name)
+            State.LoopKill = nil
+            State.LoopKillBusy = false
+            State.Tracking = true
+            return
+        end
+
+        State.LoopKillBusy = true
+        task.spawn(function()
+            local ok, err = pcall(function()
+                if isKO(lk) then
+                    stompTarget(lk, 5)
+                    -- wait for respawn / stand up
+                    local t0 = tick()
+                    while tick() - t0 < 4 and State.LoopKill do
+                        if not getChar(lk) then break end
+                        if isAlive(lk) then break end
+                        task.wait(0.25)
+                    end
+                    task.wait(0.4)
+                elseif isAlive(lk) then
+                    setCamlock(lk, 2)
+                    loopKillCycle(lk)
+                    task.wait(0.35)
+                else
+                    -- dead or no char — wait
+                    task.wait(0.5)
+                end
+            end)
+            if not ok then
+                warn("[Stand] LoopKill error:", err)
+            end
+            State.LoopKillBusy = false
+            if not State.LoopKill and not IsOwner then
+                State.Tracking = true
+                clearCamlock()
+            end
+        end)
     end
 end)
 
