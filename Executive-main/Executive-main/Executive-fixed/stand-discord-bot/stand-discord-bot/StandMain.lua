@@ -10,7 +10,7 @@ local Config = rawget(_G, "StandConfig")
     or (shared and shared.StandConfig)
     or nil
 if not Config then
-    warn("[Stand] No StandConfig — use /loader from Discord")
+    warn("[Stand] No StandConfig — use StandInject.lua or Discord /loader")
     return
 end
 
