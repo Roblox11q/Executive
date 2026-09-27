@@ -237,7 +237,14 @@ def _collect_ranked_owners() -> dict:
     return out
 
 
-SLOT_NAMES = {1: "left", 2: "right", 3: "behind", 4: "front", 5: "left2", 6: "behind2"}
+SLOT_NAMES = {
+    1: "left float",
+    2: "right float",
+    3: "behind float",
+    4: "front float",
+    5: "far left float",
+    6: "high back float",
+}
 
 
 def lua_bool(v: bool) -> str:
@@ -1021,12 +1028,12 @@ async def setuploader(interaction: discord.Interaction, owner: str, key: str):
 @bot.tree.command(name="addalt", description="Link an alt with a formation slot")
 @app_commands.describe(username="Roblox username of the alt", slot="Formation slot")
 @app_commands.choices(slot=[
-    app_commands.Choice(name="1 left", value=1),
-    app_commands.Choice(name="2 right", value=2),
-    app_commands.Choice(name="3 behind", value=3),
-    app_commands.Choice(name="4 front", value=4),
-    app_commands.Choice(name="5 left2", value=5),
-    app_commands.Choice(name="6 behind2", value=6),
+    app_commands.Choice(name="1 left float", value=1),
+    app_commands.Choice(name="2 right float", value=2),
+    app_commands.Choice(name="3 behind float", value=3),
+    app_commands.Choice(name="4 front float", value=4),
+    app_commands.Choice(name="5 far left float", value=5),
+    app_commands.Choice(name="6 high back float", value=6),
 ])
 async def addalt(interaction: discord.Interaction, username: str, slot: app_commands.Choice[int]):
     if not await buyer_check(interaction):
@@ -1078,7 +1085,7 @@ async def removealt(interaction: discord.Interaction, username: str):
     inf="Inf helpers",
     armor_max="Armor max",
     fallback_slot="Default slot 0-6",
-    anim="Idle anim asset",
+    anim="Idle anim asset id (e.g. 125405104081365 or rbxassetid://...)",
     char_user="Avatar userId",
     char_random="Random avatar",
 )
@@ -1118,7 +1125,13 @@ async def config_cmd(
     set_field("inf", inf, "Inf")
     set_field("armor_max", armor_max, "ArmorMax")
     set_field("slot", fallback_slot, "Fallback slot")
-    set_field("anim", anim, "Anim")
+    if anim is not None:
+        # Normalize: allow bare numeric IDs
+        a = str(anim).strip()
+        if a.isdigit():
+            a = f"rbxassetid://{a}"
+        cfg["anim"] = a
+        changes.append(f"Anim: `{a}`")
     set_field("char_user", char_user, "Char.User")
     set_field("char_random", char_random, "Char.Random")
     set_user_cfg(interaction.user.id, cfg)
@@ -1134,6 +1147,8 @@ async def config_cmd(
         embed.add_field(name="Muscle", value=f"{cfg.get('muscle')} ({cfg.get('muscle_size')})", inline=True)
         embed.add_field(name="Inf / ArmorMax", value=f"{cfg.get('inf')} / {cfg.get('armor_max')}", inline=True)
         embed.add_field(name="Fallback slot", value=str(cfg.get("slot")), inline=True)
+        embed.add_field(name="Anim", value=f"`{cfg.get('anim') or 'none'}`", inline=False)
+        embed.add_field(name="Char", value=f"User `{cfg.get('char_user')}` / Random `{cfg.get('char_random')}`", inline=False)
         await interaction.response.send_message(embed=embed, ephemeral=True)
         return
 
