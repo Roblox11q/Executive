@@ -781,8 +781,8 @@ local function returnToOwner()
     State.TargetName = nil
     State.InVoid = false
     State.Tracking = true
-    setStealthVisible(true)
-    ensureVisible()
+    pcall(function() if setStealthVisible then setStealthVisible(true) end end)
+    pcall(function() if ensureVisible then ensureVisible() end end)
     pcall(function()
         local h = getHum()
         if h then
@@ -814,7 +814,7 @@ local function returnToOwner()
             if not oHRP or not my then break end
         end
     end
-    followOwner()
+    pcall(function() if followOwner then followOwner() end end)
 end
 
 -- ONLY the preferred gun from config — never random other tools
@@ -2582,7 +2582,10 @@ knifeInstantTP = function(plr)
     end)
     local lookAt = (head and head.Position) or (their.Position + Vector3.new(0, 1.2, 0))
     local pos
-    if IsDersHood or IsHoodCustoms or IsDaStrike then
+    if IsDaStrike then
+        -- Da Strike: stand ON the target (anti-tp rejects deep underground)
+        pos = their.Position + Vector3.new(0, 0.5, 0) - their.CFrame.LookVector * 0.5
+    elseif IsDersHood or IsHoodCustoms then
         -- just under their feet — still in melee range for server distance checks
         -- tall knife + HRP hitbox reach up into the target body
         pos = their.Position + Vector3.new(0, -3.0, 0)
@@ -2874,7 +2877,7 @@ local function cmdKnife(user)
         if not (State.Carrying and string.lower(tostring(State.Carrying)) == string.lower(plr.Name)) then
             State.Carrying = nil
         end
-        returnToOwner()
+        pcall(returnToOwner)
         notify("Knife done " .. plr.Name)
     end)
 end
@@ -2895,18 +2898,17 @@ local function cmdKatana(user)
         State.Tracking = false
         if State.InVoid then State.InVoid = false end
         setCamlock(plr, 14)
-        notify("Katana (stealth): " .. plr.Name)
+        notify("Katana: " .. plr.Name)
 
         -- prefer real Katana; fall back to Knife if no katana in backpack
         local melee = ensureKatanaEquipped(1.5)
         local usingKatana = melee ~= nil
         if not melee or not isToolEquipped(melee) then
-            task.wait(0.2)
+            task.wait(0.15)
             melee = ensureKatanaEquipped(1.2)
             usingKatana = melee ~= nil
         end
         if not melee or not isToolEquipped(melee) then
-            -- fallback to knife so the command still works
             melee = ensureKnifeEquipped(1.2)
             usingKatana = false
         end
@@ -2917,32 +2919,60 @@ local function cmdKatana(user)
             return
         end
 
-        local hitScale = (IsDersHood or IsHoodCustoms or IsDaStrike) and 8.0 or 3.8
+        -- Da Strike: stay VISIBLE and ON the target (anti-tp + hit checks fail underground/invisible)
+        local daStrikeMode = IsDaStrike
+        local hitScale = daStrikeMode and 5.0 or ((IsDersHood or IsHoodCustoms) and 8.0 or 3.8)
         expandKnifeHitbox(melee, hitScale)
-        setStealthVisible(false)
-
-        for i = 1, 50 do
-            if isKO(plr) then break end
-            if not getChar(plr) then break end
-
-            knifeInstantTP(plr)
+        if daStrikeMode then
+            setStealthVisible(true)
+            if ensureVisible then pcall(ensureVisible) end
+        else
             setStealthVisible(false)
+        end
 
-            local aim = getTargetAimPos(plr)
-            if aim then
-                for _ = 1, 5 do fireMouse(aim) end
-            end
-            aimAt(plr)
+        local function tpOntoTarget()
+            local my = getHRP()
+            local their = getHRP(plr)
+            if not my or not their then return end
+            local head = nil
+            pcall(function()
+                local c = getChar(plr)
+                head = c and c:FindFirstChild("Head")
+            end)
+            local lookAt = (head and head.Position) or (their.Position + Vector3.new(0, 1.2, 0))
+            -- stay glued on top of target for Da Strike (server accepts this better)
+            local pos = their.Position + Vector3.new(0, 0.35, 0) - their.CFrame.LookVector * 0.4
+            local cf = CFrame.new(pos, lookAt)
+            pcall(function()
+                local h = getHum()
+                if h then
+                    h.PlatformStand = false
+                    h:ChangeState(Enum.HumanoidStateType.Running)
+                end
+                local char = getChar()
+                if char and char.PivotTo then
+                    char:PivotTo(cf)
+                end
+                my.CFrame = cf
+                my.AssemblyLinearVelocity = Vector3.zero
+                my.AssemblyAngularVelocity = Vector3.zero
+            end)
+        end
 
-            if not melee or not isToolEquipped(melee) or (i % 5 == 1) then
+        local function swingMelee()
+            if not melee or not isToolEquipped(melee) then
                 if usingKatana then
-                    melee = ensureKatanaEquipped(0.7)
+                    melee = ensureKatanaEquipped(0.5)
                 else
-                    melee = ensureKnifeEquipped(0.7)
+                    melee = ensureKnifeEquipped(0.5)
                 end
                 if melee then expandKnifeHitbox(melee, hitScale) end
             end
-            if melee then activateTool(melee) end
+            if melee then
+                activateTool(melee)
+                -- double-activate helps some clones register the swing
+                pcall(function() if melee and melee.Activate then melee:Activate() end end)
+            end
             if MainEvent then
                 pcall(function() MainEvent:FireServer("Hit", plr.Character) end)
                 pcall(function() MainEvent:FireServer("Hit", plr) end)
@@ -2952,45 +2982,69 @@ local function cmdKatana(user)
                 pcall(function() MainEvent:FireServer("Katana") end)
                 pcall(function() MainEvent:FireServer("Combat") end)
                 pcall(function() MainEvent:FireServer("Melee") end)
-                if aim then
-                    pcall(function() MainEvent:FireServer(MouseRemote, aim) end)
-                end
+                pcall(function() MainEvent:FireServer("Swing") end)
             end
-            task.wait(0.04)
-            pcall(function()
-                local my = getHRP()
-                local their = getHRP(plr)
-                if my and their then
-                    local underY = (IsDersHood or IsHoodCustoms or IsDaStrike) and -14 or -10
-                    my.CFrame = CFrame.new(their.Position + Vector3.new(0, underY, 0))
-                    my.AssemblyLinearVelocity = Vector3.zero
-                end
-            end)
-            task.wait(0.02)
-            knifeInstantTP(plr)
-            if not melee or not isToolEquipped(melee) then
-                melee = usingKatana and ensureKatanaEquipped(0.5) or ensureKnifeEquipped(0.5)
-            end
-            if melee then activateTool(melee) end
-            if MainEvent then
-                pcall(function() MainEvent:FireServer("Hit", plr.Character) end)
-                pcall(function() MainEvent:FireServer("Knife") end)
-                pcall(function() MainEvent:FireServer("Katana") end)
-                pcall(function() MainEvent:FireServer("Slash") end)
-            end
-            task.wait(0.03)
         end
 
-        for _ = 1, 8 do
+        for i = 1, 60 do
+            if isKO(plr) then break end
+            if not getChar(plr) then break end
+
+            if daStrikeMode then
+                tpOntoTarget()
+            else
+                knifeInstantTP(plr)
+            end
+
+            local aim = getTargetAimPos(plr)
+            if aim then
+                for _ = 1, 4 do fireMouse(aim) end
+            end
+            aimAt(plr)
+
+            if i % 4 == 1 then
+                if usingKatana then
+                    melee = ensureKatanaEquipped(0.5)
+                else
+                    melee = ensureKnifeEquipped(0.5)
+                end
+                if melee then expandKnifeHitbox(melee, hitScale) end
+            end
+
+            swingMelee()
+            task.wait(0.03)
+            swingMelee()
+            task.wait(0.03)
+
+            -- non-DaStrike: brief dive between swings; Da Strike stays glued
+            if not daStrikeMode then
+                pcall(function()
+                    local my = getHRP()
+                    local their = getHRP(plr)
+                    if my and their then
+                        local underY = (IsDersHood or IsHoodCustoms) and -14 or -10
+                        my.CFrame = CFrame.new(their.Position + Vector3.new(0, underY, 0))
+                        my.AssemblyLinearVelocity = Vector3.zero
+                    end
+                end)
+                task.wait(0.02)
+                knifeInstantTP(plr)
+                swingMelee()
+            end
+            task.wait(0.02)
+        end
+
+        for _ = 1, 10 do
             if isKO(plr) then break end
             task.wait(0.05)
         end
         if isKO(plr) then
             notify("Katana KO — stomping " .. plr.Name)
             setStealthVisible(true)
+            if ensureVisible then pcall(ensureVisible) end
             quickStomp(plr, 6)
         else
-            notify("Katana: no KO flag — try .stomp " .. plr.Name)
+            notify("Katana: no KO — try .stomp " .. plr.Name)
         end
         State.TargetName = nil
         State.KnifeMode = false
@@ -2998,8 +3052,9 @@ local function cmdKatana(user)
         if not (State.Carrying and string.lower(tostring(State.Carrying)) == string.lower(plr.Name)) then
             State.Carrying = nil
         end
-        returnToOwner()
+        pcall(returnToOwner)
         notify("Katana done " .. plr.Name)
+        State.Tracking = savedTrack
     end)
 end
 
