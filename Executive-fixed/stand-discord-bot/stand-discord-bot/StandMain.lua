@@ -2543,9 +2543,8 @@ expandKnifeHitbox = function(knife, scale)
     end)
 end
 
--- Instant TP for knife
--- DERS HOOD + Hood Customs: under the target's feet (close enough that expanded hitbox + HRP register hits)
--- Deeper underground is only used BETWEEN swings (see attack loops)
+-- Instant TP for knife — must land CLOSE so server distance checks pass.
+-- Pure client CFrame only works if we stay overlapping the target long enough for Activate + remotes.
 knifeInstantTP = function(plr)
     local my = getHRP()
     local their = getHRP(plr)
@@ -2557,28 +2556,35 @@ knifeInstantTP = function(plr)
     end)
     local lookAt = (head and head.Position) or (their.Position + Vector3.new(0, 1.2, 0))
     local pos
-    if IsDersHood or IsHoodCustoms then
-        -- just under their feet — still in melee range for server distance checks
-        -- tall knife + HRP hitbox reach up into the target body
-        pos = their.Position + Vector3.new(0, -3.0, 0)
+    if IsHoodCustoms then
+        -- Hood Customs: stand ON the target body (slightly inside torso).
+        -- Under-feet TPs get rejected by server range checks → swings with 0 damage.
+        pos = their.Position + Vector3.new(0, 0.35, 0)
+    elseif IsDersHood then
+        -- DERS: slightly under feet still works with tall hitboxes
+        pos = their.Position + Vector3.new(0, -1.5, 0)
     else
-        -- stand right on them / slightly in front for max knife range
-        pos = their.Position + Vector3.new(0, 0.2, 0) - their.CFrame.LookVector * 0.8
+        -- Da Hood style: on them / slightly in front
+        pos = their.Position + Vector3.new(0, 0.25, 0) - their.CFrame.LookVector * 0.6
     end
     local cf = CFrame.new(pos, lookAt)
+    -- spam CFrame several times so network ownership + replication stick
     pcall(function()
         local h = getHum()
         if h then
             h.PlatformStand = false
+            h.Sit = false
             h:ChangeState(Enum.HumanoidStateType.Running)
         end
         local char = getChar()
-        if char and char.PivotTo then
-            char:PivotTo(cf)
+        for _ = 1, 3 do
+            if char and char.PivotTo then
+                char:PivotTo(cf)
+            end
+            my.CFrame = cf
+            my.AssemblyLinearVelocity = Vector3.zero
+            my.AssemblyAngularVelocity = Vector3.zero
         end
-        my.CFrame = cf
-        my.AssemblyLinearVelocity = Vector3.zero
-        my.AssemblyAngularVelocity = Vector3.zero
     end)
     return true
 end
@@ -2659,52 +2665,63 @@ local function ensureKnifeEquipped(timeout)
 end
 
 -- Single stealth knife attack burst (used by .knife and .lkk)
+-- Hold ON the target while swinging so server range checks pass (deep dives = 0 damage).
 knifeAttackTarget = function(plr, swings)
-    swings = swings or 8
+    swings = swings or 10
     if not plr or isProtected(plr) then return end
     local knife = ensureKnifeEquipped(1.2)
     if not knife then return end
-    -- DERS / Hood Customs: max vertical hitbox for under-feet hits
     local hitScale = (IsDersHood or IsHoodCustoms) and 8.0 or 3.8
     expandKnifeHitbox(knife, hitScale)
     setStealthVisible(false)
     for i = 1, swings do
         if isKO(plr) or not getChar(plr) then break end
-        -- TP under feet (in range) → hit → dive deep underground between swings
+        -- stay glued to target for the swing
         knifeInstantTP(plr)
         local aim = getTargetAimPos(plr)
-        if aim then for _ = 1, 5 do fireMouse(aim) end end
+        if aim then for _ = 1, 6 do fireMouse(aim) end end
         aimAt(plr)
-        -- re-equip every swing so 2nd kill / respawn never leaves us empty-handed
         if not knife or not isToolEquipped(knife) then
-            knife = ensureKnifeEquipped(0.6)
+            knife = ensureKnifeEquipped(0.5)
             if knife then expandKnifeHitbox(knife, hitScale) end
         end
-        if knife then activateTool(knife) end
+        -- double Activate + remote spam while still overlapping
+        if knife then
+            activateTool(knife)
+            task.wait(0.02)
+            activateTool(knife)
+        end
         if MainEvent then
-            -- spam hit remotes so server registers from under feet
             pcall(function() MainEvent:FireServer("Hit", plr.Character) end)
             pcall(function() MainEvent:FireServer("Hit", plr) end)
             pcall(function() MainEvent:FireServer("Punch") end)
             pcall(function() MainEvent:FireServer("Knife") end)
             pcall(function() MainEvent:FireServer("Slash") end)
             pcall(function() MainEvent:FireServer("Combat") end)
+            if IsHoodCustoms then
+                pcall(function() MainEvent:FireServer("KnifeHit", plr.Character) end)
+                pcall(function() MainEvent:FireServer("Melee", plr.Character) end)
+            end
             if aim then
                 pcall(function() MainEvent:FireServer(MouseRemote, aim) end)
             end
         end
-        task.wait(0.04)
-        -- dive deep underground between swings so bot is hard to kill
-        pcall(function()
-            local my = getHRP()
-            local their = getHRP(plr)
-            if my and their then
-                local underY = (IsDersHood or IsHoodCustoms) and -14 or -8
-                my.CFrame = CFrame.new(their.Position + Vector3.new(0, underY, 0))
-                my.AssemblyLinearVelocity = Vector3.zero
-            end
-        end)
-        task.wait(0.02)
+        -- brief micro-offset only every few swings (not deep underground)
+        if i % 4 == 0 then
+            pcall(function()
+                local my = getHRP()
+                local their = getHRP(plr)
+                if my and their then
+                    my.CFrame = CFrame.new(their.Position + Vector3.new(0, -2.5, 0))
+                    my.AssemblyLinearVelocity = Vector3.zero
+                end
+            end)
+            task.wait(0.03)
+            knifeInstantTP(plr)
+        else
+            task.wait(0.05)
+            knifeInstantTP(plr) -- re-stick so we never drift
+        end
     end
 end
 
@@ -2724,7 +2741,6 @@ local function cmdKnife(user)
         if State.InVoid then State.InVoid = false end
         setCamlock(plr, 14)
         notify("Knife (stealth): " .. plr.Name)
-        -- always re-find + equip (fixes 2nd knife having nothing equipped)
         local knife = ensureKnifeEquipped(1.5)
         if not knife or not isToolEquipped(knife) then
             task.wait(0.2)
@@ -2736,31 +2752,37 @@ local function cmdKnife(user)
             State.Tracking = savedTrack
             return
         end
-        -- DERS / Hood Customs: max vertical hitbox for under-feet knife
         local hitScale = (IsDersHood or IsHoodCustoms) and 8.0 or 3.8
         expandKnifeHitbox(knife, hitScale)
         setStealthVisible(false)
 
-        for i = 1, 50 do
+        -- Stay ON the target while swinging. Deep underground between hits
+        -- made the server think the bot was far away → 0 damage (and owner
+        -- never saw the bot move).
+        for i = 1, 40 do
             if isKO(plr) then break end
             if not getChar(plr) then break end
 
-            -- under feet (in range) so hits register
             knifeInstantTP(plr)
             setStealthVisible(false)
 
             local aim = getTargetAimPos(plr)
             if aim then
-                for _ = 1, 5 do fireMouse(aim) end
+                for _ = 1, 6 do fireMouse(aim) end
             end
             aimAt(plr)
 
-            -- re-equip every few swings so tool never stays missing
-            if not knife or not isToolEquipped(knife) or (i % 5 == 1) then
-                knife = ensureKnifeEquipped(0.7)
+            if not knife or not isToolEquipped(knife) or (i % 4 == 1) then
+                knife = ensureKnifeEquipped(0.6)
                 if knife then expandKnifeHitbox(knife, hitScale) end
             end
-            if knife then activateTool(knife) end
+
+            -- double Activate while still overlapping target
+            if knife then
+                activateTool(knife)
+                task.wait(0.02)
+                activateTool(knife)
+            end
             if MainEvent then
                 pcall(function() MainEvent:FireServer("Hit", plr.Character) end)
                 pcall(function() MainEvent:FireServer("Hit", plr) end)
@@ -2768,48 +2790,43 @@ local function cmdKnife(user)
                 pcall(function() MainEvent:FireServer("Knife") end)
                 pcall(function() MainEvent:FireServer("Slash") end)
                 pcall(function() MainEvent:FireServer("Combat") end)
+                if IsHoodCustoms then
+                    pcall(function() MainEvent:FireServer("KnifeHit", plr.Character) end)
+                    pcall(function() MainEvent:FireServer("Melee", plr.Character) end)
+                end
                 if aim then
                     pcall(function() MainEvent:FireServer(MouseRemote, aim) end)
                 end
             end
-            task.wait(0.04)
-            -- dive deep underground between swings so bot doesn't die
-            pcall(function()
-                local my = getHRP()
-                local their = getHRP(plr)
-                if my and their then
-                    local underY = (IsDersHood or IsHoodCustoms) and -14 or -10
-                    my.CFrame = CFrame.new(their.Position + Vector3.new(0, underY, 0))
-                    my.AssemblyLinearVelocity = Vector3.zero
-                end
-            end)
-            task.wait(0.02)
-            -- second swing from under feet again
-            knifeInstantTP(plr)
-            if not knife or not isToolEquipped(knife) then
-                knife = ensureKnifeEquipped(0.5)
+
+            -- micro-offset only every 5th swing (not -14 studs)
+            if i % 5 == 0 then
+                pcall(function()
+                    local my = getHRP()
+                    local their = getHRP(plr)
+                    if my and their then
+                        my.CFrame = CFrame.new(their.Position + Vector3.new(0, -2.2, 0))
+                        my.AssemblyLinearVelocity = Vector3.zero
+                    end
+                end)
+                task.wait(0.03)
+            else
+                task.wait(0.05)
             end
-            if knife then activateTool(knife) end
-            if MainEvent then
-                pcall(function() MainEvent:FireServer("Hit", plr.Character) end)
-                pcall(function() MainEvent:FireServer("Knife") end)
-            end
-            task.wait(0.03)
+            knifeInstantTP(plr) -- re-glue so server always sees us near target
         end
 
-        -- wait briefly for KO flag to replicate (DERS/Des Hood can lag the BoolValue)
-        for _ = 1, 8 do
+        for _ = 1, 10 do
             if isKO(plr) then break end
             task.wait(0.05)
         end
         if isKO(plr) then
             notify("Knife KO — stomping " .. plr.Name)
-            setStealthVisible(true) -- visible while stomping so server registers contact
-            quickStomp(plr, 6) -- fixed short burst — never wait for respawn
+            setStealthVisible(true)
+            quickStomp(plr, 6)
         else
             notify("Knife: no KO flag — try .stomp " .. plr.Name)
         end
-        -- ALWAYS leave the corpse immediately (do not wait for target respawn)
         State.TargetName = nil
         State.KnifeMode = false
         State.StealthKnife = false
