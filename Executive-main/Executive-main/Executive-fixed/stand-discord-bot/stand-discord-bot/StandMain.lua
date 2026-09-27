@@ -152,11 +152,10 @@ local State = {
     AutoReload    = true,
     Sweep         = false,
     Air           = true,  -- floating summon formation (toggle with .air)
-    AutoSave      = false, -- .asave — respawn when knocked
-    Sentry        = false, -- .sentry — knock whoever touches YOU
-    Sentry2       = false, -- .sentry2 — knock+stomp whoever touches YOU
-    BSentry       = false, -- .bsentry — knock whoever touches this stand
-    AssistName    = nil,   -- .assist user — sentry on another player
+    Sentry        = false, -- .sentry — knock whoever shoots the OWNER
+    Sentry2       = false, -- .sentry2 — knock+stomp whoever shoots the OWNER
+    BSentry       = false, -- .bsentry — knock+stomp whoever shoots THIS stand
+    AssistName    = nil,   -- .assist user — apply sentry modes for that user too
     SentryBusy    = false,
 }
 
@@ -1522,33 +1521,28 @@ local function parseOnOff(arg, current)
     return not current
 end
 
-local function cmdAsave(arg)
-    State.AutoSave = parseOnOff(arg, State.AutoSave)
-    notify("AutoSave " .. (State.AutoSave and "ON" or "OFF"))
-end
-
 local function cmdSentry(arg)
     State.Sentry = parseOnOff(arg, State.Sentry)
     if State.Sentry then State.Sentry2 = false end
-    notify("Sentry " .. (State.Sentry and "ON" or "OFF"))
+    notify("Sentry " .. (State.Sentry and "ON" or "OFF") .. " (knock who shoots owner)")
 end
 
 local function cmdSentry2(arg)
     State.Sentry2 = parseOnOff(arg, State.Sentry2)
     if State.Sentry2 then State.Sentry = false end
-    notify("Sentry2 " .. (State.Sentry2 and "ON" or "OFF"))
+    notify("Sentry2 " .. (State.Sentry2 and "ON" or "OFF") .. " (knock+stomp who shoots owner)")
 end
 
 local function cmdBSentry(arg)
     State.BSentry = parseOnOff(arg, State.BSentry)
-    notify("BSentry " .. (State.BSentry and "ON" or "OFF"))
+    notify("BSentry " .. (State.BSentry and "ON" or "OFF") .. " (knock+stomp who shoots stand)")
 end
 
 local function cmdAssist(user)
     local plr = findPlayer(user)
     if not plr then notify("Assist: not found") return end
     State.AssistName = plr.Name
-    notify("Assist ON " .. plr.Name)
+    notify("Assist ON " .. plr.Name .. " (sentry covers them too)")
 end
 
 local function cmdUnassist()
@@ -1588,7 +1582,7 @@ local function cmdSay(msg)
     end)
 end
 
--- React to a toucher (sentry / bsentry / assist)
+-- React to attacker (sentry / sentry2 / bsentry / assist)
 local function sentryReact(plr, doStomp)
     if not plr or isProtected(plr) then return end
     if not isAlive(plr) and not isKO(plr) then return end
@@ -1601,7 +1595,7 @@ local function sentryReact(plr, doStomp)
         elseif isAlive(plr) then
             shootTarget(plr)
             local t0 = tick()
-            while tick() - t0 < 2 do
+            while tick() - t0 < 2.2 do
                 if isKO(plr) then break end
                 task.wait(0.12)
             end
@@ -1613,9 +1607,128 @@ local function sentryReact(plr, doStomp)
         clearCamlock()
         State.Tracking = true
         returnToOwner()
-        task.wait(0.4)
+        task.wait(0.35)
         State.SentryBusy = false
     end)
+end
+
+-- Find who most likely shot `victim` (creator tag → nearest armed enemy looking at them)
+local function findAttacker(victim)
+    if not victim then return nil end
+    local hum = getHum(victim)
+    if hum then
+        for _, name in ipairs({"creator", "Creator", "LastHit", "Attacker", "Killer"}) do
+            local tag = hum:FindFirstChild(name)
+            if tag then
+                local val = tag.Value
+                if typeof(val) == "Instance" then
+                    if val:IsA("Player") then return val end
+                    if val:IsA("Model") then
+                        local p = Players:GetPlayerFromCharacter(val)
+                        if p then return p end
+                    end
+                end
+            end
+        end
+        local be = getChar(victim) and getChar(victim):FindFirstChild("BodyEffects")
+        if be then
+            for _, name in ipairs({"Attacker", "LastAttacker", "Shooting", "Creator"}) do
+                local tag = be:FindFirstChild(name)
+                if tag and tag.Value then
+                    local val = tag.Value
+                    if typeof(val) == "Instance" then
+                        if val:IsA("Player") then return val end
+                        if val:IsA("Model") then
+                            local p = Players:GetPlayerFromCharacter(val)
+                            if p then return p end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    -- fallback: nearest non-protected player with a tool aimed near victim
+    local vHRP = getHRP(victim)
+    if not vHRP then return nil end
+    local best, bestDist = nil, 90
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= victim and plr ~= LocalPlayer and not isProtected(plr) and isAlive(plr) then
+            local hrp = getHRP(plr)
+            local ch = getChar(plr)
+            if hrp and ch then
+                local hasTool = false
+                for _, c in ipairs(ch:GetChildren()) do
+                    if c:IsA("Tool") then hasTool = true break end
+                end
+                if hasTool then
+                    local d = (hrp.Position - vHRP.Position).Magnitude
+                    if d < bestDist then
+                        bestDist = d
+                        best = plr
+                    end
+                end
+            end
+        end
+    end
+    return best
+end
+
+local HealthWatch = {} -- [player] = lastHealth
+
+local function onVictimDamaged(victim, doStomp)
+    if State.SentryBusy then return end
+    local attacker = findAttacker(victim)
+    if attacker then
+        sentryReact(attacker, doStomp)
+    end
+end
+
+local function watchPlayerHealth(plr, mode)
+    -- mode: "owner" | "stand" | "assist"
+    if not plr then return end
+    local hum = getHum(plr)
+    if not hum then return end
+    local key = plr.UserId
+    HealthWatch[key] = hum.Health
+    if Connections["hp_" .. key] then
+        pcall(function() Connections["hp_" .. key]:Disconnect() end)
+    end
+    Connections["hp_" .. key] = hum.HealthChanged:Connect(function(hp)
+        local prev = HealthWatch[key] or hp
+        HealthWatch[key] = hp
+        if hp >= prev then return end -- only care about damage taken
+        if mode == "owner" then
+            -- whoever shoots the owner
+            if State.Sentry or State.Sentry2 then
+                onVictimDamaged(plr, State.Sentry2)
+            end
+        elseif mode == "stand" then
+            -- whoever shoots this stand → knock+stomp
+            if State.BSentry then
+                onVictimDamaged(plr, true)
+            end
+        elseif mode == "assist" then
+            -- assist target gets same treatment as active sentry modes
+            if State.Sentry or State.Sentry2 then
+                onVictimDamaged(plr, State.Sentry2)
+            elseif State.BSentry then
+                onVictimDamaged(plr, true)
+            end
+        end
+    end)
+end
+
+local function refreshSentryWatches()
+    -- Owner
+    local owner = getOwner()
+    if owner then watchPlayerHealth(owner, "owner") end
+    -- This stand
+    watchPlayerHealth(LocalPlayer, "stand")
+    -- Assist target
+    if State.AssistName then
+        local ap = findPlayer(State.AssistName)
+        if ap then watchPlayerHealth(ap, "assist") end
+    end
 end
 
 -- One full attack cycle for loopkill (gun or knife). Called once at a time.
@@ -1834,9 +1947,10 @@ local function cmdHelp()
     print("  " .. Prefix .. "l <user>   -- loop kill")
     print("  " .. Prefix .. "lk <user>  -- loop knock")
     print("  " .. Prefix .. "unlk / knife <user>")
-    print("  " .. Prefix .. "asave on|off  -- auto save when knocked")
-    print("  " .. Prefix .. "sentry on|off / sentry2 on|off / bsentry on|off")
-    print("  " .. Prefix .. "assist <user> / unassist")
+    print("  " .. Prefix .. "sentry on|off  -- knock who shoots owner")
+    print("  " .. Prefix .. "sentry2 on|off -- knock+stomp who shoots owner")
+    print("  " .. Prefix .. "bsentry on|off -- knock+stomp who shoots stand")
+    print("  " .. Prefix .. "assist <user> / unassist  -- sentry covers that user too")
     print("  " .. Prefix .. "say <message>")
     print("  " .. Prefix .. "sweep / unsweep")
     print("  " .. Prefix .. "protect <user> / unprotect / wl / uwl")
@@ -1891,7 +2005,6 @@ local function onControlChat(msg, speaker)
     elseif cmd == "knife" then cmdKnife(a1)
     elseif cmd == "unlk" or cmd == "unloopkill" or cmd == "unl" then cmdUnLoopKill()
     -- protection
-    elseif cmd == "asave" then cmdAsave(a1)
     elseif cmd == "sentry" then cmdSentry(a1)
     elseif cmd == "sentry2" then cmdSentry2(a1)
     elseif cmd == "bsentry" then cmdBSentry(a1)
@@ -1954,21 +2067,6 @@ Connections.Main = RunService.Heartbeat:Connect(function()
         followOwner()
     end
     autoReloadTick()
-
-    -- AutoSave: respawn when knocked (debounced)
-    if State.AutoSave and not IsOwner and not State._AutoSaveBusy then
-        if isKO(LocalPlayer) then
-            State._AutoSaveBusy = true
-            task.spawn(function()
-                task.wait(0.4)
-                if State.AutoSave and isKO(LocalPlayer) then
-                    pcall(function() LocalPlayer:LoadCharacter() end)
-                end
-                task.wait(2)
-                State._AutoSaveBusy = false
-            end)
-        end
-    end
 
     -- LoopKnock: shoot only, no stomp
     if State.LoopKnock and not State.LoopKillBusy and not State.KnifeBusy then
@@ -2053,81 +2151,19 @@ Connections.Main = RunService.Heartbeat:Connect(function()
 end)
 
 ----------------------------------------------------------------------
--- SENTRY / ASSIST TOUCH WATCH
+-- SENTRY HEALTH WATCH (shot detection)
 ----------------------------------------------------------------------
-local function playerFromHit(hit)
-    if not hit then return nil end
-    local model = hit:FindFirstAncestorOfClass("Model")
-    if not model then return nil end
-    return Players:GetPlayerFromCharacter(model)
-end
-
-local function onTouchedPart(hit)
-    if State.SentryBusy then return end
-    local plr = playerFromHit(hit)
-    if not plr or plr == LocalPlayer then return end
-    if isProtected(plr) then return end
-
-    -- .sentry / .sentry2 — someone touched YOU (this character)
-    if State.Sentry or State.Sentry2 then
-        sentryReact(plr, State.Sentry2)
-        return
-    end
-
-    -- .bsentry — someone touched this stand
-    if State.BSentry then
-        sentryReact(plr, false)
-        return
-    end
-end
-
-local function hookSentryParts(char)
-    if not char then return end
-    for _, part in ipairs(char:GetDescendants()) do
-        if part:IsA("BasePart") then
-            part.Touched:Connect(onTouchedPart)
-        end
-    end
-    char.DescendantAdded:Connect(function(obj)
-        if obj:IsA("BasePart") then
-            obj.Touched:Connect(onTouchedPart)
-        end
-    end)
-end
-
--- Assist: watch another player's character for touches
 task.spawn(function()
-    local lastAssistChar = nil
     while true do
-        task.wait(0.4)
-        if not State.AssistName then
-            lastAssistChar = nil
-            continue
-        end
-        local ap = findPlayer(State.AssistName)
-        local ch = ap and getChar(ap)
-        if ch and ch ~= lastAssistChar then
-            lastAssistChar = ch
-            for _, part in ipairs(ch:GetDescendants()) do
-                if part:IsA("BasePart") then
-                    part.Touched:Connect(function(hit)
-                        if not State.AssistName then return end
-                        if State.SentryBusy then return end
-                        local plr = playerFromHit(hit)
-                        if not plr or plr == LocalPlayer or plr == ap then return end
-                        if isProtected(plr) then return end
-                        sentryReact(plr, false)
-                    end)
-                end
-            end
-        end
+        pcall(refreshSentryWatches)
+        task.wait(1.5)
     end
 end)
 
 LocalPlayer.CharacterAdded:Connect(function(char)
     task.wait(1)
     hookToolWatch(char)
-    hookSentryParts(char)
+    pcall(refreshSentryWatches)
     if Config.AutoArmor then buyArmor() end
     if Config.ArmorMax or Config.Inf then applyArmorMax() end
     if Config.AutoMask then buyMask() end
@@ -2147,7 +2183,7 @@ task.spawn(function()
             task.wait(0.8)
             local c = getChar()
             hookToolWatch(c)
-            hookSentryParts(c)
+            pcall(refreshSentryWatches)
             if not State.Armed and not isHoldingTool() then
                 applyIdleAnim()
             end
