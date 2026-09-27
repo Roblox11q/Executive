@@ -1524,17 +1524,26 @@ end
 local function cmdSentry(arg)
     State.Sentry = parseOnOff(arg, State.Sentry)
     if State.Sentry then State.Sentry2 = false end
-    notify("Sentry " .. (State.Sentry and "ON" or "OFF") .. " (knock who shoots owner)")
+    refreshSentryWatches()
+    local o = getOwner()
+    notify("Sentry " .. (State.Sentry and "ON" or "OFF")
+        .. " (knock who shoots owner)"
+        .. (State.Sentry and (o and (" | owner=" .. o.Name) or " | WARNING: no owner set") or ""))
 end
 
 local function cmdSentry2(arg)
     State.Sentry2 = parseOnOff(arg, State.Sentry2)
     if State.Sentry2 then State.Sentry = false end
-    notify("Sentry2 " .. (State.Sentry2 and "ON" or "OFF") .. " (knock+stomp who shoots owner)")
+    refreshSentryWatches()
+    local o = getOwner()
+    notify("Sentry2 " .. (State.Sentry2 and "ON" or "OFF")
+        .. " (knock+stomp who shoots owner)"
+        .. (State.Sentry2 and (o and (" | owner=" .. o.Name) or " | WARNING: no owner set") or ""))
 end
 
 local function cmdBSentry(arg)
     State.BSentry = parseOnOff(arg, State.BSentry)
+    refreshSentryWatches()
     notify("BSentry " .. (State.BSentry and "ON" or "OFF") .. " (knock+stomp who shoots stand)")
 end
 
@@ -1585,72 +1594,133 @@ end
 -- React to attacker (sentry / sentry2 / bsentry / assist)
 local function sentryReact(plr, doStomp)
     if not plr or isProtected(plr) then return end
+    if plr == LocalPlayer then return end
     if not isAlive(plr) and not isKO(plr) then return end
     if State.SentryBusy then return end
     State.SentryBusy = true
     State.Tracking = false
+    notify("Sentry → " .. plr.Name .. (doStomp and " (stomp)" or ""))
     task.spawn(function()
-        if isKO(plr) and doStomp then
-            stompTarget(plr, 10)
-        elseif isAlive(plr) then
-            shootTarget(plr)
-            local t0 = tick()
-            while tick() - t0 < 2.2 do
-                if isKO(plr) then break end
-                task.wait(0.12)
+        local ok, err = pcall(function()
+            if isKO(plr) and doStomp then
+                stompTarget(plr, 12)
+            elseif isAlive(plr) then
+                setCamlock(plr, 3)
+                setAimLock(plr)
+                shootTarget(plr)
+                local t0 = tick()
+                while tick() - t0 < 2.5 do
+                    if isKO(plr) then break end
+                    if not getChar(plr) then break end
+                    task.wait(0.12)
+                end
+                if doStomp and isKO(plr) then
+                    stompTarget(plr, 12)
+                elseif doStomp and not isKO(plr) then
+                    shootTarget(plr)
+                    task.wait(0.3)
+                    if isKO(plr) then stompTarget(plr, 10) end
+                end
             end
-            if doStomp and isKO(plr) then
-                stompTarget(plr, 10)
-            end
-        end
+        end)
+        if not ok then warn("[Stand] sentryReact:", err) end
         clearAimLock()
         clearCamlock()
         State.Tracking = true
         returnToOwner()
-        task.wait(0.35)
+        task.wait(0.25)
         State.SentryBusy = false
     end)
 end
 
--- Find who most likely shot `victim` (creator tag → nearest armed enemy looking at them)
+local function resolvePlayerFromValue(val)
+    if not val then return nil end
+    if typeof(val) == "Instance" then
+        if val:IsA("Player") then return val end
+        if val:IsA("Model") then return Players:GetPlayerFromCharacter(val) end
+        if val:IsA("ObjectValue") and val.Value then
+            return resolvePlayerFromValue(val.Value)
+        end
+    elseif type(val) == "string" then
+        return findPlayer(val)
+    elseif type(val) == "number" then
+        return Players:GetPlayerByUserId(val)
+    end
+    return nil
+end
+
+-- Find who most likely shot `victim`
 local function findAttacker(victim)
     if not victim then return nil end
+    local char = getChar(victim)
     local hum = getHum(victim)
+
+    -- 1) Creator / attacker tags on humanoid & character
     if hum then
-        for _, name in ipairs({"creator", "Creator", "LastHit", "Attacker", "Killer"}) do
-            local tag = hum:FindFirstChild(name)
-            if tag then
-                local val = tag.Value
-                if typeof(val) == "Instance" then
-                    if val:IsA("Player") then return val end
-                    if val:IsA("Model") then
-                        local p = Players:GetPlayerFromCharacter(val)
-                        if p then return p end
-                    end
+        for _, inst in ipairs(hum:GetChildren()) do
+            local n = string.lower(inst.Name)
+            if n:find("creat") or n:find("attack") or n:find("kill") or n:find("hit") or n:find("shoot") then
+                local p = resolvePlayerFromValue(inst.Value or inst)
+                if p and p ~= victim and p ~= LocalPlayer and not isProtected(p) then return p end
+            end
+        end
+    end
+    if char then
+        local be = char:FindFirstChild("BodyEffects")
+        if be then
+            for _, inst in ipairs(be:GetDescendants()) do
+                local n = string.lower(inst.Name)
+                if n:find("creat") or n:find("attack") or n:find("kill") or n:find("shoot") or n:find("last") then
+                    local p = resolvePlayerFromValue(inst.Value)
+                    if p and p ~= victim and p ~= LocalPlayer and not isProtected(p) then return p end
                 end
             end
         end
-        local be = getChar(victim) and getChar(victim):FindFirstChild("BodyEffects")
-        if be then
-            for _, name in ipairs({"Attacker", "LastAttacker", "Shooting", "Creator"}) do
-                local tag = be:FindFirstChild(name)
-                if tag and tag.Value then
-                    local val = tag.Value
-                    if typeof(val) == "Instance" then
-                        if val:IsA("Player") then return val end
-                        if val:IsA("Model") then
-                            local p = Players:GetPlayerFromCharacter(val)
-                            if p then return p end
+        for _, inst in ipairs(char:GetChildren()) do
+            local n = string.lower(inst.Name)
+            if n:find("creat") or n:find("attack") then
+                local p = resolvePlayerFromValue(inst.Value)
+                if p and p ~= victim and p ~= LocalPlayer and not isProtected(p) then return p end
+            end
+        end
+    end
+
+    -- 2) Player looking at victim with a gun equipped (most reliable fallback)
+    local vHRP = getHRP(victim)
+    if not vHRP then return nil end
+    local best, bestScore = nil, -1
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= victim and plr ~= LocalPlayer and not isProtected(plr) and isAlive(plr) then
+            local hrp = getHRP(plr)
+            local ch = getChar(plr)
+            if hrp and ch then
+                local hasTool = false
+                for _, c in ipairs(ch:GetChildren()) do
+                    if c:IsA("Tool") then hasTool = true break end
+                end
+                if hasTool then
+                    local dist = (hrp.Position - vHRP.Position).Magnitude
+                    if dist < 120 then
+                        local look = hrp.CFrame.LookVector
+                        local toVic = (vHRP.Position - hrp.Position)
+                        if toVic.Magnitude > 0.5 then
+                            local dot = look:Dot(toVic.Unit)
+                            -- prefer players facing the victim + closer
+                            local score = dot * 2 - (dist / 120)
+                            if dot > 0.35 and score > bestScore then
+                                bestScore = score
+                                best = plr
+                            end
                         end
                     end
                 end
             end
         end
     end
-    -- fallback: nearest non-protected player with a tool aimed near victim
-    local vHRP = getHRP(victim)
-    if not vHRP then return nil end
-    local best, bestDist = nil, 90
+    if best then return best end
+
+    -- 3) Closest armed player within range
+    local closest, closestD = nil, 70
     for _, plr in ipairs(Players:GetPlayers()) do
         if plr ~= victim and plr ~= LocalPlayer and not isProtected(plr) and isAlive(plr) then
             local hrp = getHRP(plr)
@@ -1662,72 +1732,88 @@ local function findAttacker(victim)
                 end
                 if hasTool then
                     local d = (hrp.Position - vHRP.Position).Magnitude
-                    if d < bestDist then
-                        bestDist = d
-                        best = plr
+                    if d < closestD then
+                        closestD = d
+                        closest = plr
                     end
                 end
             end
         end
     end
-    return best
+    return closest
 end
 
-local HealthWatch = {} -- [player] = lastHealth
+local HealthWatch = {} -- [userId] = lastHealth
+local LastSentryAt = 0
 
 local function onVictimDamaged(victim, doStomp)
     if State.SentryBusy then return end
+    if tick() - LastSentryAt < 0.6 then return end
     local attacker = findAttacker(victim)
     if attacker then
+        LastSentryAt = tick()
         sentryReact(attacker, doStomp)
+    else
+        notify("Sentry: hit detected, no attacker found")
     end
 end
 
-local function watchPlayerHealth(plr, mode)
-    -- mode: "owner" | "stand" | "assist"
-    if not plr then return end
-    local hum = getHum(plr)
-    if not hum then return end
-    local key = plr.UserId
-    HealthWatch[key] = hum.Health
-    if Connections["hp_" .. key] then
-        pcall(function() Connections["hp_" .. key]:Disconnect() end)
-    end
-    Connections["hp_" .. key] = hum.HealthChanged:Connect(function(hp)
-        local prev = HealthWatch[key] or hp
-        HealthWatch[key] = hp
-        if hp >= prev then return end -- only care about damage taken
-        if mode == "owner" then
-            -- whoever shoots the owner
-            if State.Sentry or State.Sentry2 then
-                onVictimDamaged(plr, State.Sentry2)
-            end
-        elseif mode == "stand" then
-            -- whoever shoots this stand → knock+stomp
-            if State.BSentry then
-                onVictimDamaged(plr, true)
-            end
-        elseif mode == "assist" then
-            -- assist target gets same treatment as active sentry modes
-            if State.Sentry or State.Sentry2 then
-                onVictimDamaged(plr, State.Sentry2)
-            elseif State.BSentry then
-                onVictimDamaged(plr, true)
-            end
+-- Poll health every frame (HealthChanged on other players is unreliable)
+local function sentryTick()
+    if IsOwner then return end
+    if State.SentryBusy then return end
+    if not (State.Sentry or State.Sentry2 or State.BSentry or State.AssistName) then return end
+
+    local function check(plr, doStomp)
+        if not plr then return end
+        local hum = getHum(plr)
+        if not hum then return end
+        local key = plr.UserId
+        local hp = hum.Health
+        local prev = HealthWatch[key]
+        if prev == nil then
+            HealthWatch[key] = hp
+            return
         end
-    end)
+        -- damage taken (ignore tiny regen noise)
+        if hp < prev - 1 then
+            HealthWatch[key] = hp
+            onVictimDamaged(plr, doStomp)
+        elseif hp > prev then
+            HealthWatch[key] = hp -- healed / respawned
+        end
+    end
+
+    local owner = getOwner()
+    if owner and (State.Sentry or State.Sentry2) then
+        check(owner, State.Sentry2)
+    end
+    if State.BSentry then
+        check(LocalPlayer, true)
+    end
+    if State.AssistName and (State.Sentry or State.Sentry2 or State.BSentry) then
+        local ap = findPlayer(State.AssistName)
+        if ap then
+            local stomp = State.Sentry2 or State.BSentry
+            check(ap, stomp)
+        end
+    end
 end
 
 local function refreshSentryWatches()
-    -- Owner
+    -- reset baselines so we don't false-trigger after respawn
     local owner = getOwner()
-    if owner then watchPlayerHealth(owner, "owner") end
-    -- This stand
-    watchPlayerHealth(LocalPlayer, "stand")
-    -- Assist target
+    if owner and getHum(owner) then
+        HealthWatch[owner.UserId] = getHum(owner).Health
+    end
+    if getHum(LocalPlayer) then
+        HealthWatch[LocalPlayer.UserId] = getHum(LocalPlayer).Health
+    end
     if State.AssistName then
         local ap = findPlayer(State.AssistName)
-        if ap then watchPlayerHealth(ap, "assist") end
+        if ap and getHum(ap) then
+            HealthWatch[ap.UserId] = getHum(ap).Health
+        end
     end
 end
 
@@ -2067,6 +2153,7 @@ Connections.Main = RunService.Heartbeat:Connect(function()
         followOwner()
     end
     autoReloadTick()
+    pcall(sentryTick)
 
     -- LoopKnock: shoot only, no stomp
     if State.LoopKnock and not State.LoopKillBusy and not State.KnifeBusy then
