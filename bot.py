@@ -1010,12 +1010,7 @@ async def on_ready():
     except Exception as e:
         print("Sync error:", e)
     print(f"Logged in as {bot.user}")
-    await bot.change_presence(
-        activity=discord.Activity(
-            type=discord.ActivityType.watching,
-            name="Executive Stand",
-        )
-    )
+    await _set_discord_presence_for_status(get_system_status())
     print(f"Buyer role: {BUYER_ROLE_ID} | Supabase: {'yes' if supabase else 'NO'}")
     print(f"System status: {get_system_status()} | maintenance_block={is_maintenance()}")
     # Refresh status channel from persisted state (do NOT force online — keep maintenance locks)
