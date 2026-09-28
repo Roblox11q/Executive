@@ -2165,9 +2165,15 @@ local function hookBSentryLocal()
             if not State.BSentry then return end
             if hp < last - 0.5 or isKO(LocalPlayer) then
                 last = hp
-                -- immediate reaction on local damage (most reliable)
+                -- explicit stand-defense: detect who hit us, then punish that attacker
                 task.defer(function()
                     if State.SentryBusy then return end
+                    local attacker = findAttacker(LocalPlayer)
+                    if attacker then
+                        notify("BSentry → " .. attacker.Name .. " (detected shooter)")
+                        sentryReact(attacker, true)
+                        return
+                    end
                     onVictimDamaged(LocalPlayer, true)
                 end)
             else
@@ -2672,7 +2678,7 @@ local function cmdMask()
 end
 
 local function cmdFix()
-    -- Full reset: stop all modes, clear tools, respawn character, return to formation
+    -- Full reset: stop combat, force a hard character reset, then return to formation
     clearCamlock()
     State.LoopKill = nil
     State.LoopKillKnife = false
@@ -2683,7 +2689,7 @@ local function cmdFix()
     State.KnifeBusy = false
     State.SentryBusy = false
     State.InVoid = false
-    State.Tracking = false  -- pause formation until respawn finishes
+    State.Tracking = false
     State.Armed = false
     setAttacking(false)
 
@@ -2700,9 +2706,23 @@ local function cmdFix()
         end
     end)
 
-    -- hard respawn
-    pcall(function()
-        LocalPlayer:LoadCharacter()
+    -- Force-reset the character so stuck/bugged states recover cleanly
+    task.spawn(function()
+        pcall(function()
+            local char = LocalPlayer.Character
+            if char then
+                local hum = char:FindFirstChildOfClass("Humanoid")
+                if hum then
+                    hum.Health = 0
+                end
+                char:BreakJoints()
+            end
+        end)
+
+        task.wait(0.2)
+        pcall(function()
+            LocalPlayer:LoadCharacter()
+        end)
     end)
 
     task.spawn(function()
@@ -2712,7 +2732,6 @@ local function cmdFix()
             task.wait(0.15)
         end
         task.wait(0.35)
-        -- re-apply perks after respawn
         if Config.AutoArmor then pcall(buyArmor) end
         if Config.ArmorMax or Config.Inf then pcall(applyArmorMax) end
         if Config.AutoMask then pcall(buyMask) end
@@ -2720,7 +2739,7 @@ local function cmdFix()
         if not IsOwner then
             returnToOwner()
         end
-        notify("Fix - respawned")
+        notify("Fix - forced respawn")
     end)
 end
 
