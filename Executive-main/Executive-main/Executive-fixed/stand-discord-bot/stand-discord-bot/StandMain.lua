@@ -1134,8 +1134,8 @@ local function enterCombatVoid()
     State.Tracking = false
     _voidEnterBusy = true
     local now = tick()
-    VoidRecoverUntil = now + 4.0   -- max time in void
-    VoidMinUntil = now + 1.8      -- MUST stay at least this long (food needs time)
+    VoidRecoverUntil = now + 3.0   -- max time in void then forced return
+    VoidMinUntil = now + 1.2      -- MUST stay at least this long (food needs time)
     VoidBloodAtEnter = getLocalBlood()
 
     clearCamlock()
@@ -1187,9 +1187,28 @@ local function exitCombatVoid()
         if h then
             h.PlatformStand = false
             h.Sit = false
+            h:ChangeState(Enum.HumanoidStateType.GettingUp)
             h:ChangeState(Enum.HumanoidStateType.Running)
         end
     end)
+    -- Resume combat if still fighting, otherwise return to owner
+    if State.CombatActive and (State.LoopKill or State.LoopKnock or State.SentryBusy) then
+        -- stay in combat mode; loop/sentry will continue next tick
+        State.Tracking = false
+        notify("Combat resume")
+    elseif State.CombatActive then
+        -- one-shot combat still active (knock/stomp mid-flight) — leave tracking off
+        notify("Combat resume")
+    else
+        State.Tracking = true
+        notify("Healed — back")
+        task.spawn(function()
+            task.wait(0.05)
+            if not State.CombatActive and not State.VoidEat then
+                pcall(returnToOwner)
+            end
+        end)
+    end
 end
 
 -- Fast orbit strafe around target (call every shot / frame)
@@ -1232,10 +1251,12 @@ local function endCombat()
     end)
 end
 
--- If shot during combat → void + eat, then resume when min time passed + (healed or timeout)
+-- If shot during combat → void + eat, then ALWAYS leave void and resume combat
 local function combatSurviveTick()
-    if not State.CombatActive or IsOwner then return end
+    if IsOwner then return end
 
+    -- CRITICAL: always process void recovery even if CombatActive became false,
+    -- otherwise the stand gets permanently stuck in void.
     if State.VoidEat then
         pinToVoid()
 
@@ -1246,7 +1267,6 @@ local function combatSurviveTick()
                 if findFood() then
                     eatFood()
                 end
-                -- remotes only if no tool
                 if not findFood() and MainEvent then
                     for _, n in ipairs({"Eat", "Eating", "BuyChicken", "Chicken"}) do
                         pcall(function() MainEvent:FireServer(n) end)
@@ -1257,21 +1277,25 @@ local function combatSurviveTick()
         end
 
         local now = tick()
+        -- safety: if timers were wiped, force exit soon
+        if VoidMinUntil == 0 then VoidMinUntil = now + 1.0 end
+        if VoidRecoverUntil == 0 then VoidRecoverUntil = now + 2.5 end
+
         local minDone = now >= VoidMinUntil
         local maxDone = now >= VoidRecoverUntil
 
-        -- Only exit after minimum time. Prefer real blood recovery (higher than enter).
+        -- Healed = no longer hurt (blood/hp recovered or full health bar)
         local healed = false
         if minDone then
-            local blood = getLocalBlood()
-            if blood ~= nil and VoidBloodAtEnter ~= nil then
-                -- real recovery: blood went up meaningfully from enter snapshot
-                if blood >= 95 or blood > (VoidBloodAtEnter + 15) then
+            if not getLocalHurt() then
+                healed = true
+            else
+                local blood = getLocalBlood()
+                if blood ~= nil and blood >= 95 then
                     healed = true
                 end
-            else
                 local hum = getHum()
-                if hum and not isKO(LocalPlayer) and hum.Health >= hum.MaxHealth * 0.95 then
+                if hum and not isKO(LocalPlayer) and hum.Health >= hum.MaxHealth * 0.92 then
                     healed = true
                 end
             end
@@ -1279,19 +1303,13 @@ local function combatSurviveTick()
 
         if (minDone and healed) or maxDone then
             exitCombatVoid()
-            local h = getHum()
-            if h then
-                pcall(function()
-                    h.PlatformStand = false
-                    h.Sit = false
-                    h:ChangeState(Enum.HumanoidStateType.Running)
-                end)
-            end
         end
         return
     end
 
-    -- Not voiding yet — detect damage
+    -- Only enter void when actively in combat
+    if not State.CombatActive then return end
+
     if getLocalHurt() and not _voidEnterBusy then
         _voidEnterBusy = true
         notify("Combat void — eating")
