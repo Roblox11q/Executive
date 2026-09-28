@@ -196,10 +196,13 @@ def set_user_cfg(discord_id, cfg: dict) -> None:
     if not supabase:
         print("set_user_cfg skipped - no supabase")
         return
-    payload = {"discord_id": key, "config": cfg}
+    payload = {
+        "discord_id": key,
+        "config": cfg,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
     try:
-        # upsert by primary key
-        supabase.table(TABLE).upsert(payload).execute()
+        supabase.table(TABLE).upsert(payload, on_conflict="discord_id").execute()
     except Exception as e:
         print("set_user_cfg error:", e)
 
@@ -660,7 +663,9 @@ def set_blacklist(discord_id, reason: str, by_id: int) -> None:
                 "discord_id": str(discord_id),
                 "reason": reason or "",
                 "by": str(by_id),
-            }
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            },
+            on_conflict="discord_id",
         ).execute()
     except Exception as e:
         print("set_blacklist error:", e)
@@ -717,7 +722,7 @@ def _status_channel_name(status: str) -> str:
 
 
 async def _set_discord_presence_for_status(status: str) -> None:
-    """Map the bot's system status to the correct Discord presence state."""
+    """Map the bot's system status to the correct Discord presence and activity text."""
     normalized = (status or "up").lower().strip()
     presence_map = {
         "up": discord.Status.online,
@@ -725,10 +730,17 @@ async def _set_discord_presence_for_status(status: str) -> None:
         "updating": discord.Status.idle,
         "detected": discord.Status.idle,
     }
+    activity_map = {
+        "up": "Watching Executive Stand",
+        "down": "Executive Stand is Offline",
+        "updating": "Executive Stand is Updating",
+        "detected": "Executive Stand Detected",
+    }
     target_status = presence_map.get(normalized, discord.Status.online)
+    activity_name = activity_map.get(normalized, "Watching Executive Stand")
     activity = discord.Activity(
         type=discord.ActivityType.watching,
-        name="Executive Stand",
+        name=activity_name,
     )
     await bot.change_presence(status=target_status, activity=activity)
 
