@@ -2678,8 +2678,9 @@ local function cmdMask()
 end
 
 local function cmdFix()
-    -- Force a real reset by killing the humanoid, which triggers Roblox respawn.
+    -- Hard client-side reset that actually kills + respawns the character
     clearCamlock()
+    clearAimLock()
     State.LoopKill = nil
     State.LoopKillKnife = false
     State.LoopKnock = nil
@@ -2689,42 +2690,96 @@ local function cmdFix()
     State.KnifeBusy = false
     State.SentryBusy = false
     State.InVoid = false
+    State.VoidEat = false
     State.Tracking = false
     State.Armed = false
+    State.CombatActive = false
+    State.CombatTarget = nil
     setAttacking(false)
 
     pcall(function()
-        local h = getHum()
-        if h then
-            h.PlatformStand = false
-            h.Sit = false
-            h.WalkSpeed = 16
-            h.JumpPower = 50
-            h.JumpHeight = 7.2
-            h:ChangeState(Enum.HumanoidStateType.GettingUp)
-            h:UnequipTools()
-            h.Health = 0
+        RunService:UnbindFromRenderStep("StandVoidPin")
+        RunService:UnbindFromRenderStep(CAM_BIND)
+    end)
+
+    local char = getChar()
+    local hum = getHum()
+
+      -- 1) Clear hood KO / ragdoll flags then force death
+    pcall(function()
+        if char then
+            local be = char:FindFirstChild("BodyEffects")
+            if be then
+                for _, name in ipairs({"K.O", "KO", "Knocked", "IsKnocked", "Downed", "Dead", "Death"}) do
+                    local v = be:FindFirstChild(name)
+                    if v then
+                        if typeof(v.Value) == "boolean" then v.Value = true end
+                        if typeof(v.Value) == "number" then v.Value = 1 end
+                    end
+                end
+            end
+        end
+        if hum then
+            hum.PlatformStand = false
+            hum.Sit = false
+            hum.WalkSpeed = 16
+            hum.JumpPower = 50
+            hum.JumpHeight = 7.2
+            hum:UnequipTools()
+            hum:ChangeState(Enum.HumanoidStateType.Dead)
+            hum.Health = 0
         end
     end)
 
+    -- 2) Break joints (most reliable client-side kill on hood games)
+    pcall(function()
+        if char then
+            char:BreakJoints()
+        end
+    end)
+
+    -- 3) Extra force: destroy HumanoidRootPart if still alive after a short wait
     task.spawn(function()
+        task.wait(0.15)
+        local still = getChar()
+        local stillHum = still and still:FindFirstChildOfClass("Humanoid")
+        if still and stillHum and stillHum.Health > 0 then
+            pcall(function()
+                stillHum.Health = 0
+                still:BreakJoints()
+                local hrp = still:FindFirstChild("HumanoidRootPart")
+                if hrp then hrp:Destroy() end
+            end)
+        end
+    end)
+
+    -- Wait for real respawn, then restore stand state
+    task.spawn(function()
+        local oldChar = char
         local t0 = tick()
-        while tick() - t0 < 8 do
+        while tick() - t0 < 10 do
             local c = LocalPlayer.Character
             local h = c and c:FindFirstChildOfClass("Humanoid")
-            if c and h and h.Health > 0 then break end
-            task.wait(0.15)
+            -- New character must exist, be alive, and not be the old one
+            if c and c ~= oldChar and h and h.Health > 0 then
+                break
+            end
+            task.wait(0.1)
         end
 
-        task.wait(0.5)
+        task.wait(0.6)
+
+        -- Re-apply perks on the fresh character
         if Config.AutoArmor then pcall(buyArmor) end
         if Config.ArmorMax or Config.Inf then pcall(applyArmorMax) end
         if Config.AutoMask then pcall(buyMask) end
+        if Config.Muscle then pcall(applyMuscle) end
+
         State.Tracking = true
         if not IsOwner then
             returnToOwner()
         end
-        notify("Fix - reset by humanoid death")
+        notify("Fix — character reset")
     end)
 end
 
