@@ -1460,23 +1460,36 @@ async def status_cmd(
 ):
     if not await staff_check(interaction):
         return
-    await interaction.response.defer(ephemeral=True)
-    err = await update_status_channel(
-        state.value,
-        note=note or "",
-        by=interaction.user,
-        announce=True,
-    )
-    if err:
-        await interaction.followup.send(f"Failed: {err}", ephemeral=True)
-        return
-    dot = STATUS_DOTS.get(state.value, "")
-    label = STATUS_LABELS.get(state.value, state.value)
-    await interaction.followup.send(
-        f"Status set to {dot} **{label}** (`{state.value}`).\n"
-        f"Channel <#{STATUS_CHANNEL_ID}> updated.",
-        ephemeral=True,
-    )
+    try:
+        await interaction.response.defer(ephemeral=True)
+        try:
+            err = await update_status_channel(
+                state.value,
+                note=note or "",
+                by=interaction.user,
+                announce=True,
+            )
+        except Exception as exc:
+            err = f"Status update crashed: {exc}"
+        if err:
+            await interaction.followup.send(f"Failed: {err}", ephemeral=True)
+            return
+        dot = STATUS_DOTS.get(state.value, "")
+        label = STATUS_LABELS.get(state.value, state.value)
+        await interaction.followup.send(
+            f"Status set to {dot} **{label}** (`{state.value}`).\n"
+            f"Channel <#{STATUS_CHANNEL_ID}> updated.",
+            ephemeral=True,
+        )
+    except Exception as exc:
+        print("status command fatal error:", exc)
+        try:
+            await interaction.followup.send(
+                "Status command failed unexpectedly. Check the bot logs.",
+                ephemeral=True,
+            )
+        except Exception:
+            pass
 
 
 @bot.tree.command(
@@ -1500,40 +1513,59 @@ async def changelog_cmd(
 ):
     if not await staff_check(interaction):
         return
-    await interaction.response.defer(ephemeral=True)
+    try:
+        await interaction.response.defer(ephemeral=True)
 
-    if set_updating:
-        await update_status_channel(
-            "updating",
-            note=f"Deploying: {title}",
-            by=interaction.user,
-            announce=True,
+        if set_updating:
+            try:
+                await update_status_channel(
+                    "updating",
+                    note=f"Deploying: {title}",
+                    by=interaction.user,
+                    announce=True,
+                )
+            except Exception as exc:
+                print("changelog set_updating status error:", exc)
+
+        try:
+            err = await post_changelog(
+                title=title,
+                notes=notes,
+                version=version or "",
+                by=interaction.user,
+            )
+        except Exception as exc:
+            err = f"Changelog crashed: {exc}"
+        if err:
+            await interaction.followup.send(f"Changelog failed: {err}", ephemeral=True)
+            return
+
+        if set_up_after:
+            try:
+                await update_status_channel(
+                    "up",
+                    note=f"Update live: {title}",
+                    by=interaction.user,
+                    announce=True,
+                )
+            except Exception as exc:
+                print("changelog reset status error:", exc)
+
+        await interaction.followup.send(
+            f"Changelog posted in <#{CHANGELOG_CHANNEL_ID}>.\n"
+            f"Title: **{title}**"
+            + (f" (`{version}`)" if version else ""),
+            ephemeral=True,
         )
-
-    err = await post_changelog(
-        title=title,
-        notes=notes,
-        version=version or "",
-        by=interaction.user,
-    )
-    if err:
-        await interaction.followup.send(f"Changelog failed: {err}", ephemeral=True)
-        return
-
-    if set_up_after:
-        await update_status_channel(
-            "up",
-            note=f"Update live: {title}",
-            by=interaction.user,
-            announce=True,
-        )
-
-    await interaction.followup.send(
-        f"Changelog posted in <#{CHANGELOG_CHANNEL_ID}>.\n"
-        f"Title: **{title}**"
-        + (f" (`{version}`)" if version else ""),
-        ephemeral=True,
-    )
+    except Exception as exc:
+        print("changelog command fatal error:", exc)
+        try:
+            await interaction.followup.send(
+                "Changelog command failed unexpectedly. Check the bot logs.",
+                ephemeral=True,
+            )
+        except Exception:
+            pass
 
 
 async def _start_http():
