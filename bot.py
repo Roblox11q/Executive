@@ -6,7 +6,7 @@ import hashlib
 import json
 import os
 import tempfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -1569,6 +1569,172 @@ async def updates_cmd(interaction: discord.Interaction):
         color=0xB45AFF,
     )
     await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+@bot.tree.command(
+    name="purge",
+    description="[Staff] Delete the last N messages in this channel",
+)
+@app_commands.describe(count="Number of messages to delete (1-100)")
+async def purge_cmd(
+    interaction: discord.Interaction,
+    count: app_commands.Range[int, 1, 100],
+):
+    if not await staff_check(interaction):
+        return
+    if not isinstance(interaction.channel, discord.TextChannel):
+        await interaction.response.send_message("This command only works in text channels.", ephemeral=True)
+        return
+    try:
+        await interaction.response.defer(ephemeral=True)
+        deleted = await interaction.channel.purge(limit=count)
+        await interaction.followup.send(f"Deleted **{len(deleted)}** messages.", ephemeral=True)
+    except Exception as exc:
+        print("purge command error:", exc)
+        try:
+            await interaction.followup.send(f"Purge failed: {exc}", ephemeral=True)
+        except Exception:
+            pass
+
+
+@bot.tree.command(
+    name="lockchannel",
+    description="[Staff] Lock the current channel so only staff can send messages",
+)
+async def lockchannel_cmd(interaction: discord.Interaction):
+    if not await staff_check(interaction):
+        return
+    if interaction.guild is None or not isinstance(interaction.channel, discord.TextChannel):
+        await interaction.response.send_message("This command must be used in a server text channel.", ephemeral=True)
+        return
+    try:
+        overwrite = interaction.channel.overwrites_for(interaction.guild.default_role)
+        overwrite.send_messages = False
+        await interaction.channel.set_permissions(
+            interaction.guild.default_role,
+            send_messages=False,
+            reason=f"Locked by {interaction.user}",
+        )
+        await interaction.response.send_message(f"Locked **#{interaction.channel.name}** for staff only.", ephemeral=True)
+    except Exception as exc:
+        print("lockchannel command error:", exc)
+        await interaction.response.send_message(f"Lock failed: {exc}", ephemeral=True)
+
+
+@bot.tree.command(
+    name="unlockchannel",
+    description="[Staff] Unlock the current channel for everyone again",
+)
+async def unlockchannel_cmd(interaction: discord.Interaction):
+    if not await staff_check(interaction):
+        return
+    if interaction.guild is None or not isinstance(interaction.channel, discord.TextChannel):
+        await interaction.response.send_message("This command must be used in a server text channel.", ephemeral=True)
+        return
+    try:
+        await interaction.channel.set_permissions(
+            interaction.guild.default_role,
+            send_messages=None,
+            reason=f"Unlocked by {interaction.user}",
+        )
+        await interaction.response.send_message(f"Unlocked **#{interaction.channel.name}**.", ephemeral=True)
+    except Exception as exc:
+        print("unlockchannel command error:", exc)
+        await interaction.response.send_message(f"Unlock failed: {exc}", ephemeral=True)
+
+
+@bot.tree.command(
+    name="mute",
+    description="[Staff] Mute a user for a number of minutes",
+)
+@app_commands.describe(user="User to mute", minutes="Mute length in minutes", reason="Reason")
+async def mute_cmd(
+    interaction: discord.Interaction,
+    user: discord.Member,
+    minutes: app_commands.Range[int, 1, 10080],
+    reason: str = "No reason",
+):
+    if not await staff_check(interaction):
+        return
+    if user.id == interaction.user.id:
+        await interaction.response.send_message("You cannot mute yourself.", ephemeral=True)
+        return
+    if interaction.guild is None:
+        await interaction.response.send_message("This command only works in a server.", ephemeral=True)
+        return
+    try:
+        timeout_until = datetime.now(timezone.utc) + timedelta(minutes=minutes)
+        await user.timeout(timeout_until, reason=reason)
+        await interaction.response.send_message(
+            f"Muted **{user.display_name}** for **{minutes}** minute(s).\nReason: {reason}",
+            ephemeral=True,
+        )
+    except Exception as exc:
+        print("mute command error:", exc)
+        await interaction.response.send_message(f"Mute failed: {exc}", ephemeral=True)
+
+
+@bot.tree.command(
+    name="unmute",
+    description="[Staff] Remove a mute from a user",
+)
+@app_commands.describe(user="User to unmute", reason="Reason")
+async def unmute_cmd(
+    interaction: discord.Interaction,
+    user: discord.Member,
+    reason: str = "No reason",
+):
+    if not await staff_check(interaction):
+        return
+    try:
+        await user.remove_timeout(reason=reason)
+        await interaction.response.send_message(f"Unmuted **{user.display_name}**.", ephemeral=True)
+    except Exception as exc:
+        print("unmute command error:", exc)
+        await interaction.response.send_message(f"Unmute failed: {exc}", ephemeral=True)
+
+
+@bot.tree.command(
+    name="ban",
+    description="[Staff] Ban a user from the server",
+)
+@app_commands.describe(user="User to ban", reason="Reason")
+async def ban_cmd(
+    interaction: discord.Interaction,
+    user: discord.User,
+    reason: str = "No reason",
+):
+    if not await staff_check(interaction):
+        return
+    if interaction.guild is None:
+        await interaction.response.send_message("This command only works in a server.", ephemeral=True)
+        return
+    try:
+        await interaction.guild.ban(user, reason=reason, delete_message_days=0)
+        await interaction.response.send_message(f"Banned **{user}**.\nReason: {reason}", ephemeral=True)
+    except Exception as exc:
+        print("ban command error:", exc)
+        await interaction.response.send_message(f"Ban failed: {exc}", ephemeral=True)
+
+
+@bot.tree.command(
+    name="kick",
+    description="[Staff] Kick a user from the server",
+)
+@app_commands.describe(user="User to kick", reason="Reason")
+async def kick_cmd(
+    interaction: discord.Interaction,
+    user: discord.Member,
+    reason: str = "No reason",
+):
+    if not await staff_check(interaction):
+        return
+    try:
+        await user.kick(reason=reason)
+        await interaction.response.send_message(f"Kicked **{user.display_name}**.\nReason: {reason}", ephemeral=True)
+    except Exception as exc:
+        print("kick command error:", exc)
+        await interaction.response.send_message(f"Kick failed: {exc}", ephemeral=True)
 
 
 @bot.tree.command(
