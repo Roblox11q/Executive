@@ -78,19 +78,63 @@ _WATCHED_FILES = ("bot.py", "StandMain.lua", "requirements.txt", "render.yaml")
 # Track last status (persisted so restarts keep maintenance lock)
 _current_status: str = "up"
 _status_note: str = ""
+_status_file_loaded = False
 
 
 def _load_persisted_status() -> None:
-    global _current_status, _status_note
+    global _current_status, _status_note, _status_file_loaded
     try:
         if STATUS_FILE.is_file():
             data = json.loads(STATUS_FILE.read_text(encoding="utf-8"))
+            _status_file_loaded = True
             st = str(data.get("status") or "up").lower().strip()
             if st in STATUS_DOTS:
                 _current_status = st
             _status_note = str(data.get("note") or "")
     except Exception as e:
         print("load status file error:", e)
+
+
+def _load_status_from_supabase() -> bool:
+    global _current_status, _status_note
+    if not supabase:
+        return False
+    try:
+        result = (
+            supabase.table("stand_status")
+            .select("status,note")
+            .eq("id", "current")
+            .limit(1)
+            .execute()
+        )
+        if not result.data:
+            return False
+        data = result.data[0]
+        status = str(data.get("status") or "up").lower().strip()
+        if status in STATUS_DOTS:
+            _current_status = status
+        _status_note = str(data.get("note") or "")
+        return True
+    except Exception as e:
+        print("load status from Supabase error:", e)
+        return False
+
+
+def _save_status_to_supabase() -> None:
+    if not supabase:
+        return
+    try:
+        supabase.table("stand_status").upsert(
+            {
+                "id": "current",
+                "status": _current_status,
+                "note": _status_note,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            },
+            on_conflict="id",
+        ).execute()
+    except Exception as e:
+        print("save status to Supabase error:", e)
 
 
 def _save_persisted_status() -> None:
@@ -109,6 +153,7 @@ def _save_persisted_status() -> None:
         )
     except Exception as e:
         print("save status file error:", e)
+    _save_status_to_supabase()
 
 
 def get_system_status() -> str:
@@ -1172,13 +1217,17 @@ async def auto_changelog_on_deploy() -> None:
 
 @bot.event
 async def on_ready():
+    print(f"Logged in as {bot.user}")
+    if _status_file_loaded:
+        _save_status_to_supabase()
+    else:
+        _load_status_from_supabase()
+    await _set_discord_presence_for_status(get_system_status())
     try:
         synced = await bot.tree.sync()
         print(f"Synced {len(synced)} commands")
     except Exception as e:
         print("Sync error:", e)
-    print(f"Logged in as {bot.user}")
-    await _set_discord_presence_for_status(get_system_status())
     print(f"Buyer role: {BUYER_ROLE_ID} | Supabase: {'yes' if supabase else 'NO'}")
     print(f"System status: {get_system_status()} | maintenance_block={is_maintenance()}")
     # Refresh status channel from persisted state (do NOT force online — keep maintenance locks)
