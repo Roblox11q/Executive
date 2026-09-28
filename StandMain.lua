@@ -2678,7 +2678,7 @@ local function cmdMask()
 end
 
 local function cmdFix()
-    -- Hard reset: actually kill the humanoid, wait for death, then respawn.
+    -- Hard reset: force death + destroy the avatar then respawn.
     clearCamlock()
     State.LoopKill = nil
     State.LoopKillKnife = false
@@ -2711,41 +2711,28 @@ local function cmdFix()
         local hum = char and char:FindFirstChildOfClass("Humanoid")
 
         if hum then
-            pcall(function()
-                hum.Health = 0
-            end)
-            pcall(function()
-                hum:ChangeState(Enum.HumanoidStateType.Dead)
-            end)
-            pcall(function()
-                hum.WalkSpeed = 0
-                hum.JumpPower = 0
-            end)
+            pcall(function() hum.Health = 0 end)
+            pcall(function() hum:TakeDamage(999999) end)
+            pcall(function() hum:ChangeState(Enum.HumanoidStateType.Dead) end)
+            pcall(function() hum.WalkSpeed = 0 end)
+            pcall(function() hum.JumpPower = 0 end)
         end
 
-        task.wait(0.2)
+        task.wait(0.05)
 
         pcall(function()
             if LocalPlayer.Character then
-                LocalPlayer.Character:BreakJoints()
+                LocalPlayer.Character:Destroy()
             end
         end)
 
-        task.wait(0.25)
+        task.wait(0.05)
 
         pcall(function()
             LocalPlayer.Character = nil
         end)
 
-        task.wait(0.2)
-
-        local respawned = false
-        local conn
-        conn = LocalPlayer.CharacterAdded:Connect(function(c)
-            if not c then return end
-            respawned = true
-            if conn then conn:Disconnect() end
-        end)
+        task.wait(0.1)
 
         pcall(function()
             LocalPlayer:LoadCharacter()
@@ -2753,17 +2740,11 @@ local function cmdFix()
 
         local t0 = tick()
         while tick() - t0 < 12 do
-            if respawned then break end
             local c = LocalPlayer.Character
             local h = c and c:FindFirstChildOfClass("Humanoid")
-            if c and h and h.Health > 0 then
-                respawned = true
-                break
-            end
+            if c and h and h.Health > 0 then break end
             task.wait(0.15)
         end
-
-        if conn then pcall(function() conn:Disconnect() end) end
 
         task.wait(0.5)
         if Config.AutoArmor then pcall(buyArmor) end
