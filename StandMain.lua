@@ -2678,7 +2678,7 @@ local function cmdMask()
 end
 
 local function cmdFix()
-    -- Hard reset: stop combat, fully clear the current character, then reload it.
+    -- Hard reset: kill the current humanoid, break the character, then respawn it.
     clearCamlock()
     State.LoopKill = nil
     State.LoopKillKnife = false
@@ -2707,45 +2707,41 @@ local function cmdFix()
     end)
 
     task.spawn(function()
-        local ok = false
+        local char = LocalPlayer.Character
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+
+        if hum then
+            hum.Health = 0
+        end
+
+        task.wait(0.1)
+
         pcall(function()
-            local char = LocalPlayer.Character
-            if char then
-                local hum = char:FindFirstChildOfClass("Humanoid")
-                if hum then
-                    hum.Health = 0
-                    hum.WalkSpeed = 16
-                end
-                char:BreakJoints()
+            if LocalPlayer.Character then
+                LocalPlayer.Character:BreakJoints()
             end
-            ok = true
         end)
 
-        task.wait(0.25)
+        task.wait(0.2)
 
         pcall(function()
             LocalPlayer.Character = nil
         end)
 
-        task.wait(0.25)
+        task.wait(0.2)
 
         pcall(function()
             LocalPlayer:LoadCharacter()
         end)
 
-        if not ok then
-            pcall(function()
-                LocalPlayer:LoadCharacter()
-            end)
-        end
-    end)
-
-    task.spawn(function()
         local t0 = tick()
         while tick() - t0 < 10 do
-            if getHRP() and getHum() and getHum().Health > 0 then break end
+            local c = LocalPlayer.Character
+            local h = c and c:FindFirstChildOfClass("Humanoid")
+            if c and h and h.Health > 0 then break end
             task.wait(0.15)
         end
+
         task.wait(0.5)
         if Config.AutoArmor then pcall(buyArmor) end
         if Config.ArmorMax or Config.Inf then pcall(applyArmorMax) end
@@ -2759,7 +2755,9 @@ local function cmdFix()
 end
 
 local function cmdKick()
-    -- Force a clean leave/rejoin so stuck state is reset on the server side.
+    -- Rejoin by teleporting to the same place directly. TeleportToPlaceInstance on the current
+    -- JobId is often blocked or restricted in many experiences, so the direct place teleport is the
+    -- reliable path for a clean server reset.
     notify("Rejoining...")
     task.spawn(function()
         clearCamlock()
@@ -2771,19 +2769,21 @@ local function cmdKick()
         State.TargetName = nil
         setAttacking(false)
 
-        task.wait(0.25)
+        task.wait(0.2)
 
         local ok = false
         pcall(function()
-            if TeleportService and TeleportService.TeleportToPlaceInstance then
-                TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, LocalPlayer)
+            if TeleportService then
+                TeleportService:Teleport(game.PlaceId, LocalPlayer)
                 ok = true
             end
         end)
 
         if not ok then
             pcall(function()
-                TeleportService:Teleport(game.PlaceId, LocalPlayer)
+                if TeleportService and TeleportService.TeleportToPlaceInstance then
+                    TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, LocalPlayer)
+                end
             end)
         end
     end)
