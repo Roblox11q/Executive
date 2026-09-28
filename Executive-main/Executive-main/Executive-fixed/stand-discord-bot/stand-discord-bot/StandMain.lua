@@ -1087,6 +1087,7 @@ local VoidMinUntil = 0       -- hard minimum time in void before any exit
 local VoidBloodAtEnter = nil -- blood snapshot when we entered (ignore client writes)
 local _voidEnterBusy = false
 local _lastVoidEatAt = 0
+local _voidCooldownUntil = 0 -- prevent instant re-void after exit
 
 local function pinToVoid()
     local hrp = getHRP()
@@ -1172,6 +1173,53 @@ local function enterCombatVoid()
     end
 end
 
+local function getCombatReturnCF()
+    -- Prefer current fight target, else owner formation
+    local targetName = State.LoopKill or State.LoopKnock or State.TargetName
+    if targetName then
+        local plr = findPlayer(targetName)
+        local their = plr and getHRP(plr)
+        if their then
+            return their.CFrame * CFrame.new(0, 2, 6)
+        end
+    end
+    local owner = getOwner()
+    local oHRP = owner and getHRP(owner)
+    if oHRP then
+        local offset = SLOT_CF[MySlot] or SLOT_CF[2]
+        return oHRP.CFrame * offset
+    end
+    -- last resort: above origin so we leave void coords
+    return CFrame.new(0, 50, 0)
+end
+
+local function warpOutOfVoid()
+    local cf = getCombatReturnCF()
+    for _ = 1, 8 do
+        if State.VoidEat then return end
+        pcall(function()
+            local h = getHum()
+            if h then
+                h.PlatformStand = false
+                h.Sit = false
+                h:ChangeState(Enum.HumanoidStateType.GettingUp)
+                h:ChangeState(Enum.HumanoidStateType.Running)
+            end
+            local hrp = getHRP()
+            local ch = getChar()
+            if ch and ch.PivotTo then
+                ch:PivotTo(cf)
+            end
+            if hrp then
+                hrp.CFrame = cf
+                hrp.AssemblyLinearVelocity = Vector3.zero
+                hrp.AssemblyAngularVelocity = Vector3.zero
+            end
+        end)
+        task.wait(0.03)
+    end
+end
+
 local function exitCombatVoid()
     State.InVoid = false
     State.VoidEat = false
@@ -1179,9 +1227,16 @@ local function exitCombatVoid()
     VoidMinUntil = 0
     VoidBloodAtEnter = nil
     _voidEnterBusy = false
+    _voidCooldownUntil = tick() + 1.25 -- don't re-void immediately
     pcall(function()
         RunService:UnbindFromRenderStep("StandVoidPin")
     end)
+
+    -- MUST leave void coordinates or stand stays stuck under map / in sky
+    task.spawn(function()
+        warpOutOfVoid()
+    end)
+
     pcall(function()
         local h = getHum()
         if h then
@@ -1191,19 +1246,20 @@ local function exitCombatVoid()
             h:ChangeState(Enum.HumanoidStateType.Running)
         end
     end)
+
     -- Resume combat if still fighting, otherwise return to owner
     if State.CombatActive and (State.LoopKill or State.LoopKnock or State.SentryBusy) then
-        -- stay in combat mode; loop/sentry will continue next tick
         State.Tracking = false
+        State.LoopKillBusy = false -- allow loop worker to start again
         notify("Combat resume")
     elseif State.CombatActive then
-        -- one-shot combat still active (knock/stomp mid-flight) — leave tracking off
+        State.Tracking = false
         notify("Combat resume")
     else
         State.Tracking = true
         notify("Healed — back")
         task.spawn(function()
-            task.wait(0.05)
+            task.wait(0.1)
             if not State.CombatActive and not State.VoidEat then
                 pcall(returnToOwner)
             end
@@ -1310,7 +1366,7 @@ local function combatSurviveTick()
     -- Only enter void when actively in combat
     if not State.CombatActive then return end
 
-    if getLocalHurt() and not _voidEnterBusy then
+    if getLocalHurt() and not _voidEnterBusy and tick() >= _voidCooldownUntil then
         _voidEnterBusy = true
         notify("Combat void — eating")
         _lastVoidEatAt = tick()
