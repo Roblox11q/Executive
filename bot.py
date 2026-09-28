@@ -6,9 +6,7 @@ import hashlib
 import json
 import os
 import tempfile
-import time
-import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -39,7 +37,7 @@ TABLE = "stand_configs"
 BLACKLIST_TABLE = "stand_blacklist"
 
 # Status / changelog channels
-STATUS_CHANNEL_ID = int(os.getenv("STATUS_CHANNEL_ID", "1554079705022595174") or "1554079705022595174")
+STATUS_CHANNEL_ID = int(os.getenv("STATUS_CHANNEL_ID", "1553592357814018139") or "1553592357814018139")
 CHANGELOG_CHANNEL_ID = int(os.getenv("CHANGELOG_CHANNEL_ID", "1553592489728933934") or "1553592489728933934")
 # Public URL of this bot (Render) so loaders can poll /api/status during inject
 PUBLIC_BOT_URL = (
@@ -73,74 +71,25 @@ MAINTENANCE_BLOCK_STATES = frozenset({"down", "updating"})
 STATUS_CHANNEL_LABEL = os.getenv("STATUS_CHANNEL_LABEL", "Stand")
 STATUS_FILE = Path(__file__).resolve().parent / "data" / "system_status.json"
 DEPLOY_FILE = Path(__file__).resolve().parent / "data" / "last_deploy.json"
-CHANGELOG_HISTORY_FILE = Path(__file__).resolve().parent / "data" / "changelog_history.json"
 # Files watched for automatic changelog on restart/redeploy
 _WATCHED_FILES = ("bot.py", "StandMain.lua", "requirements.txt", "render.yaml")
 
 # Track last status (persisted so restarts keep maintenance lock)
 _current_status: str = "up"
 _status_note: str = ""
-_status_file_loaded = False
-
-# Ranked owners cache (avoids full-table scan on every /loader)
-_ranked_owners_cache: dict = {}
-_ranked_owners_cache_ts: float = 0.0
 
 
 def _load_persisted_status() -> None:
-    global _current_status, _status_note, _status_file_loaded
+    global _current_status, _status_note
     try:
         if STATUS_FILE.is_file():
             data = json.loads(STATUS_FILE.read_text(encoding="utf-8"))
-            _status_file_loaded = True
             st = str(data.get("status") or "up").lower().strip()
             if st in STATUS_DOTS:
                 _current_status = st
             _status_note = str(data.get("note") or "")
     except Exception as e:
         print("load status file error:", e)
-
-
-def _load_status_from_supabase() -> bool:
-    global _current_status, _status_note
-    if not supabase:
-        return False
-    try:
-        result = (
-            supabase.table("stand_status")
-            .select("status,note")
-            .eq("id", "current")
-            .limit(1)
-            .execute()
-        )
-        if not result.data:
-            return False
-        data = result.data[0]
-        status = str(data.get("status") or "up").lower().strip()
-        if status in STATUS_DOTS:
-            _current_status = status
-        _status_note = str(data.get("note") or "")
-        return True
-    except Exception as e:
-        print("load status from Supabase error:", e)
-        return False
-
-
-def _save_status_to_supabase() -> None:
-    if not supabase:
-        return
-    try:
-        supabase.table("stand_status").upsert(
-            {
-                "id": "current",
-                "status": _current_status,
-                "note": _status_note,
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-            },
-            on_conflict="id",
-        ).execute()
-    except Exception as e:
-        print("save status to Supabase error:", e)
 
 
 def _save_persisted_status() -> None:
@@ -159,7 +108,6 @@ def _save_persisted_status() -> None:
         )
     except Exception as e:
         print("save status file error:", e)
-    _save_status_to_supabase()
 
 
 def get_system_status() -> str:
@@ -215,57 +163,6 @@ def default_config() -> dict:
     }
 
 
-def normalize_username(value: Any) -> str:
-    if value is None:
-        return ""
-    return str(value).strip()
-
-
-def sanitize_config(cfg: dict) -> dict:
-    cfg = dict(cfg or {})
-    cfg["owner"] = normalize_username(cfg.get("owner"))
-    cfg["key"] = str(cfg.get("key") or "").strip()
-    cfg["rank"] = str(cfg.get("rank") or "free").lower()
-    if cfg["rank"] not in ("free", "premium", "bypass"):
-        cfg["rank"] = "free"
-    cfg["gun"] = str(cfg.get("gun") or "[Double-Barrel SG]")
-    cfg["prefix"] = str(cfg.get("prefix") or ".")
-    cfg["anim"] = str(cfg.get("anim") or "")
-    cfg["slot"] = int(cfg.get("slot") or 2)
-    if cfg["slot"] < 0 or cfg["slot"] > 6:
-        cfg["slot"] = 2
-
-    alts = cfg.get("alts") or {}
-    if not isinstance(alts, dict):
-        alts = {}
-    clean_alts: dict[str, int] = {}
-    seen = set()
-    for name, slot in alts.items():
-        n = normalize_username(name)
-        if not n or n.lower() in seen:
-            continue
-        s = int(slot or 2)
-        if s < 0 or s > 6:
-            s = 2
-        clean_alts[n] = s
-        seen.add(n.lower())
-    cfg["alts"] = clean_alts
-
-    ctrls = cfg.get("controllers") or []
-    if not isinstance(ctrls, list):
-        ctrls = []
-    clean_ctrls: list[str] = []
-    seen_ctrls = set()
-    for name in ctrls:
-        n = normalize_username(name)
-        if not n or n.lower() in seen_ctrls:
-            continue
-        clean_ctrls.append(n)
-        seen_ctrls.add(n.lower())
-    cfg["controllers"] = clean_ctrls
-    return merge_defaults(cfg)
-
-
 def merge_defaults(cfg: dict) -> dict:
     base = default_config()
     for k, v in base.items():
@@ -275,7 +172,7 @@ def merge_defaults(cfg: dict) -> dict:
         cfg["alts"] = {}
     if not isinstance(cfg.get("controllers"), list):
         cfg["controllers"] = []
-    return sanitize_config(cfg)
+    return cfg
 
 
 def get_user_cfg(discord_id) -> dict:
@@ -296,17 +193,13 @@ def get_user_cfg(discord_id) -> dict:
 
 def set_user_cfg(discord_id, cfg: dict) -> None:
     key = str(discord_id)
-    clean = sanitize_config(cfg)
     if not supabase:
         print("set_user_cfg skipped - no supabase")
         return
-    payload = {
-        "discord_id": key,
-        "config": clean,
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-    }
+    payload = {"discord_id": key, "config": cfg}
     try:
-        supabase.table(TABLE).upsert(payload, on_conflict="discord_id").execute()
+        # upsert by primary key
+        supabase.table(TABLE).upsert(payload).execute()
     except Exception as e:
         print("set_user_cfg error:", e)
 
@@ -323,11 +216,6 @@ def clear_user(discord_id) -> None:
 
 def _collect_ranked_owners() -> dict:
     """Map Roblox owner name -> rank for premium/bypass users (embedded into every loader)."""
-    global _ranked_owners_cache, _ranked_owners_cache_ts
-    now = time.time()
-    if now - _ranked_owners_cache_ts < 60:  # cache for 60 seconds
-        return _ranked_owners_cache
-
     out: dict = {}
     if not supabase:
         return out
@@ -346,9 +234,6 @@ def _collect_ranked_owners() -> dict:
                 out[owner] = rank
     except Exception as e:
         print("_collect_ranked_owners error:", e)
-
-    _ranked_owners_cache = out
-    _ranked_owners_cache_ts = now
     return out
 
 
@@ -720,14 +605,7 @@ def generate_loader(cfg: dict) -> str:
 
 intents = discord.Intents.default()
 intents.members = True
-bot = commands.Bot(
-    command_prefix="!",
-    intents=intents,
-    activity=discord.Activity(
-        type=discord.ActivityType.watching,
-        name="Executive Stand",
-    ),
-)
+bot = commands.Bot(command_prefix="!", intents=intents)
 
 
 def has_buyer_role(interaction: discord.Interaction) -> bool:
@@ -775,9 +653,7 @@ def set_blacklist(discord_id, reason: str, by_id: int) -> None:
                 "discord_id": str(discord_id),
                 "reason": reason or "",
                 "by": str(by_id),
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-            },
-            on_conflict="discord_id",
+            }
         ).execute()
     except Exception as e:
         print("set_blacklist error:", e)
@@ -792,34 +668,36 @@ def clear_blacklist(discord_id) -> None:
         print("clear_blacklist error:", e)
 
 
-async def buyer_check(interaction: discord.Interaction, *, deferred: bool = False) -> bool:
-    async def deny(message: str) -> None:
-        if deferred:
-            await interaction.followup.send(message, ephemeral=True)
-        else:
-            await interaction.response.send_message(message, ephemeral=True)
-
+async def buyer_check(interaction: discord.Interaction) -> bool:
     if is_blacklisted(interaction.user.id):
-        await deny("You are **blacklisted** from this bot.")
+        await interaction.response.send_message(
+            "You are **blacklisted** from this bot.",
+            ephemeral=True,
+        )
         return False
     # Maintenance / updating: block all non-staff buyers (loader + config)
     if is_maintenance() and not has_staff_role(interaction):
-        await deny(maintenance_message())
+        await interaction.response.send_message(
+            maintenance_message(),
+            ephemeral=True,
+        )
         return False
     if has_buyer_role(interaction):
         return True
-    await deny("You need the **buyer** role to use this command.")
+    await interaction.response.send_message(
+        "You need the **buyer** role to use this command.",
+        ephemeral=True,
+    )
     return False
 
 
-async def staff_check(interaction: discord.Interaction, *, deferred: bool = False) -> bool:
+async def staff_check(interaction: discord.Interaction) -> bool:
     if has_staff_role(interaction):
         return True
-    msg = "Staff only."
-    if deferred:
-        await interaction.followup.send(msg, ephemeral=True)
-    else:
-        await interaction.response.send_message(msg, ephemeral=True)
+    await interaction.response.send_message(
+        "Staff only.",
+        ephemeral=True,
+    )
     return False
 
 
@@ -829,30 +707,6 @@ def _status_channel_name(status: str) -> str:
     label = (STATUS_CHANNEL_LABEL or "Stand").strip() or "Stand"
     # Discord allows emoji + fullwidth bar + text
     return f"{dot}｜{label}"
-
-
-async def _set_discord_presence_for_status(status: str) -> None:
-    """Map the bot's system status to the correct Discord presence and activity text."""
-    normalized = (status or "up").lower().strip()
-    presence_map = {
-        "up": discord.Status.online,
-        "down": discord.Status.do_not_disturb,
-        "updating": discord.Status.idle,
-        "detected": discord.Status.idle,
-    }
-    activity_map = {
-        "up": "Watching Executive Stand",
-        "down": "Executive Stand is Offline",
-        "updating": "Executive Stand is Updating",
-        "detected": "Executive Stand Detected",
-    }
-    target_status = presence_map.get(normalized, discord.Status.online)
-    activity_name = activity_map.get(normalized, "Watching Executive Stand")
-    activity = discord.Activity(
-        type=discord.ActivityType.watching,
-        name=activity_name,
-    )
-    await bot.change_presence(status=target_status, activity=activity)
 
 
 async def update_status_channel(
@@ -880,11 +734,6 @@ async def update_status_channel(
         _status_note = ""
     _save_persisted_status()
 
-    try:
-        await _set_discord_presence_for_status(status)
-    except Exception as e:
-        print("discord presence update error:", e)
-
     channel = bot.get_channel(STATUS_CHANNEL_ID)
     if channel is None:
         try:
@@ -894,13 +743,10 @@ async def update_status_channel(
 
     new_name = _status_channel_name(status)
     try:
-        if hasattr(channel, "edit") and getattr(channel, "name", None) != new_name:
-            await asyncio.wait_for(
-                channel.edit(name=new_name, reason=f"Status → {status}"),
-                timeout=5.0,
-            )
+        if hasattr(channel, "edit"):
+            await channel.edit(name=new_name, reason=f"Status → {status}")
     except Exception as e:
-        print("status channel rename skipped:", e)
+        print("status channel rename error:", e)
 
     label = STATUS_LABELS.get(status, status)
     color = STATUS_COLORS.get(status, 0x95A5A6)
@@ -932,25 +778,6 @@ async def update_status_channel(
     return None
 
 
-def _format_changelog_notes(notes: str) -> str:
-    """Normalize notes into a user-friendly bullet list for changelog embeds."""
-    text = (notes or "").strip()
-    if not text:
-        return "_No details provided._"
-    lines = []
-    for raw in text.splitlines():
-        line = raw.strip()
-        if not line:
-            continue
-        if line.startswith(("•", "-", "*")):
-            lines.append(line)
-        else:
-            lines.append(f"• {line}")
-    if not lines:
-        return "_No details provided._"
-    return "\n".join(lines[:12])
-
-
 async def post_changelog(
     title: str,
     notes: str,
@@ -972,7 +799,7 @@ async def post_changelog(
 
     embed = discord.Embed(
         title=f"📝 {title.strip() or 'Update'}",
-        description=_format_changelog_notes(notes),
+        description=notes.strip() or "_No details provided._",
         color=0x9B59B6,
     )
     if version and version.strip():
@@ -987,14 +814,6 @@ async def post_changelog(
         await channel.send(embed=embed)
     except Exception as e:
         return f"Failed to post changelog: {e}"
-
-    _record_changelog_event(
-        title=title,
-        notes=notes,
-        version=version or "",
-        by=by,
-        automatic=automatic,
-    )
     return None
 
 
@@ -1051,80 +870,6 @@ def _save_last_deploy(snap: dict) -> None:
         DEPLOY_FILE.write_text(json.dumps(snap, indent=2), encoding="utf-8")
     except Exception as e:
         print("save last_deploy error:", e)
-
-
-def _load_changelog_history() -> list[dict]:
-    # Local JSON fallback for quick offline history when no Supabase table is available.
-    history: list[dict] = []
-    if supabase:
-        try:
-            res = supabase.table("stand_changelog").select("*").order("created_at", desc=True).limit(10).execute()
-            for row in res.data or []:
-                history.append(
-                    {
-                        "title": str(row.get("title") or "Update"),
-                        "notes": str(row.get("notes") or ""),
-                        "version": str(row.get("version") or ""),
-                        "by": str(row.get("by") or "System"),
-                        "automatic": bool(row.get("automatic")),
-                        "timestamp": row.get("created_at") or datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
-                    }
-                )
-            if history:
-                return history
-        except Exception as e:
-            print("load changelog history from supabase error:", e)
-    try:
-        if not CHANGELOG_HISTORY_FILE.is_file():
-            return []
-        data = json.loads(CHANGELOG_HISTORY_FILE.read_text(encoding="utf-8"))
-        return data if isinstance(data, list) else []
-    except Exception as e:
-        print("load changelog history error:", e)
-        return []
-
-
-def _save_changelog_history(entries: list[dict]) -> None:
-    try:
-        CHANGELOG_HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
-        CHANGELOG_HISTORY_FILE.write_text(json.dumps(entries[:50], indent=2), encoding="utf-8")
-    except Exception as e:
-        print("save changelog history error:", e)
-
-
-def _record_changelog_event(
-    title: str,
-    notes: str,
-    *,
-    version: str = "",
-    by: Optional[discord.abc.User] = None,
-    automatic: bool = False,
-) -> None:
-    item = {
-        "title": str(title or "Update").strip() or "Update",
-        "notes": str(notes or "").strip(),
-        "version": str(version or "").strip(),
-        "by": str(by) if by else ("Auto (deploy)" if automatic else "System"),
-        "automatic": bool(automatic),
-        "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
-    }
-    history = _load_changelog_history()
-    history.insert(0, item)
-    _save_changelog_history(history)
-
-    if supabase:
-        try:
-            supabase.table("stand_changelog").insert(
-                {
-                    "title": item["title"],
-                    "notes": item["notes"],
-                    "version": item["version"],
-                    "by": item["by"],
-                    "automatic": item["automatic"],
-                }
-            ).execute()
-        except Exception as e:
-            print("save changelog to supabase error:", e)
 
 
 def _auto_changelog_notes(prev: dict, curr: dict) -> tuple[str, str]:
@@ -1226,23 +971,16 @@ async def auto_changelog_on_deploy() -> None:
         print(f"Auto changelog posted build={curr_build} first={first}")
 
     _save_last_deploy(curr)
-    if not err:
-        _record_changelog_event(title=title, notes=notes, version=str(curr_build or ""), automatic=True)
 
 
 @bot.event
 async def on_ready():
-    print(f"Logged in as {bot.user}")
-    if _status_file_loaded:
-        _save_status_to_supabase()
-    else:
-        _load_status_from_supabase()
-    await _set_discord_presence_for_status(get_system_status())
     try:
         synced = await bot.tree.sync()
         print(f"Synced {len(synced)} commands")
     except Exception as e:
         print("Sync error:", e)
+    print(f"Logged in as {bot.user}")
     print(f"Buyer role: {BUYER_ROLE_ID} | Supabase: {'yes' if supabase else 'NO'}")
     print(f"System status: {get_system_status()} | maintenance_block={is_maintenance()}")
     # Refresh status channel from persisted state (do NOT force online — keep maintenance locks)
@@ -1270,30 +1008,15 @@ async def on_ready():
     key="Your license key (XXXX-XXXX)",
 )
 async def setuploader(interaction: discord.Interaction, owner: str, key: str):
-    await interaction.response.defer(ephemeral=True)
-    if not await buyer_check(interaction, deferred=True):
-        return
-    owner_name = normalize_username(owner)
-    if not owner_name:
-        await interaction.followup.send(
-            "Owner username is required. Example: `YourMainAccount`",
-            ephemeral=True,
-        )
-        return
-    key_value = str(key).strip()
-    if not key_value:
-        await interaction.followup.send(
-            "A license key is required. Use `/setkey` or `/setuploader` with a valid key.",
-            ephemeral=True,
-        )
+    if not await buyer_check(interaction):
         return
     cfg = get_user_cfg(interaction.user.id)
-    cfg["owner"] = owner_name
-    cfg["key"] = key_value
+    cfg["owner"] = owner.strip()
+    cfg["key"] = key.strip()
     set_user_cfg(interaction.user.id, cfg)
     alt_count = len(cfg.get("alts") or {})
     masked = cfg["key"][:4] + "****" if len(cfg["key"]) >= 4 else "****"
-    await interaction.followup.send(
+    await interaction.response.send_message(
         f"**Owner set to** `{cfg['owner']}`\n"
         f"**Key saved:** `{masked}`\n"
         f"Linked alts: **{alt_count}**\n"
@@ -1313,57 +1036,41 @@ async def setuploader(interaction: discord.Interaction, owner: str, key: str):
     app_commands.Choice(name="6 high back float", value=6),
 ])
 async def addalt(interaction: discord.Interaction, username: str, slot: app_commands.Choice[int]):
-    await interaction.response.defer(ephemeral=True)
-    if not await buyer_check(interaction, deferred=True):
+    if not await buyer_check(interaction):
         return
-    try:
-        cfg = get_user_cfg(interaction.user.id)
-        name = normalize_username(username)
-        if not name:
-            await interaction.followup.send("Invalid username. Use the Roblox username exactly as it appears in-game.", ephemeral=True)
-            return
-        if name.lower() == normalize_username(cfg.get("owner") or "").lower():
-            await interaction.followup.send("You cannot add the owner as an alt. Use the main account owner field instead.", ephemeral=True)
-            return
-        alts = cfg.setdefault("alts", {})
-        if name.lower() in {k.lower() for k in alts.keys()}:
-            await interaction.followup.send(f"Alt **{name}** is already linked. Use `/removealt` to change it.", ephemeral=True)
-            return
-        alts[name] = int(slot.value)
-        set_user_cfg(interaction.user.id, cfg)
-        await interaction.followup.send(
-            f"Added alt **{name}** -> slot **{slot.value}** ({SLOT_NAMES.get(slot.value, '?')})",
-            ephemeral=True,
-        )
-    except Exception as e:
-        print("addalt error:", e)
-        await interaction.followup.send(f"Failed: {e}", ephemeral=True)
+    cfg = get_user_cfg(interaction.user.id)
+    name = username.strip()
+    if not name:
+        await interaction.response.send_message("Invalid username.", ephemeral=True)
+        return
+    cfg.setdefault("alts", {})[name] = int(slot.value)
+    set_user_cfg(interaction.user.id, cfg)
+    await interaction.response.send_message(
+        f"Added alt **{name}** -> slot **{slot.value}** ({SLOT_NAMES.get(slot.value, '?')})",
+        ephemeral=True,
+    )
+
 
 @bot.tree.command(name="removealt", description="Remove one linked alt")
 @app_commands.describe(username="Roblox username to remove")
 async def removealt(interaction: discord.Interaction, username: str):
-    await interaction.response.defer(ephemeral=True)
-    if not await buyer_check(interaction, deferred=True):
+    if not await buyer_check(interaction):
         return
-    try:
-        cfg = get_user_cfg(interaction.user.id)
-        name = username.strip()
-        alts = cfg.get("alts") or {}
-        removed = None
-        for k in list(alts.keys()):
-            if k.lower() == name.lower():
-                removed = k
-                del alts[k]
-                break
-        cfg["alts"] = alts
-        set_user_cfg(interaction.user.id, cfg)
-        if removed:
-            await interaction.followup.send(f"Removed alt **{removed}**.", ephemeral=True)
-        else:
-            await interaction.followup.send("Alt not found.", ephemeral=True)
-    except Exception as e:
-        print("removealt error:", e)
-        await interaction.followup.send(f"Failed: {e}", ephemeral=True)
+    cfg = get_user_cfg(interaction.user.id)
+    name = username.strip()
+    alts = cfg.get("alts") or {}
+    removed = None
+    for k in list(alts.keys()):
+        if k.lower() == name.lower():
+            removed = k
+            del alts[k]
+            break
+    cfg["alts"] = alts
+    set_user_cfg(interaction.user.id, cfg)
+    if removed:
+        await interaction.response.send_message(f"Removed alt **{removed}**.", ephemeral=True)
+    else:
+        await interaction.response.send_message("Alt not found.", ephemeral=True)
 
 
 @bot.tree.command(name="config", description="Configure loader options (omit args to view)")
@@ -1398,244 +1105,190 @@ async def config_cmd(
     char_user: Optional[int] = None,
     char_random: Optional[bool] = None,
 ):
-    await interaction.response.defer(ephemeral=True)
-    if not await buyer_check(interaction, deferred=True):
+    if not await buyer_check(interaction):
         return
-    try:
-        cfg = get_user_cfg(interaction.user.id)
-        changes = []
+    cfg = get_user_cfg(interaction.user.id)
+    changes = []
 
-        def set_field(key, val, label):
-            if val is not None:
-                cfg[key] = val
-                changes.append(f"{label}: `{val}`")
+    def set_field(key, val, label):
+        if val is not None:
+            cfg[key] = val
+            changes.append(f"{label}: `{val}`")
 
-        set_field("gun", gun, "Gun")
-        set_field("prefix", prefix, "Prefix")
-        set_field("mute_gun_sounds", mute_gun_sounds, "MuteGunSounds")
-        set_field("auto_mask", auto_mask, "AutoMask")
-        set_field("auto_armor", auto_armor, "AutoArmor")
-        set_field("muscle", muscle, "Muscle")
-        set_field("muscle_size", muscle_size, "MuscleSize")
-        set_field("inf", inf, "Inf")
-        set_field("armor_max", armor_max, "ArmorMax")
-        set_field("slot", fallback_slot, "Fallback slot")
-        if anim is not None:
-            a = str(anim).strip()
-            if a.isdigit():
-                a = f"rbxassetid://{a}"
-            cfg["anim"] = a
-            changes.append(f"Anim: `{a}`")
-        set_field("char_user", char_user, "Char.User")
-        set_field("char_random", char_random, "Char.Random")
-        set_user_cfg(interaction.user.id, cfg)
+    set_field("gun", gun, "Gun")
+    set_field("prefix", prefix, "Prefix")
+    set_field("mute_gun_sounds", mute_gun_sounds, "MuteGunSounds")
+    set_field("auto_mask", auto_mask, "AutoMask")
+    set_field("auto_armor", auto_armor, "AutoArmor")
+    set_field("muscle", muscle, "Muscle")
+    set_field("muscle_size", muscle_size, "MuscleSize")
+    set_field("inf", inf, "Inf")
+    set_field("armor_max", armor_max, "ArmorMax")
+    set_field("slot", fallback_slot, "Fallback slot")
+    if anim is not None:
+        # Normalize: allow bare numeric IDs
+        a = str(anim).strip()
+        if a.isdigit():
+            a = f"rbxassetid://{a}"
+        cfg["anim"] = a
+        changes.append(f"Anim: `{a}`")
+    set_field("char_user", char_user, "Char.User")
+    set_field("char_random", char_random, "Char.Random")
+    set_user_cfg(interaction.user.id, cfg)
 
-        if not changes:
-            embed = discord.Embed(title="Your config", color=0xB45AFF)
-            embed.add_field(name="Owner", value=f"`{cfg.get('owner') or 'not set'}`", inline=True)
-            embed.add_field(name="Gun", value=f"`{cfg.get('gun')}`", inline=True)
-            embed.add_field(name="Prefix", value=f"`{cfg.get('prefix')}`", inline=True)
-            embed.add_field(name="MuteGunSounds", value=str(cfg.get("mute_gun_sounds")), inline=True)
-            embed.add_field(name="AutoMask", value=str(cfg.get("auto_mask")), inline=True)
-            embed.add_field(name="AutoArmor", value=str(cfg.get("auto_armor")), inline=True)
-            embed.add_field(name="Muscle", value=f"{cfg.get('muscle')} ({cfg.get('muscle_size')})", inline=True)
-            embed.add_field(name="Inf / ArmorMax", value=f"{cfg.get('inf')} / {cfg.get('armor_max')}", inline=True)
-            embed.add_field(name="Fallback slot", value=str(cfg.get("slot")), inline=True)
-            embed.add_field(name="Anim", value=f"`{cfg.get('anim') or 'none'}`", inline=False)
-            embed.add_field(name="Char", value=f"User `{cfg.get('char_user')}` / Random `{cfg.get('char_random')}`", inline=False)
-            await interaction.followup.send(embed=embed, ephemeral=True)
-            return
+    if not changes:
+        embed = discord.Embed(title="Your config", color=0xB45AFF)
+        embed.add_field(name="Owner", value=f"`{cfg.get('owner') or 'not set'}`", inline=True)
+        embed.add_field(name="Gun", value=f"`{cfg.get('gun')}`", inline=True)
+        embed.add_field(name="Prefix", value=f"`{cfg.get('prefix')}`", inline=True)
+        embed.add_field(name="MuteGunSounds", value=str(cfg.get("mute_gun_sounds")), inline=True)
+        embed.add_field(name="AutoMask", value=str(cfg.get("auto_mask")), inline=True)
+        embed.add_field(name="AutoArmor", value=str(cfg.get("auto_armor")), inline=True)
+        embed.add_field(name="Muscle", value=f"{cfg.get('muscle')} ({cfg.get('muscle_size')})", inline=True)
+        embed.add_field(name="Inf / ArmorMax", value=f"{cfg.get('inf')} / {cfg.get('armor_max')}", inline=True)
+        embed.add_field(name="Fallback slot", value=str(cfg.get("slot")), inline=True)
+        embed.add_field(name="Anim", value=f"`{cfg.get('anim') or 'none'}`", inline=False)
+        embed.add_field(name="Char", value=f"User `{cfg.get('char_user')}` / Random `{cfg.get('char_random')}`", inline=False)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+        return
 
-        await interaction.followup.send(
-            "**Updated:**\n" + "\n".join(f"- {c}" for c in changes),
-            ephemeral=True,
-        )
-    except Exception as e:
-        print("config_cmd error:", e)
-        await interaction.followup.send(f"Failed: {e}", ephemeral=True)
+    await interaction.response.send_message(
+        "**Updated:**\n" + "\n".join(f"- {c}" for c in changes),
+        ephemeral=True,
+    )
 
 
 @bot.tree.command(name="mylinks", description="Show owner and all linked alts")
 async def mylinks(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=True)
-    if not await buyer_check(interaction, deferred=True):
+    if not await buyer_check(interaction):
         return
-    try:
-        cfg = get_user_cfg(interaction.user.id)
-        alts = cfg.get("alts") or {}
-        embed = discord.Embed(title="Your linked accounts", color=0xB45AFF)
-        embed.add_field(name="Owner (main)", value=f"`{cfg.get('owner') or 'not set'}`", inline=False)
-        k = cfg.get("key") or ""
-        masked = (k[:4] + "****") if len(k) >= 4 else ("not set" if not k else "****")
-        embed.add_field(name="License key", value=f"`{masked}`", inline=False)
-        if alts:
-            lines = [
-                f"`{name}` -> slot **{slot}** ({SLOT_NAMES.get(int(slot), '?')})"
-                for name, slot in alts.items()
-            ]
-            embed.add_field(name=f"Alts ({len(alts)})", value="\n".join(lines), inline=False)
-        else:
-            embed.add_field(name="Alts", value="*None - use /addalt*", inline=False)
-        ctrls = cfg.get("controllers") or []
-        if ctrls:
-            embed.add_field(
-                name="Controllers",
-                value=", ".join(f"`{c}`" for c in ctrls),
-                inline=False,
-            )
-        embed.set_footer(text="Use /loader to generate your script")
-        await interaction.followup.send(embed=embed, ephemeral=True)
-    except Exception as e:
-        print("mylinks error:", e)
-        await interaction.followup.send(f"Failed: {e}", ephemeral=True)
-
-
-@bot.tree.command(name="exportconfig", description="Download your saved Stand config as JSON backup")
-async def exportconfig(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=True)
-    if not await buyer_check(interaction, deferred=True):
-        return
-    try:
-        cfg = sanitize_config(get_user_cfg(interaction.user.id))
-        payload = json.dumps(cfg, indent=2, ensure_ascii=False)
-        tmp = Path(tempfile.gettempdir()) / f"stand_config_{interaction.user.id}.json"
-        tmp.write_text(payload, encoding="utf-8")
-        file = discord.File(tmp, filename="stand_config_backup.json")
-        await interaction.followup.send(
-            "Here is your saved config backup. Keep this file safe.",
-            file=file,
-            ephemeral=True,
+    cfg = get_user_cfg(interaction.user.id)
+    alts = cfg.get("alts") or {}
+    embed = discord.Embed(title="Your linked accounts", color=0xB45AFF)
+    embed.add_field(name="Owner (main)", value=f"`{cfg.get('owner') or 'not set'}`", inline=False)
+    k = cfg.get("key") or ""
+    masked = (k[:4] + "****") if len(k) >= 4 else ("not set" if not k else "****")
+    embed.add_field(name="License key", value=f"`{masked}`", inline=False)
+    if alts:
+        lines = [
+            f"`{name}` -> slot **{slot}** ({SLOT_NAMES.get(int(slot), '?')})"
+            for name, slot in alts.items()
+        ]
+        embed.add_field(name=f"Alts ({len(alts)})", value="\n".join(lines), inline=False)
+    else:
+        embed.add_field(name="Alts", value="*None - use /addalt*", inline=False)
+    ctrls = cfg.get("controllers") or []
+    if ctrls:
+        embed.add_field(
+            name="Controllers",
+            value=", ".join(f"`{c}`" for c in ctrls),
+            inline=False,
         )
-    except Exception as e:
-        print("exportconfig error:", e)
-        await interaction.followup.send(f"Failed: {e}", ephemeral=True)
+    embed.set_footer(text="Use /loader to generate your script")
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 @bot.tree.command(name="unlink", description="Unlink ALL accounts and reset config")
 async def unlink(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=True)
-    if not await buyer_check(interaction, deferred=True):
+    if not await buyer_check(interaction):
         return
-    try:
-        clear_user(interaction.user.id)
-        await interaction.followup.send(
-            "All linked accounts and config cleared.",
-            ephemeral=True,
-        )
-    except Exception as e:
-        print("unlink error:", e)
-        await interaction.followup.send(f"Failed: {e}", ephemeral=True)
+    clear_user(interaction.user.id)
+    await interaction.response.send_message(
+        "All linked accounts and config cleared.",
+        ephemeral=True,
+    )
 
 
 
 @bot.tree.command(name="setkey", description="Update your license key")
 @app_commands.describe(key="Your license key (XXXX-XXXX)")
 async def setkey(interaction: discord.Interaction, key: str):
-    await interaction.response.defer(ephemeral=True)
-    if not await buyer_check(interaction, deferred=True):
+    if not await buyer_check(interaction):
         return
-    try:
-        cfg = get_user_cfg(interaction.user.id)
-        cfg["key"] = key.strip()
-        set_user_cfg(interaction.user.id, cfg)
-        masked = cfg["key"][:4] + "****" if len(cfg["key"]) >= 4 else "****"
-        await interaction.followup.send(
-            f"Key updated: `{masked}`\nRun `/loader` again to get a new file.",
-            ephemeral=True,
-        )
-    except Exception as e:
-        print("setkey error:", e)
-        await interaction.followup.send(f"Failed: {e}", ephemeral=True)
+    cfg = get_user_cfg(interaction.user.id)
+    cfg["key"] = key.strip()
+    set_user_cfg(interaction.user.id, cfg)
+    masked = cfg["key"][:4] + "****" if len(cfg["key"]) >= 4 else "****"
+    await interaction.response.send_message(
+        f"Key updated: `{masked}`\nRun `/loader` again to get a new file.",
+        ephemeral=True,
+    )
 
 
 @bot.tree.command(name="loader", description="Generate your personal StandLoader.lua")
 async def loader_cmd(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=True)
-    if not await buyer_check(interaction, deferred=True):
+    if not await buyer_check(interaction):
         return
-    try:
-        cfg = get_user_cfg(interaction.user.id)
-        if not cfg.get("owner"):
-            await interaction.followup.send(
-                "Missing owner config. Run `/setuploader` first with your main Roblox username and license key.",
-                ephemeral=True,
-            )
-            return
-        if not cfg.get("key"):
-            await interaction.followup.send(
-                "Missing license key. Run `/setuploader` or `/setkey` before generating the loader.",
-                ephemeral=True,
-            )
-            return
-
-        source = generate_loader(cfg)
-        tmp = Path(tempfile.gettempdir()) / f"loader_{interaction.user.id}.lua"
-        tmp.write_text(source, encoding="utf-8")
-        file = discord.File(tmp, filename="StandLoader.lua")
-        embed = discord.Embed(
-            title="Your StandLoader.lua",
-            description=(
-                f"Owner: `{cfg['owner']}`\n"
-                f"Alts: **{len(cfg.get('alts') or {})}**\n"
-                f"Gun: `{cfg.get('gun')}` | Prefix: `{cfg.get('prefix')}`\n\n"
-                "**Inject on ALTS only.** Owner just types commands in public chat "
-                "(no script needed on main)."
-            ),
-            color=0xB45AFF,
+    cfg = get_user_cfg(interaction.user.id)
+    if not cfg.get("owner"):
+        await interaction.response.send_message(
+            "Set an owner first with `/setuploader`.",
+            ephemeral=True,
         )
-        await interaction.followup.send(embed=embed, file=file, ephemeral=True)
-    except Exception as e:
-        print("loader_cmd error:", e)
-        await interaction.followup.send(f"Failed to generate loader: {e}", ephemeral=True)
+        return
+    if not cfg.get("key"):
+        await interaction.response.send_message(
+            "Set your license key with `/setuploader` or `/setkey`.",
+            ephemeral=True,
+        )
+        return
+
+    source = generate_loader(cfg)
+    # temp file for discord.File (Render has no persistent local data needed)
+    tmp = Path(tempfile.gettempdir()) / f"loader_{interaction.user.id}.lua"
+    tmp.write_text(source, encoding="utf-8")
+    file = discord.File(tmp, filename="StandLoader.lua")
+    embed = discord.Embed(
+        title="Your StandLoader.lua",
+        description=(
+            f"Owner: `{cfg['owner']}`\n"
+            f"Alts: **{len(cfg.get('alts') or {})}**\n"
+            f"Gun: `{cfg.get('gun')}` | Prefix: `{cfg.get('prefix')}`\n\n"
+            "**Inject on ALTS only.** Owner just types commands in public chat "
+            "(no script needed on main)."
+        ),
+        color=0xB45AFF,
+    )
+    await interaction.response.send_message(embed=embed, file=file, ephemeral=True)
 
 
 @bot.tree.command(name="addcontroller", description="Allow another Roblox user to control your alts via chat")
 @app_commands.describe(username="Roblox username who can type commands")
 async def addcontroller(interaction: discord.Interaction, username: str):
-    await interaction.response.defer(ephemeral=True)
-    if not await buyer_check(interaction, deferred=True):
+    if not await buyer_check(interaction):
         return
-    try:
-        cfg = get_user_cfg(interaction.user.id)
-        name = username.strip()
-        if not name:
-            await interaction.followup.send("Invalid username.", ephemeral=True)
-            return
-        ctrls = list(cfg.get("controllers") or [])
-        low = {c.lower() for c in ctrls}
-        if name.lower() not in low:
-            ctrls.append(name)
-        cfg["controllers"] = ctrls
-        set_user_cfg(interaction.user.id, cfg)
-        await interaction.followup.send(
-            f"Controller **`{name}`** added. Run `/loader` again and re-inject alts.\n"
-            f"They can type the same prefix commands as the owner.",
-            ephemeral=True,
-        )
-    except Exception as e:
-        print("addcontroller error:", e)
-        await interaction.followup.send(f"Failed: {e}", ephemeral=True)
+    cfg = get_user_cfg(interaction.user.id)
+    name = username.strip()
+    if not name:
+        await interaction.response.send_message("Invalid username.", ephemeral=True)
+        return
+    ctrls = list(cfg.get("controllers") or [])
+    low = {c.lower() for c in ctrls}
+    if name.lower() not in low:
+        ctrls.append(name)
+    cfg["controllers"] = ctrls
+    set_user_cfg(interaction.user.id, cfg)
+    await interaction.response.send_message(
+        f"Controller **`{name}`** added. Run `/loader` again and re-inject alts.\n"
+        f"They can type the same prefix commands as the owner.",
+        ephemeral=True,
+    )
 
 
 @bot.tree.command(name="removecontroller", description="Remove a controller username")
 @app_commands.describe(username="Roblox username to remove")
 async def removecontroller(interaction: discord.Interaction, username: str):
-    await interaction.response.defer(ephemeral=True)
-    if not await buyer_check(interaction, deferred=True):
+    if not await buyer_check(interaction):
         return
-    try:
-        cfg = get_user_cfg(interaction.user.id)
-        name = username.strip().lower()
-        ctrls = [c for c in (cfg.get("controllers") or []) if c.lower() != name]
-        cfg["controllers"] = ctrls
-        set_user_cfg(interaction.user.id, cfg)
-        await interaction.followup.send(
-            f"Controller **`{username}`** removed. Re-run `/loader`.",
-            ephemeral=True,
-        )
-    except Exception as e:
-        print("removecontroller error:", e)
-        await interaction.followup.send(f"Failed: {e}", ephemeral=True)
+    cfg = get_user_cfg(interaction.user.id)
+    name = username.strip().lower()
+    ctrls = [c for c in (cfg.get("controllers") or []) if c.lower() != name]
+    cfg["controllers"] = ctrls
+    set_user_cfg(interaction.user.id, cfg)
+    await interaction.response.send_message(
+        f"Controller **`{username}`** removed. Re-run `/loader`.",
+        ephemeral=True,
+    )
 
 
 # -------------------- STAFF --------------------
@@ -1734,9 +1387,7 @@ async def setrank_cmd(
     cfg = get_user_cfg(user.id)
     cfg["rank"] = rank.value
     set_user_cfg(user.id, cfg)
-    global _ranked_owners_cache_ts
-    _ranked_owners_cache_ts = 0.0  # force next /loader to reload ranks
-    await interaction.response.send_message(   # this one is still fine as response because staff_check already replied if needed
+    await interaction.response.send_message(
         f"Set **{user}** rank to **`{rank.value}`**.\n"
         f"They must run `/loader` again and re-inject alts.\n"
         f"• free — default\n"
@@ -1744,200 +1395,6 @@ async def setrank_cmd(
         f"• bypass — immune to premium; can command free + premium",
         ephemeral=True,
     )
-
-
-@bot.tree.command(
-    name="updates",
-    description="[Staff] View recent Executive Stand update history",
-)
-async def updates_cmd(interaction: discord.Interaction):
-    if not await staff_check(interaction):
-        return
-    history = _load_changelog_history()
-    if not history:
-        await interaction.response.send_message("No update history yet.", ephemeral=True)
-        return
-
-    lines = []
-    for item in history[:5]:
-        title = item.get("title") or "Update"
-        version = item.get("version")
-        stamp = item.get("timestamp") or "unknown"
-        by = item.get("by") or "System"
-        lines.append(f"• **{title}** — {stamp} | {by}{f' | `{version}`' if version else ''}")
-
-    embed = discord.Embed(
-        title="Executive Stand Update History",
-        description="\n".join(lines),
-        color=0xB45AFF,
-    )
-    await interaction.response.send_message(embed=embed, ephemeral=True)
-
-
-@bot.tree.command(
-    name="purge",
-    description="[Staff] Delete the last N messages in this channel",
-)
-@app_commands.describe(count="Number of messages to delete (1-100)")
-async def purge_cmd(
-    interaction: discord.Interaction,
-    count: app_commands.Range[int, 1, 100],
-):
-    if not await staff_check(interaction):
-        return
-    if not isinstance(interaction.channel, discord.TextChannel):
-        await interaction.response.send_message("This command only works in text channels.", ephemeral=True)
-        return
-    try:
-        await interaction.response.defer(ephemeral=True)
-        deleted = await interaction.channel.purge(limit=count)
-        await interaction.followup.send(f"Deleted **{len(deleted)}** messages.", ephemeral=True)
-    except Exception as exc:
-        print("purge command error:", exc)
-        try:
-            await interaction.followup.send(f"Purge failed: {exc}", ephemeral=True)
-        except Exception:
-            pass
-
-
-@bot.tree.command(
-    name="lockchannel",
-    description="[Staff] Lock the current channel so only staff can send messages",
-)
-async def lockchannel_cmd(interaction: discord.Interaction):
-    if not await staff_check(interaction):
-        return
-    if interaction.guild is None or not isinstance(interaction.channel, discord.TextChannel):
-        await interaction.response.send_message("This command must be used in a server text channel.", ephemeral=True)
-        return
-    try:
-        overwrite = interaction.channel.overwrites_for(interaction.guild.default_role)
-        overwrite.send_messages = False
-        await interaction.channel.set_permissions(
-            interaction.guild.default_role,
-            send_messages=False,
-            reason=f"Locked by {interaction.user}",
-        )
-        await interaction.response.send_message(f"Locked **#{interaction.channel.name}** for staff only.", ephemeral=True)
-    except Exception as exc:
-        print("lockchannel command error:", exc)
-        await interaction.response.send_message(f"Lock failed: {exc}", ephemeral=True)
-
-
-@bot.tree.command(
-    name="unlockchannel",
-    description="[Staff] Unlock the current channel for everyone again",
-)
-async def unlockchannel_cmd(interaction: discord.Interaction):
-    if not await staff_check(interaction):
-        return
-    if interaction.guild is None or not isinstance(interaction.channel, discord.TextChannel):
-        await interaction.response.send_message("This command must be used in a server text channel.", ephemeral=True)
-        return
-    try:
-        await interaction.channel.set_permissions(
-            interaction.guild.default_role,
-            send_messages=None,
-            reason=f"Unlocked by {interaction.user}",
-        )
-        await interaction.response.send_message(f"Unlocked **#{interaction.channel.name}**.", ephemeral=True)
-    except Exception as exc:
-        print("unlockchannel command error:", exc)
-        await interaction.response.send_message(f"Unlock failed: {exc}", ephemeral=True)
-
-
-@bot.tree.command(
-    name="mute",
-    description="[Staff] Mute a user for a number of minutes",
-)
-@app_commands.describe(user="User to mute", minutes="Mute length in minutes", reason="Reason")
-async def mute_cmd(
-    interaction: discord.Interaction,
-    user: discord.Member,
-    minutes: app_commands.Range[int, 1, 10080],
-    reason: str = "No reason",
-):
-    if not await staff_check(interaction):
-        return
-    if user.id == interaction.user.id:
-        await interaction.response.send_message("You cannot mute yourself.", ephemeral=True)
-        return
-    if interaction.guild is None:
-        await interaction.response.send_message("This command only works in a server.", ephemeral=True)
-        return
-    try:
-        timeout_until = datetime.now(timezone.utc) + timedelta(minutes=minutes)
-        await user.timeout(timeout_until, reason=reason)
-        await interaction.response.send_message(
-            f"Muted **{user.display_name}** for **{minutes}** minute(s).\nReason: {reason}",
-            ephemeral=True,
-        )
-    except Exception as exc:
-        print("mute command error:", exc)
-        await interaction.response.send_message(f"Mute failed: {exc}", ephemeral=True)
-
-
-@bot.tree.command(
-    name="unmute",
-    description="[Staff] Remove a mute from a user",
-)
-@app_commands.describe(user="User to unmute", reason="Reason")
-async def unmute_cmd(
-    interaction: discord.Interaction,
-    user: discord.Member,
-    reason: str = "No reason",
-):
-    if not await staff_check(interaction):
-        return
-    try:
-        await user.remove_timeout(reason=reason)
-        await interaction.response.send_message(f"Unmuted **{user.display_name}**.", ephemeral=True)
-    except Exception as exc:
-        print("unmute command error:", exc)
-        await interaction.response.send_message(f"Unmute failed: {exc}", ephemeral=True)
-
-
-@bot.tree.command(
-    name="ban",
-    description="[Staff] Ban a user from the server",
-)
-@app_commands.describe(user="User to ban", reason="Reason")
-async def ban_cmd(
-    interaction: discord.Interaction,
-    user: discord.User,
-    reason: str = "No reason",
-):
-    if not await staff_check(interaction):
-        return
-    if interaction.guild is None:
-        await interaction.response.send_message("This command only works in a server.", ephemeral=True)
-        return
-    try:
-        await interaction.guild.ban(user, reason=reason, delete_message_days=0)
-        await interaction.response.send_message(f"Banned **{user}**.\nReason: {reason}", ephemeral=True)
-    except Exception as exc:
-        print("ban command error:", exc)
-        await interaction.response.send_message(f"Ban failed: {exc}", ephemeral=True)
-
-
-@bot.tree.command(
-    name="kick",
-    description="[Staff] Kick a user from the server",
-)
-@app_commands.describe(user="User to kick", reason="Reason")
-async def kick_cmd(
-    interaction: discord.Interaction,
-    user: discord.Member,
-    reason: str = "No reason",
-):
-    if not await staff_check(interaction):
-        return
-    try:
-        await user.kick(reason=reason)
-        await interaction.response.send_message(f"Kicked **{user.display_name}**.\nReason: {reason}", ephemeral=True)
-    except Exception as exc:
-        print("kick command error:", exc)
-        await interaction.response.send_message(f"Kick failed: {exc}", ephemeral=True)
 
 
 @bot.tree.command(
@@ -1959,41 +1416,34 @@ async def status_cmd(
     state: app_commands.Choice[str],
     note: Optional[str] = None,
 ):
-    await interaction.response.defer(ephemeral=True)
-    if not await staff_check(interaction, deferred=True):
+    if not await staff_check(interaction):
         return
-    try:
-        err = await update_status_channel(
-            state.value,
-            note=note or "",
-            by=interaction.user,
-            announce=True,
-        )
-        if err:
-            await interaction.followup.send(f"Failed: {err}", ephemeral=True)
-            return
-        dot = STATUS_DOTS.get(state.value, "")
-        label = STATUS_LABELS.get(state.value, state.value)
-        await interaction.followup.send(
-            f"Status set to {dot} **{label}** (`{state.value}`).\n"
-            f"Channel <#{STATUS_CHANNEL_ID}> updated.",
-            ephemeral=True,
-        )
-    except Exception as exc:
-        print("status command fatal error:", exc)
-        await interaction.followup.send(
-            "Status command failed unexpectedly. Check the bot logs.",
-            ephemeral=True,
-        )
+    await interaction.response.defer(ephemeral=True)
+    err = await update_status_channel(
+        state.value,
+        note=note or "",
+        by=interaction.user,
+        announce=True,
+    )
+    if err:
+        await interaction.followup.send(f"Failed: {err}", ephemeral=True)
+        return
+    dot = STATUS_DOTS.get(state.value, "")
+    label = STATUS_LABELS.get(state.value, state.value)
+    await interaction.followup.send(
+        f"Status set to {dot} **{label}** (`{state.value}`).\n"
+        f"Channel <#{STATUS_CHANNEL_ID}> updated.",
+        ephemeral=True,
+    )
 
 
 @bot.tree.command(
     name="changelog",
-    description="[Staff] Post a user-facing update summary with what changed",
+    description="[Staff] Optional manual changelog (auto posts on every deploy)",
 )
 @app_commands.describe(
-    title="Example: Combat system + loader fix",
-    notes="Example: • Combat system: improved hit detection\n• Loader: fixed status sync\n• Fix: player config saving",
+    title="Optional title (auto-deploy already posts without this)",
+    notes="Optional notes",
     version="Optional version tag",
     set_updating="If true, also set status channel to 🔵 Updating first",
     set_up_after="If true, set status channel to 🟢 Up after posting",
@@ -2008,67 +1458,40 @@ async def changelog_cmd(
 ):
     if not await staff_check(interaction):
         return
-    try:
-        await interaction.response.defer(ephemeral=True)
+    await interaction.response.defer(ephemeral=True)
 
-        if set_updating:
-            try:
-                await update_status_channel(
-                    "updating",
-                    note=f"Deploying: {title}",
-                    by=interaction.user,
-                    announce=True,
-                )
-            except Exception as exc:
-                print("changelog set_updating status error:", exc)
-
-        try:
-            err = await post_changelog(
-                title=title,
-                notes=notes,
-                version=version or "",
-                by=interaction.user,
-            )
-        except Exception as exc:
-            err = f"Changelog crashed: {exc}"
-        if not err:
-            _record_changelog_event(
-                title=title,
-                notes=notes,
-                version=version or "",
-                by=interaction.user,
-                automatic=False,
-            )
-        if err:
-            await interaction.followup.send(f"Changelog failed: {err}", ephemeral=True)
-            return
-
-        if set_up_after:
-            try:
-                await update_status_channel(
-                    "up",
-                    note=f"Update live: {title}",
-                    by=interaction.user,
-                    announce=True,
-                )
-            except Exception as exc:
-                print("changelog reset status error:", exc)
-
-        await interaction.followup.send(
-            f"Changelog posted in <#{CHANGELOG_CHANNEL_ID}>.\n"
-            f"Title: **{title}**"
-            + (f" (`{version}`)" if version else ""),
-            ephemeral=True,
+    if set_updating:
+        await update_status_channel(
+            "updating",
+            note=f"Deploying: {title}",
+            by=interaction.user,
+            announce=True,
         )
-    except Exception as exc:
-        print("changelog command fatal error:", exc)
-        try:
-            await interaction.followup.send(
-                "Changelog command failed unexpectedly. Check the bot logs.",
-                ephemeral=True,
-            )
-        except Exception:
-            pass
+
+    err = await post_changelog(
+        title=title,
+        notes=notes,
+        version=version or "",
+        by=interaction.user,
+    )
+    if err:
+        await interaction.followup.send(f"Changelog failed: {err}", ephemeral=True)
+        return
+
+    if set_up_after:
+        await update_status_channel(
+            "up",
+            note=f"Update live: {title}",
+            by=interaction.user,
+            announce=True,
+        )
+
+    await interaction.followup.send(
+        f"Changelog posted in <#{CHANGELOG_CHANNEL_ID}>.\n"
+        f"Title: **{title}**"
+        + (f" (`{version}`)" if version else ""),
+        ephemeral=True,
+    )
 
 
 async def _start_http():
