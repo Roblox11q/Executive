@@ -35,6 +35,8 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
 
 TABLE = "stand_configs"
 BLACKLIST_TABLE = "stand_blacklist"
+STATUS_TABLE = "stand_status"
+CHANGELOG_TABLE = "stand_changelog"
 
 # Status / changelog channels
 STATUS_CHANNEL_ID = int(os.getenv("STATUS_CHANNEL_ID", "1553592357814018139") or "1553592357814018139")
@@ -80,19 +82,51 @@ _status_note: str = ""
 
 
 def _load_persisted_status() -> None:
+    """Load status from Supabase (preferred) then fall back to local JSON file."""
     global _current_status, _status_note
-    try:
-        if STATUS_FILE.is_file():
-            data = json.loads(STATUS_FILE.read_text(encoding="utf-8"))
-            st = str(data.get("status") or "up").lower().strip()
-            if st in STATUS_DOTS:
-                _current_status = st
-            _status_note = str(data.get("note") or "")
-    except Exception as e:
-        print("load status file error:", e)
+    loaded = False
+
+    # Prefer Supabase so status survives Render ephemeral disk / multi-instance
+    if supabase:
+        try:
+            res = (
+                supabase.table(STATUS_TABLE)
+                .select("status, note")
+                .eq("id", "current")
+                .limit(1)
+                .execute()
+            )
+            rows = res.data or []
+            if rows:
+                st = str(rows[0].get("status") or "up").lower().strip()
+                if st in STATUS_DOTS:
+                    _current_status = st
+                _status_note = str(rows[0].get("note") or "")
+                loaded = True
+        except Exception as e:
+            print("load status from supabase error:", e)
+
+    if not loaded:
+        try:
+            if STATUS_FILE.is_file():
+                data = json.loads(STATUS_FILE.read_text(encoding="utf-8"))
+                st = str(data.get("status") or "up").lower().strip()
+                if st in STATUS_DOTS:
+                    _current_status = st
+                _status_note = str(data.get("note") or "")
+        except Exception as e:
+            print("load status file error:", e)
 
 
 def _save_persisted_status() -> None:
+    """Persist status to local file + Supabase (best-effort)."""
+    payload = {
+        "status": _current_status,
+        "note": _status_note,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    # Local file (works even without Supabase)
     try:
         STATUS_FILE.parent.mkdir(parents=True, exist_ok=True)
         STATUS_FILE.write_text(
@@ -100,7 +134,7 @@ def _save_persisted_status() -> None:
                 {
                     "status": _current_status,
                     "note": _status_note,
-                    "updated_at": __import__("datetime").datetime.utcnow().isoformat() + "Z",
+                    "updated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                 },
                 indent=2,
             ),
@@ -108,6 +142,20 @@ def _save_persisted_status() -> None:
         )
     except Exception as e:
         print("save status file error:", e)
+
+    # Supabase stand_status (shared across restarts / instances)
+    if supabase:
+        try:
+            supabase.table(STATUS_TABLE).upsert(
+                {
+                    "id": "current",
+                    "status": _current_status,
+                    "note": _status_note,
+                    "updated_at": payload["updated_at"],
+                }
+            ).execute()
+        except Exception as e:
+            print("save status to supabase error:", e)
 
 
 def get_system_status() -> str:
@@ -131,13 +179,14 @@ def maintenance_message() -> str:
     )
 
 
-_load_persisted_status()
-
 supabase: Optional[Client] = None
 if SUPABASE_URL and SUPABASE_KEY:
     supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 else:
     print("WARNING: SUPABASE_URL / SUPABASE_KEY not set")
+
+# Load after supabase client exists so we can prefer stand_status table
+_load_persisted_status()
 
 
 def default_config() -> dict:
@@ -786,7 +835,7 @@ async def post_changelog(
     by: Optional[discord.abc.User] = None,
     automatic: bool = False,
 ) -> Optional[str]:
-    """Post a changelog embed to the changelog channel. Returns error or None."""
+    """Post a changelog embed to the changelog channel and persist to Supabase. Returns error or None."""
     channel = bot.get_channel(CHANGELOG_CHANNEL_ID)
     if channel is None:
         try:
@@ -797,6 +846,8 @@ async def post_changelog(
     if not isinstance(channel, discord.TextChannel):
         return "Changelog channel is not a text channel"
 
+    by_label = str(by) if by else ("Auto (deploy)" if automatic else "System")
+
     embed = discord.Embed(
         title=f"📝 {title.strip() or 'Update'}",
         description=notes.strip() or "_No details provided._",
@@ -804,16 +855,29 @@ async def post_changelog(
     )
     if version and version.strip():
         embed.add_field(name="Build", value=f"`{version.strip()}`", inline=True)
-    if by:
-        embed.add_field(name="Posted by", value=str(by), inline=True)
-    elif automatic:
-        embed.add_field(name="Posted by", value="Auto (deploy)", inline=True)
+    embed.add_field(name="Posted by", value=by_label, inline=True)
     embed.set_footer(text="Executive Stand — Changelog")
 
     try:
         await channel.send(embed=embed)
     except Exception as e:
         return f"Failed to post changelog: {e}"
+
+    # Persist to stand_changelog (best-effort; Discord post already succeeded)
+    if supabase:
+        try:
+            supabase.table(CHANGELOG_TABLE).insert(
+                {
+                    "title": (title or "Update").strip() or "Update",
+                    "notes": (notes or "").strip(),
+                    "version": (version or "").strip(),
+                    "by": by_label,
+                    "automatic": bool(automatic),
+                }
+            ).execute()
+        except Exception as e:
+            print("save changelog to supabase error:", e)
+
     return None
 
 
