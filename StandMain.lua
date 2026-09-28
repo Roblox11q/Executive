@@ -2678,7 +2678,7 @@ local function cmdMask()
 end
 
 local function cmdFix()
-    -- Nuclear client reset — multiple methods so at least one forces a real respawn
+    -- Universal force-reset (works on Delta + most executors)
     clearCamlock()
     clearAimLock()
     State.LoopKill = nil
@@ -2702,12 +2702,12 @@ local function cmdFix()
         RunService:UnbindFromRenderStep(CAM_BIND)
     end)
 
-    local char = getChar()
-    local hum = getHum()
-    local oldChar = char
+    local oldChar = getChar()
 
-    -- 1) BodyEffects death flags
+    -- Method A: bodyeffects + humanoid death
     pcall(function()
+        local char = getChar()
+        local hum = getHum()
         if char then
             local be = char:FindFirstChild("BodyEffects")
             if be then
@@ -2720,13 +2720,7 @@ local function cmdFix()
                 end
             end
         end
-    end)
-
-    -- 2) Humanoid death
-    pcall(function()
         if hum then
-            hum.PlatformStand = false
-            hum.Sit = false
             hum:UnequipTools()
             hum:ChangeState(Enum.HumanoidStateType.Dead)
             hum.Health = 0
@@ -2734,48 +2728,67 @@ local function cmdFix()
         end
     end)
 
-    -- 3) BreakJoints
+    -- Method B: break joints + destroy critical parts
     pcall(function()
-        if char then char:BreakJoints() end
-    end)
-
-    -- 4) Destroy HRP + Head (forces death on most hood games)
-    pcall(function()
-        if char then
-            local hrp = char:FindFirstChild("HumanoidRootPart")
-            local head = char:FindFirstChild("Head")
-            if hrp then hrp:Destroy() end
-            if head then head:Destroy() end
+        local char = getChar()
+        if not char then return end
+        char:BreakJoints()
+        for _, name in ipairs({"HumanoidRootPart", "Head", "Torso", "UpperTorso", "LowerTorso", "Humanoid"}) do
+            local p = char:FindFirstChild(name)
+            if p then p:Destroy() end
         end
     end)
 
-    -- 5) Full character destroy (most reliable client-side force respawn)
+    -- Method C: destroy every BasePart (forces client death on most exes)
     pcall(function()
-        if char then
-            char:Destroy()
+        local char = getChar()
+        if not char then return end
+        for _, d in ipairs(char:GetDescendants()) do
+            if d:IsA("BasePart") or d:IsA("Humanoid") or d:IsA("Accessory") then
+                pcall(function() d:Destroy() end)
+            end
         end
+        pcall(function() char:Destroy() end)
     end)
 
-    -- 6) Last resort: LoadCharacter (works on many executors)
+    -- Method D: nil the character (triggers Roblox respawn on many executors including Delta)
     pcall(function()
-        if LocalPlayer.LoadCharacter then
+        LocalPlayer.Character = nil
+    end)
+
+    -- Method E: LoadCharacter if the executor allows it
+    pcall(function()
+        if typeof(LocalPlayer.LoadCharacter) == "function" then
             LocalPlayer:LoadCharacter()
         end
     end)
 
-    -- Wait for a brand-new character, then restore stand
+    -- Wait for a real new character. If still stuck after a few seconds → rejoin.
     task.spawn(function()
         local t0 = tick()
-        while tick() - t0 < 12 do
+        local gotNew = false
+
+        while tick() - t0 < 6 do
             local c = LocalPlayer.Character
             local h = c and c:FindFirstChildOfClass("Humanoid")
             if c and c ~= oldChar and h and h.Health > 0 then
+                gotNew = true
                 break
             end
-            task.wait(0.1)
+            task.wait(0.12)
         end
 
-        task.wait(0.7)
+        if not gotNew then
+            -- Still the same stuck character → rejoin is the only reliable reset left
+            notify("Fix failed — rejoining...")
+            task.wait(0.3)
+            pcall(function()
+                TeleportService:Teleport(game.PlaceId, LocalPlayer)
+            end)
+            return
+        end
+
+        task.wait(0.6)
 
         if Config.AutoArmor then pcall(buyArmor) end
         if Config.ArmorMax or Config.Inf then pcall(applyArmorMax) end
