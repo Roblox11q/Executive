@@ -1015,7 +1015,8 @@ end
 
 local function eatFood()
     local food = findFood()
-    if not food then
+    -- never shop-TP while void-healing (yanks character out of void)
+    if not food and not State.VoidEat then
         buyFood()
         food = findFood()
     end
@@ -1023,6 +1024,16 @@ local function eatFood()
         food = equipTool(food, 0.45)
         if food then
             for _ = 1, 8 do
+                if State.VoidEat then
+                    -- stay pinned while activating
+                    local hrp = getHRP()
+                    if hrp then
+                        pcall(function()
+                            hrp.CFrame = VoidCF
+                            hrp.AssemblyLinearVelocity = Vector3.zero
+                        end)
+                    end
+                end
                 activateTool(food)
                 pcall(function()
                     if MainEvent then
@@ -1042,35 +1053,28 @@ local function eatFood()
             end
         end
     end
-    -- heal via BodyEffects if possible
-    pcall(function()
-        local be = getChar() and getChar():FindFirstChild("BodyEffects")
-        if be then
-            for _, name in ipairs({"Health", "HP", "Blood"}) do
-                local v = be:FindFirstChild(name)
-                if v and (v:IsA("NumberValue") or v:IsA("IntValue")) then
-                    v.Value = math.max(v.Value, 100)
-                end
-            end
+    -- DO NOT spoof BodyEffects Blood/Health client-side.
+    -- That made combatSurviveTick think we were healed and leave void instantly.
+end
+
+local function getLocalBlood()
+    local c = getChar()
+    if not c then return nil end
+    local be = c:FindFirstChild("BodyEffects")
+    if not be then return nil end
+    for _, name in ipairs({"Blood", "Health", "HP"}) do
+        local v = be:FindFirstChild(name)
+        if v and (v:IsA("NumberValue") or v:IsA("IntValue")) then
+            return v.Value, v
         end
-        local h = getHum()
-        if h then h.Health = h.MaxHealth end
-    end)
+    end
+    return nil
 end
 
 local function getLocalHurt()
-    -- Da Hood / hood games: Blood/HP live on BodyEffects; Humanoid.Health is secondary
-    local c = getChar()
-    if not c then return true end
-    local be = c:FindFirstChild("BodyEffects")
-    if be then
-        for _, name in ipairs({"Blood", "Health", "HP"}) do
-            local v = be:FindFirstChild(name)
-            if v and (v:IsA("NumberValue") or v:IsA("IntValue")) then
-                if v.Value < 85 then return true end
-            end
-        end
-    end
+    -- Prefer BodyEffects blood; fall back to Humanoid + KO
+    local blood = getLocalBlood()
+    if blood ~= nil and blood < 90 then return true end
     local hum = getHum()
     if not hum then return true end
     if hum.Health < hum.MaxHealth * 0.9 then return true end
@@ -1078,47 +1082,67 @@ local function getLocalHurt()
     return false
 end
 
-local function getLocalHealed()
-    local c = getChar()
-    if not c then return false end
-    local be = c:FindFirstChild("BodyEffects")
-    if be then
-        for _, name in ipairs({"Blood", "Health", "HP"}) do
-            local v = be:FindFirstChild(name)
-            if v and (v:IsA("NumberValue") or v:IsA("IntValue")) then
-                if v.Value >= 95 then return true end
-                return false
+local VoidRecoverUntil = 0
+local VoidMinUntil = 0       -- hard minimum time in void before any exit
+local VoidBloodAtEnter = nil -- blood snapshot when we entered (ignore client writes)
+local _voidEnterBusy = false
+local _lastVoidEatAt = 0
+
+local function pinToVoid()
+    local hrp = getHRP()
+    if not hrp then return end
+    pcall(function()
+        local ch = getChar()
+        if ch and ch.PivotTo then
+            ch:PivotTo(VoidCF)
+        end
+        hrp.CFrame = VoidCF
+        hrp.AssemblyLinearVelocity = Vector3.zero
+        hrp.AssemblyAngularVelocity = Vector3.zero
+    end)
+    pcall(function()
+        local h = getHum()
+        if h then
+            h.PlatformStand = false
+            h.Sit = false
+            -- keep upright so tools can equip
+            if h:GetState() == Enum.HumanoidStateType.Physics
+                or h:GetState() == Enum.HumanoidStateType.Ragdoll then
+                h:ChangeState(Enum.HumanoidStateType.GettingUp)
             end
         end
-    end
-    local hum = getHum()
-    if not hum then return false end
-    if isKO(LocalPlayer) then return false end
-    return hum.Health >= hum.MaxHealth * 0.95
+    end)
 end
 
-local VoidRecoverUntil = 0 -- tick() deadline while recovering in void
-local _voidEnterBusy = false
+local function startVoidPinRender()
+    pcall(function()
+        RunService:UnbindFromRenderStep("StandVoidPin")
+        RunService:BindToRenderStep("StandVoidPin", Enum.RenderPriority.Camera.Value - 1, function()
+            if not State.VoidEat then return end
+            pinToVoid()
+        end)
+    end)
+end
 
 local function enterCombatVoid()
     if State.VoidEat then
-        -- already recovering — just pin to void
-        local hrp = getHRP()
-        if hrp then
-            pcall(function()
-                hrp.CFrame = VoidCF
-                hrp.AssemblyLinearVelocity = Vector3.zero
-            end)
-        end
+        pinToVoid()
         return
     end
     State.InVoid = true
     State.VoidEat = true
     State.Tracking = false
     _voidEnterBusy = true
-    VoidRecoverUntil = tick() + 3.5 -- stay long enough to buy + eat + heal
+    local now = tick()
+    VoidRecoverUntil = now + 4.0   -- max time in void
+    VoidMinUntil = now + 1.8      -- MUST stay at least this long (food needs time)
+    VoidBloodAtEnter = getLocalBlood()
+
     clearCamlock()
     clearAimLock()
+    startVoidPinRender()
+    pinToVoid()
+
     pcall(function()
         local h = getHum()
         if h then
@@ -1129,28 +1153,22 @@ local function enterCombatVoid()
             h:UnequipTools()
         end
     end)
-    local hrp = getHRP()
-    if hrp then
-        pcall(function()
-            hrp.CFrame = VoidCF
-            hrp.AssemblyLinearVelocity = Vector3.zero
-        end)
-    end
-    -- buy (if needed) + eat while voided
+
+    pinToVoid()
+
+    -- buy once if no food (shop TP is OK — we return to void after)
     if not findFood() then
-        buyFood()
+        pcall(buyFood)
+        pinToVoid()
     end
-    for _ = 1, 8 do
-        eatFood()
-        local my = getHRP()
-        if my then
-            pcall(function()
-                my.CFrame = VoidCF
-                my.AssemblyLinearVelocity = Vector3.zero
-            end)
-        end
-        task.wait(0.12)
-        if getLocalHealed() then break end
+
+    -- eat several times while pinned
+    for _ = 1, 10 do
+        if not State.VoidEat then break end
+        pinToVoid()
+        pcall(eatFood)
+        pinToVoid()
+        task.wait(0.15)
     end
 end
 
@@ -1158,7 +1176,12 @@ local function exitCombatVoid()
     State.InVoid = false
     State.VoidEat = false
     VoidRecoverUntil = 0
+    VoidMinUntil = 0
+    VoidBloodAtEnter = nil
     _voidEnterBusy = false
+    pcall(function()
+        RunService:UnbindFromRenderStep("StandVoidPin")
+    end)
     pcall(function()
         local h = getHum()
         if h then
@@ -1171,6 +1194,7 @@ end
 
 -- Fast orbit strafe around target (call every shot / frame)
 local function strafeTarget(plr, radius)
+    if State.VoidEat or State.InVoid then return end -- never strafe out of void
     radius = radius or 9
     local my = getHRP()
     local their = getHRP(plr)
@@ -1192,7 +1216,7 @@ end
 
 local function beginCombat()
     State.CombatActive = true
-    -- do NOT clear VoidEat here — if already recovering from a shot, keep healing
+    -- do NOT clear VoidEat — if already recovering from a shot, keep healing
 end
 
 local function endCombat()
@@ -1200,35 +1224,61 @@ local function endCombat()
     State.VoidEat = false
     State.InVoid = false
     VoidRecoverUntil = 0
+    VoidMinUntil = 0
+    VoidBloodAtEnter = nil
     _voidEnterBusy = false
+    pcall(function()
+        RunService:UnbindFromRenderStep("StandVoidPin")
+    end)
 end
 
--- If shot during combat → void + eat, then resume when healed
-local _lastVoidEatAt = 0
+-- If shot during combat → void + eat, then resume when min time passed + (healed or timeout)
 local function combatSurviveTick()
     if not State.CombatActive or IsOwner then return end
 
-    -- Already recovering: pin to void, keep eating, leave only when healed or timeout
     if State.VoidEat then
-        local hrp = getHRP()
-        if hrp then
-            pcall(function()
-                hrp.CFrame = VoidCF
-                hrp.AssemblyLinearVelocity = Vector3.zero
-            end)
-        end
-        -- re-eat every ~0.35s while voided
-        if tick() - _lastVoidEatAt >= 0.35 then
+        pinToVoid()
+
+        -- keep eating (NEVER buyFood here — shop TP yanks us out of void)
+        if tick() - _lastVoidEatAt >= 0.4 then
             _lastVoidEatAt = tick()
             pcall(function()
-                if not findFood() then buyFood() end
-                eatFood()
+                if findFood() then
+                    eatFood()
+                end
+                -- remotes only if no tool
+                if not findFood() and MainEvent then
+                    for _, n in ipairs({"Eat", "Eating", "BuyChicken", "Chicken"}) do
+                        pcall(function() MainEvent:FireServer(n) end)
+                    end
+                end
             end)
+            pinToVoid()
         end
-        -- exit when healed OR recovery window elapsed
-        if getLocalHealed() or tick() >= VoidRecoverUntil then
+
+        local now = tick()
+        local minDone = now >= VoidMinUntil
+        local maxDone = now >= VoidRecoverUntil
+
+        -- Only exit after minimum time. Prefer real blood recovery (higher than enter).
+        local healed = false
+        if minDone then
+            local blood = getLocalBlood()
+            if blood ~= nil and VoidBloodAtEnter ~= nil then
+                -- real recovery: blood went up meaningfully from enter snapshot
+                if blood >= 95 or blood > (VoidBloodAtEnter + 15) then
+                    healed = true
+                end
+            else
+                local hum = getHum()
+                if hum and not isKO(LocalPlayer) and hum.Health >= hum.MaxHealth * 0.95 then
+                    healed = true
+                end
+            end
+        end
+
+        if (minDone and healed) or maxDone then
             exitCombatVoid()
-            _voidEnterBusy = false
             local h = getHum()
             if h then
                 pcall(function()
@@ -1241,7 +1291,7 @@ local function combatSurviveTick()
         return
     end
 
-    -- Not yet voiding — detect damage (Humanoid + BodyEffects Blood)
+    -- Not voiding yet — detect damage
     if getLocalHurt() and not _voidEnterBusy then
         _voidEnterBusy = true
         notify("Combat void — eating")
@@ -1250,12 +1300,8 @@ local function combatSurviveTick()
             local ok, err = pcall(enterCombatVoid)
             if not ok then
                 warn("[Stand] enterCombatVoid:", err)
-                _voidEnterBusy = false
-                State.VoidEat = false
-                State.InVoid = false
-            end
-            -- keep _voidEnterBusy true while VoidEat; cleared on exit
-            if not State.VoidEat then
+                exitCombatVoid()
+            elseif not State.VoidEat then
                 _voidEnterBusy = false
             end
         end)
