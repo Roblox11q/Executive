@@ -37,7 +37,7 @@ TABLE = "stand_configs"
 BLACKLIST_TABLE = "stand_blacklist"
 
 # Status / changelog channels
-STATUS_CHANNEL_ID = int(os.getenv("STATUS_CHANNEL_ID", "1553592357814018139") or "1553592357814018139")
+STATUS_CHANNEL_ID = int(os.getenv("STATUS_CHANNEL_ID", "1554079705022595174") or "1554079705022595174")
 CHANGELOG_CHANNEL_ID = int(os.getenv("CHANGELOG_CHANNEL_ID", "1553592489728933934") or "1553592489728933934")
 # Public URL of this bot (Render) so loaders can poll /api/status during inject
 PUBLIC_BOT_URL = (
