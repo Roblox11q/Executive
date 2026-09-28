@@ -10,7 +10,15 @@ local Config = rawget(_G, "StandConfig")
     or (shared and shared.StandConfig)
     or nil
 if not Config then
-    warn("[Stand] No StandConfig — use StandInject.lua or Discord /loader")
+    warn("[Stand] No StandConfig loaded. Run /loader in Discord, generate a new loader, and inject it on an alt.")
+    pcall(function()
+        local StarterGui = game:GetService("StarterGui")
+        StarterGui:SetCore("SendNotification", {
+            Title = "Stand — Config missing",
+            Text = "No config loaded. Run /loader in Discord, then inject the new file on an alt.",
+            Duration = 10,
+        })
+    end)
     return
 end
 

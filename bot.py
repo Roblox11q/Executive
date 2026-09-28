@@ -164,6 +164,57 @@ def default_config() -> dict:
     }
 
 
+def normalize_username(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def sanitize_config(cfg: dict) -> dict:
+    cfg = dict(cfg or {})
+    cfg["owner"] = normalize_username(cfg.get("owner"))
+    cfg["key"] = str(cfg.get("key") or "").strip()
+    cfg["rank"] = str(cfg.get("rank") or "free").lower()
+    if cfg["rank"] not in ("free", "premium", "bypass"):
+        cfg["rank"] = "free"
+    cfg["gun"] = str(cfg.get("gun") or "[Double-Barrel SG]")
+    cfg["prefix"] = str(cfg.get("prefix") or ".")
+    cfg["anim"] = str(cfg.get("anim") or "")
+    cfg["slot"] = int(cfg.get("slot") or 2)
+    if cfg["slot"] < 0 or cfg["slot"] > 6:
+        cfg["slot"] = 2
+
+    alts = cfg.get("alts") or {}
+    if not isinstance(alts, dict):
+        alts = {}
+    clean_alts: dict[str, int] = {}
+    seen = set()
+    for name, slot in alts.items():
+        n = normalize_username(name)
+        if not n or n.lower() in seen:
+            continue
+        s = int(slot or 2)
+        if s < 0 or s > 6:
+            s = 2
+        clean_alts[n] = s
+        seen.add(n.lower())
+    cfg["alts"] = clean_alts
+
+    ctrls = cfg.get("controllers") or []
+    if not isinstance(ctrls, list):
+        ctrls = []
+    clean_ctrls: list[str] = []
+    seen_ctrls = set()
+    for name in ctrls:
+        n = normalize_username(name)
+        if not n or n.lower() in seen_ctrls:
+            continue
+        clean_ctrls.append(n)
+        seen_ctrls.add(n.lower())
+    cfg["controllers"] = clean_ctrls
+    return merge_defaults(cfg)
+
+
 def merge_defaults(cfg: dict) -> dict:
     base = default_config()
     for k, v in base.items():
@@ -173,7 +224,7 @@ def merge_defaults(cfg: dict) -> dict:
         cfg["alts"] = {}
     if not isinstance(cfg.get("controllers"), list):
         cfg["controllers"] = []
-    return cfg
+    return sanitize_config(cfg)
 
 
 def get_user_cfg(discord_id) -> dict:
@@ -194,12 +245,13 @@ def get_user_cfg(discord_id) -> dict:
 
 def set_user_cfg(discord_id, cfg: dict) -> None:
     key = str(discord_id)
+    clean = sanitize_config(cfg)
     if not supabase:
         print("set_user_cfg skipped - no supabase")
         return
     payload = {
         "discord_id": key,
-        "config": cfg,
+        "config": clean,
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     try:
@@ -1156,9 +1208,23 @@ async def on_ready():
 async def setuploader(interaction: discord.Interaction, owner: str, key: str):
     if not await buyer_check(interaction):
         return
+    owner_name = normalize_username(owner)
+    if not owner_name:
+        await interaction.response.send_message(
+            "Owner username is required. Example: `YourMainAccount`",
+            ephemeral=True,
+        )
+        return
+    key_value = str(key).strip()
+    if not key_value:
+        await interaction.response.send_message(
+            "A license key is required. Use `/setkey` or `/setuploader` with a valid key.",
+            ephemeral=True,
+        )
+        return
     cfg = get_user_cfg(interaction.user.id)
-    cfg["owner"] = owner.strip()
-    cfg["key"] = key.strip()
+    cfg["owner"] = owner_name
+    cfg["key"] = key_value
     set_user_cfg(interaction.user.id, cfg)
     alt_count = len(cfg.get("alts") or {})
     masked = cfg["key"][:4] + "****" if len(cfg["key"]) >= 4 else "****"
@@ -1185,11 +1251,18 @@ async def addalt(interaction: discord.Interaction, username: str, slot: app_comm
     if not await buyer_check(interaction):
         return
     cfg = get_user_cfg(interaction.user.id)
-    name = username.strip()
+    name = normalize_username(username)
     if not name:
-        await interaction.response.send_message("Invalid username.", ephemeral=True)
+        await interaction.response.send_message("Invalid username. Use the Roblox username exactly as it appears in-game.", ephemeral=True)
         return
-    cfg.setdefault("alts", {})[name] = int(slot.value)
+    if name.lower() == normalize_username(cfg.get("owner") or "").lower():
+        await interaction.response.send_message("You cannot add the owner as an alt. Use the main account owner field instead.", ephemeral=True)
+        return
+    alts = cfg.setdefault("alts", {})
+    if name.lower() in {k.lower() for k in alts.keys()}:
+        await interaction.response.send_message(f"Alt **{name}** is already linked. Use `/removealt` to change it.", ephemeral=True)
+        return
+    alts[name] = int(slot.value)
     set_user_cfg(interaction.user.id, cfg)
     await interaction.response.send_message(
         f"Added alt **{name}** -> slot **{slot.value}** ({SLOT_NAMES.get(slot.value, '?')})",
@@ -1334,6 +1407,22 @@ async def mylinks(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
+@bot.tree.command(name="exportconfig", description="Download your saved Stand config as JSON backup")
+async def exportconfig(interaction: discord.Interaction):
+    if not await buyer_check(interaction):
+        return
+    cfg = sanitize_config(get_user_cfg(interaction.user.id))
+    payload = json.dumps(cfg, indent=2, ensure_ascii=False)
+    tmp = Path(tempfile.gettempdir()) / f"stand_config_{interaction.user.id}.json"
+    tmp.write_text(payload, encoding="utf-8")
+    file = discord.File(tmp, filename="stand_config_backup.json")
+    await interaction.response.send_message(
+        "Here is your saved config backup. Keep this file safe.",
+        file=file,
+        ephemeral=True,
+    )
+
+
 @bot.tree.command(name="unlink", description="Unlink ALL accounts and reset config")
 async def unlink(interaction: discord.Interaction):
     if not await buyer_check(interaction):
@@ -1368,13 +1457,13 @@ async def loader_cmd(interaction: discord.Interaction):
     cfg = get_user_cfg(interaction.user.id)
     if not cfg.get("owner"):
         await interaction.response.send_message(
-            "Set an owner first with `/setuploader`.",
+            "Missing owner config. Run `/setuploader` first with your main Roblox username and license key.",
             ephemeral=True,
         )
         return
     if not cfg.get("key"):
         await interaction.response.send_message(
-            "Set your license key with `/setuploader` or `/setkey`.",
+            "Missing license key. Run `/setuploader` or `/setkey` before generating the loader.",
             ephemeral=True,
         )
         return
