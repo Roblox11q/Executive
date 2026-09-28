@@ -6,6 +6,8 @@ import hashlib
 import json
 import os
 import tempfile
+import time
+import asyncio
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -79,6 +81,10 @@ _WATCHED_FILES = ("bot.py", "StandMain.lua", "requirements.txt", "render.yaml")
 _current_status: str = "up"
 _status_note: str = ""
 _status_file_loaded = False
+
+# Ranked owners cache (avoids full-table scan on every /loader)
+_ranked_owners_cache: dict = {}
+_ranked_owners_cache_ts: float = 0.0
 
 
 def _load_persisted_status() -> None:
@@ -317,6 +323,11 @@ def clear_user(discord_id) -> None:
 
 def _collect_ranked_owners() -> dict:
     """Map Roblox owner name -> rank for premium/bypass users (embedded into every loader)."""
+    global _ranked_owners_cache, _ranked_owners_cache_ts
+    now = time.time()
+    if now - _ranked_owners_cache_ts < 60:  # cache for 60 seconds
+        return _ranked_owners_cache
+
     out: dict = {}
     if not supabase:
         return out
@@ -335,6 +346,9 @@ def _collect_ranked_owners() -> dict:
                 out[owner] = rank
     except Exception as e:
         print("_collect_ranked_owners error:", e)
+
+    _ranked_owners_cache = out
+    _ranked_owners_cache_ts = now
     return out
 
 
@@ -798,13 +812,14 @@ async def buyer_check(interaction: discord.Interaction, *, deferred: bool = Fals
     return False
 
 
-async def staff_check(interaction: discord.Interaction) -> bool:
+async def staff_check(interaction: discord.Interaction, *, deferred: bool = False) -> bool:
     if has_staff_role(interaction):
         return True
-    await interaction.response.send_message(
-        "Staff only.",
-        ephemeral=True,
-    )
+    msg = "Staff only."
+    if deferred:
+        await interaction.followup.send(msg, ephemeral=True)
+    else:
+        await interaction.response.send_message(msg, ephemeral=True)
     return False
 
 
@@ -879,10 +894,13 @@ async def update_status_channel(
 
     new_name = _status_channel_name(status)
     try:
-        if hasattr(channel, "edit"):
-            await channel.edit(name=new_name, reason=f"Status → {status}")
+        if hasattr(channel, "edit") and getattr(channel, "name", None) != new_name:
+            await asyncio.wait_for(
+                channel.edit(name=new_name, reason=f"Status → {status}"),
+                timeout=5.0,
+            )
     except Exception as e:
-        print("status channel rename error:", e)
+        print("status channel rename skipped:", e)
 
     label = STATUS_LABELS.get(status, status)
     color = STATUS_COLORS.get(status, 0x95A5A6)
@@ -1295,48 +1313,57 @@ async def setuploader(interaction: discord.Interaction, owner: str, key: str):
     app_commands.Choice(name="6 high back float", value=6),
 ])
 async def addalt(interaction: discord.Interaction, username: str, slot: app_commands.Choice[int]):
-    if not await buyer_check(interaction):
+    await interaction.response.defer(ephemeral=True)
+    if not await buyer_check(interaction, deferred=True):
         return
-    cfg = get_user_cfg(interaction.user.id)
-    name = normalize_username(username)
-    if not name:
-        await interaction.response.send_message("Invalid username. Use the Roblox username exactly as it appears in-game.", ephemeral=True)
-        return
-    if name.lower() == normalize_username(cfg.get("owner") or "").lower():
-        await interaction.response.send_message("You cannot add the owner as an alt. Use the main account owner field instead.", ephemeral=True)
-        return
-    alts = cfg.setdefault("alts", {})
-    if name.lower() in {k.lower() for k in alts.keys()}:
-        await interaction.response.send_message(f"Alt **{name}** is already linked. Use `/removealt` to change it.", ephemeral=True)
-        return
-    alts[name] = int(slot.value)
-    set_user_cfg(interaction.user.id, cfg)
-    await interaction.response.send_message(
-        f"Added alt **{name}** -> slot **{slot.value}** ({SLOT_NAMES.get(slot.value, '?')})",
-        ephemeral=True,
-    )
-
+    try:
+        cfg = get_user_cfg(interaction.user.id)
+        name = normalize_username(username)
+        if not name:
+            await interaction.followup.send("Invalid username. Use the Roblox username exactly as it appears in-game.", ephemeral=True)
+            return
+        if name.lower() == normalize_username(cfg.get("owner") or "").lower():
+            await interaction.followup.send("You cannot add the owner as an alt. Use the main account owner field instead.", ephemeral=True)
+            return
+        alts = cfg.setdefault("alts", {})
+        if name.lower() in {k.lower() for k in alts.keys()}:
+            await interaction.followup.send(f"Alt **{name}** is already linked. Use `/removealt` to change it.", ephemeral=True)
+            return
+        alts[name] = int(slot.value)
+        set_user_cfg(interaction.user.id, cfg)
+        await interaction.followup.send(
+            f"Added alt **{name}** -> slot **{slot.value}** ({SLOT_NAMES.get(slot.value, '?')})",
+            ephemeral=True,
+        )
+    except Exception as e:
+        print("addalt error:", e)
+        await interaction.followup.send(f"Failed: {e}", ephemeral=True)
 
 @bot.tree.command(name="removealt", description="Remove one linked alt")
 @app_commands.describe(username="Roblox username to remove")
 async def removealt(interaction: discord.Interaction, username: str):
-    if not await buyer_check(interaction):
+    await interaction.response.defer(ephemeral=True)
+    if not await buyer_check(interaction, deferred=True):
         return
-    cfg = get_user_cfg(interaction.user.id)
-    name = username.strip()
-    alts = cfg.get("alts") or {}
-    removed = None
-    for k in list(alts.keys()):
-        if k.lower() == name.lower():
-            removed = k
-            del alts[k]
-            break
-    cfg["alts"] = alts
-    set_user_cfg(interaction.user.id, cfg)
-    if removed:
-        await interaction.response.send_message(f"Removed alt **{removed}**.", ephemeral=True)
-    else:
-        await interaction.response.send_message("Alt not found.", ephemeral=True)
+    try:
+        cfg = get_user_cfg(interaction.user.id)
+        name = username.strip()
+        alts = cfg.get("alts") or {}
+        removed = None
+        for k in list(alts.keys()):
+            if k.lower() == name.lower():
+                removed = k
+                del alts[k]
+                break
+        cfg["alts"] = alts
+        set_user_cfg(interaction.user.id, cfg)
+        if removed:
+            await interaction.followup.send(f"Removed alt **{removed}**.", ephemeral=True)
+        else:
+            await interaction.followup.send("Alt not found.", ephemeral=True)
+    except Exception as e:
+        print("removealt error:", e)
+        await interaction.followup.send(f"Failed: {e}", ephemeral=True)
 
 
 @bot.tree.command(name="config", description="Configure loader options (omit args to view)")
@@ -1371,206 +1398,244 @@ async def config_cmd(
     char_user: Optional[int] = None,
     char_random: Optional[bool] = None,
 ):
-    if not await buyer_check(interaction):
+    await interaction.response.defer(ephemeral=True)
+    if not await buyer_check(interaction, deferred=True):
         return
-    cfg = get_user_cfg(interaction.user.id)
-    changes = []
+    try:
+        cfg = get_user_cfg(interaction.user.id)
+        changes = []
 
-    def set_field(key, val, label):
-        if val is not None:
-            cfg[key] = val
-            changes.append(f"{label}: `{val}`")
+        def set_field(key, val, label):
+            if val is not None:
+                cfg[key] = val
+                changes.append(f"{label}: `{val}`")
 
-    set_field("gun", gun, "Gun")
-    set_field("prefix", prefix, "Prefix")
-    set_field("mute_gun_sounds", mute_gun_sounds, "MuteGunSounds")
-    set_field("auto_mask", auto_mask, "AutoMask")
-    set_field("auto_armor", auto_armor, "AutoArmor")
-    set_field("muscle", muscle, "Muscle")
-    set_field("muscle_size", muscle_size, "MuscleSize")
-    set_field("inf", inf, "Inf")
-    set_field("armor_max", armor_max, "ArmorMax")
-    set_field("slot", fallback_slot, "Fallback slot")
-    if anim is not None:
-        # Normalize: allow bare numeric IDs
-        a = str(anim).strip()
-        if a.isdigit():
-            a = f"rbxassetid://{a}"
-        cfg["anim"] = a
-        changes.append(f"Anim: `{a}`")
-    set_field("char_user", char_user, "Char.User")
-    set_field("char_random", char_random, "Char.Random")
-    set_user_cfg(interaction.user.id, cfg)
+        set_field("gun", gun, "Gun")
+        set_field("prefix", prefix, "Prefix")
+        set_field("mute_gun_sounds", mute_gun_sounds, "MuteGunSounds")
+        set_field("auto_mask", auto_mask, "AutoMask")
+        set_field("auto_armor", auto_armor, "AutoArmor")
+        set_field("muscle", muscle, "Muscle")
+        set_field("muscle_size", muscle_size, "MuscleSize")
+        set_field("inf", inf, "Inf")
+        set_field("armor_max", armor_max, "ArmorMax")
+        set_field("slot", fallback_slot, "Fallback slot")
+        if anim is not None:
+            a = str(anim).strip()
+            if a.isdigit():
+                a = f"rbxassetid://{a}"
+            cfg["anim"] = a
+            changes.append(f"Anim: `{a}`")
+        set_field("char_user", char_user, "Char.User")
+        set_field("char_random", char_random, "Char.Random")
+        set_user_cfg(interaction.user.id, cfg)
 
-    if not changes:
-        embed = discord.Embed(title="Your config", color=0xB45AFF)
-        embed.add_field(name="Owner", value=f"`{cfg.get('owner') or 'not set'}`", inline=True)
-        embed.add_field(name="Gun", value=f"`{cfg.get('gun')}`", inline=True)
-        embed.add_field(name="Prefix", value=f"`{cfg.get('prefix')}`", inline=True)
-        embed.add_field(name="MuteGunSounds", value=str(cfg.get("mute_gun_sounds")), inline=True)
-        embed.add_field(name="AutoMask", value=str(cfg.get("auto_mask")), inline=True)
-        embed.add_field(name="AutoArmor", value=str(cfg.get("auto_armor")), inline=True)
-        embed.add_field(name="Muscle", value=f"{cfg.get('muscle')} ({cfg.get('muscle_size')})", inline=True)
-        embed.add_field(name="Inf / ArmorMax", value=f"{cfg.get('inf')} / {cfg.get('armor_max')}", inline=True)
-        embed.add_field(name="Fallback slot", value=str(cfg.get("slot")), inline=True)
-        embed.add_field(name="Anim", value=f"`{cfg.get('anim') or 'none'}`", inline=False)
-        embed.add_field(name="Char", value=f"User `{cfg.get('char_user')}` / Random `{cfg.get('char_random')}`", inline=False)
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-        return
+        if not changes:
+            embed = discord.Embed(title="Your config", color=0xB45AFF)
+            embed.add_field(name="Owner", value=f"`{cfg.get('owner') or 'not set'}`", inline=True)
+            embed.add_field(name="Gun", value=f"`{cfg.get('gun')}`", inline=True)
+            embed.add_field(name="Prefix", value=f"`{cfg.get('prefix')}`", inline=True)
+            embed.add_field(name="MuteGunSounds", value=str(cfg.get("mute_gun_sounds")), inline=True)
+            embed.add_field(name="AutoMask", value=str(cfg.get("auto_mask")), inline=True)
+            embed.add_field(name="AutoArmor", value=str(cfg.get("auto_armor")), inline=True)
+            embed.add_field(name="Muscle", value=f"{cfg.get('muscle')} ({cfg.get('muscle_size')})", inline=True)
+            embed.add_field(name="Inf / ArmorMax", value=f"{cfg.get('inf')} / {cfg.get('armor_max')}", inline=True)
+            embed.add_field(name="Fallback slot", value=str(cfg.get("slot")), inline=True)
+            embed.add_field(name="Anim", value=f"`{cfg.get('anim') or 'none'}`", inline=False)
+            embed.add_field(name="Char", value=f"User `{cfg.get('char_user')}` / Random `{cfg.get('char_random')}`", inline=False)
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            return
 
-    await interaction.response.send_message(
-        "**Updated:**\n" + "\n".join(f"- {c}" for c in changes),
-        ephemeral=True,
-    )
+        await interaction.followup.send(
+            "**Updated:**\n" + "\n".join(f"- {c}" for c in changes),
+            ephemeral=True,
+        )
+    except Exception as e:
+        print("config_cmd error:", e)
+        await interaction.followup.send(f"Failed: {e}", ephemeral=True)
 
 
 @bot.tree.command(name="mylinks", description="Show owner and all linked alts")
 async def mylinks(interaction: discord.Interaction):
-    if not await buyer_check(interaction):
+    await interaction.response.defer(ephemeral=True)
+    if not await buyer_check(interaction, deferred=True):
         return
-    cfg = get_user_cfg(interaction.user.id)
-    alts = cfg.get("alts") or {}
-    embed = discord.Embed(title="Your linked accounts", color=0xB45AFF)
-    embed.add_field(name="Owner (main)", value=f"`{cfg.get('owner') or 'not set'}`", inline=False)
-    k = cfg.get("key") or ""
-    masked = (k[:4] + "****") if len(k) >= 4 else ("not set" if not k else "****")
-    embed.add_field(name="License key", value=f"`{masked}`", inline=False)
-    if alts:
-        lines = [
-            f"`{name}` -> slot **{slot}** ({SLOT_NAMES.get(int(slot), '?')})"
-            for name, slot in alts.items()
-        ]
-        embed.add_field(name=f"Alts ({len(alts)})", value="\n".join(lines), inline=False)
-    else:
-        embed.add_field(name="Alts", value="*None - use /addalt*", inline=False)
-    ctrls = cfg.get("controllers") or []
-    if ctrls:
-        embed.add_field(
-            name="Controllers",
-            value=", ".join(f"`{c}`" for c in ctrls),
-            inline=False,
-        )
-    embed.set_footer(text="Use /loader to generate your script")
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    try:
+        cfg = get_user_cfg(interaction.user.id)
+        alts = cfg.get("alts") or {}
+        embed = discord.Embed(title="Your linked accounts", color=0xB45AFF)
+        embed.add_field(name="Owner (main)", value=f"`{cfg.get('owner') or 'not set'}`", inline=False)
+        k = cfg.get("key") or ""
+        masked = (k[:4] + "****") if len(k) >= 4 else ("not set" if not k else "****")
+        embed.add_field(name="License key", value=f"`{masked}`", inline=False)
+        if alts:
+            lines = [
+                f"`{name}` -> slot **{slot}** ({SLOT_NAMES.get(int(slot), '?')})"
+                for name, slot in alts.items()
+            ]
+            embed.add_field(name=f"Alts ({len(alts)})", value="\n".join(lines), inline=False)
+        else:
+            embed.add_field(name="Alts", value="*None - use /addalt*", inline=False)
+        ctrls = cfg.get("controllers") or []
+        if ctrls:
+            embed.add_field(
+                name="Controllers",
+                value=", ".join(f"`{c}`" for c in ctrls),
+                inline=False,
+            )
+        embed.set_footer(text="Use /loader to generate your script")
+        await interaction.followup.send(embed=embed, ephemeral=True)
+    except Exception as e:
+        print("mylinks error:", e)
+        await interaction.followup.send(f"Failed: {e}", ephemeral=True)
 
 
 @bot.tree.command(name="exportconfig", description="Download your saved Stand config as JSON backup")
 async def exportconfig(interaction: discord.Interaction):
-    if not await buyer_check(interaction):
+    await interaction.response.defer(ephemeral=True)
+    if not await buyer_check(interaction, deferred=True):
         return
-    cfg = sanitize_config(get_user_cfg(interaction.user.id))
-    payload = json.dumps(cfg, indent=2, ensure_ascii=False)
-    tmp = Path(tempfile.gettempdir()) / f"stand_config_{interaction.user.id}.json"
-    tmp.write_text(payload, encoding="utf-8")
-    file = discord.File(tmp, filename="stand_config_backup.json")
-    await interaction.response.send_message(
-        "Here is your saved config backup. Keep this file safe.",
-        file=file,
-        ephemeral=True,
-    )
+    try:
+        cfg = sanitize_config(get_user_cfg(interaction.user.id))
+        payload = json.dumps(cfg, indent=2, ensure_ascii=False)
+        tmp = Path(tempfile.gettempdir()) / f"stand_config_{interaction.user.id}.json"
+        tmp.write_text(payload, encoding="utf-8")
+        file = discord.File(tmp, filename="stand_config_backup.json")
+        await interaction.followup.send(
+            "Here is your saved config backup. Keep this file safe.",
+            file=file,
+            ephemeral=True,
+        )
+    except Exception as e:
+        print("exportconfig error:", e)
+        await interaction.followup.send(f"Failed: {e}", ephemeral=True)
 
 
 @bot.tree.command(name="unlink", description="Unlink ALL accounts and reset config")
 async def unlink(interaction: discord.Interaction):
-    if not await buyer_check(interaction):
+    await interaction.response.defer(ephemeral=True)
+    if not await buyer_check(interaction, deferred=True):
         return
-    clear_user(interaction.user.id)
-    await interaction.response.send_message(
-        "All linked accounts and config cleared.",
-        ephemeral=True,
-    )
+    try:
+        clear_user(interaction.user.id)
+        await interaction.followup.send(
+            "All linked accounts and config cleared.",
+            ephemeral=True,
+        )
+    except Exception as e:
+        print("unlink error:", e)
+        await interaction.followup.send(f"Failed: {e}", ephemeral=True)
 
 
 
 @bot.tree.command(name="setkey", description="Update your license key")
 @app_commands.describe(key="Your license key (XXXX-XXXX)")
 async def setkey(interaction: discord.Interaction, key: str):
-    if not await buyer_check(interaction):
+    await interaction.response.defer(ephemeral=True)
+    if not await buyer_check(interaction, deferred=True):
         return
-    cfg = get_user_cfg(interaction.user.id)
-    cfg["key"] = key.strip()
-    set_user_cfg(interaction.user.id, cfg)
-    masked = cfg["key"][:4] + "****" if len(cfg["key"]) >= 4 else "****"
-    await interaction.response.send_message(
-        f"Key updated: `{masked}`\nRun `/loader` again to get a new file.",
-        ephemeral=True,
-    )
+    try:
+        cfg = get_user_cfg(interaction.user.id)
+        cfg["key"] = key.strip()
+        set_user_cfg(interaction.user.id, cfg)
+        masked = cfg["key"][:4] + "****" if len(cfg["key"]) >= 4 else "****"
+        await interaction.followup.send(
+            f"Key updated: `{masked}`\nRun `/loader` again to get a new file.",
+            ephemeral=True,
+        )
+    except Exception as e:
+        print("setkey error:", e)
+        await interaction.followup.send(f"Failed: {e}", ephemeral=True)
 
 
 @bot.tree.command(name="loader", description="Generate your personal StandLoader.lua")
 async def loader_cmd(interaction: discord.Interaction):
-    if not await buyer_check(interaction):
+    await interaction.response.defer(ephemeral=True)
+    if not await buyer_check(interaction, deferred=True):
         return
-    cfg = get_user_cfg(interaction.user.id)
-    if not cfg.get("owner"):
-        await interaction.response.send_message(
-            "Missing owner config. Run `/setuploader` first with your main Roblox username and license key.",
-            ephemeral=True,
-        )
-        return
-    if not cfg.get("key"):
-        await interaction.response.send_message(
-            "Missing license key. Run `/setuploader` or `/setkey` before generating the loader.",
-            ephemeral=True,
-        )
-        return
+    try:
+        cfg = get_user_cfg(interaction.user.id)
+        if not cfg.get("owner"):
+            await interaction.followup.send(
+                "Missing owner config. Run `/setuploader` first with your main Roblox username and license key.",
+                ephemeral=True,
+            )
+            return
+        if not cfg.get("key"):
+            await interaction.followup.send(
+                "Missing license key. Run `/setuploader` or `/setkey` before generating the loader.",
+                ephemeral=True,
+            )
+            return
 
-    source = generate_loader(cfg)
-    # temp file for discord.File (Render has no persistent local data needed)
-    tmp = Path(tempfile.gettempdir()) / f"loader_{interaction.user.id}.lua"
-    tmp.write_text(source, encoding="utf-8")
-    file = discord.File(tmp, filename="StandLoader.lua")
-    embed = discord.Embed(
-        title="Your StandLoader.lua",
-        description=(
-            f"Owner: `{cfg['owner']}`\n"
-            f"Alts: **{len(cfg.get('alts') or {})}**\n"
-            f"Gun: `{cfg.get('gun')}` | Prefix: `{cfg.get('prefix')}`\n\n"
-            "**Inject on ALTS only.** Owner just types commands in public chat "
-            "(no script needed on main)."
-        ),
-        color=0xB45AFF,
-    )
-    await interaction.response.send_message(embed=embed, file=file, ephemeral=True)
+        source = generate_loader(cfg)
+        tmp = Path(tempfile.gettempdir()) / f"loader_{interaction.user.id}.lua"
+        tmp.write_text(source, encoding="utf-8")
+        file = discord.File(tmp, filename="StandLoader.lua")
+        embed = discord.Embed(
+            title="Your StandLoader.lua",
+            description=(
+                f"Owner: `{cfg['owner']}`\n"
+                f"Alts: **{len(cfg.get('alts') or {})}**\n"
+                f"Gun: `{cfg.get('gun')}` | Prefix: `{cfg.get('prefix')}`\n\n"
+                "**Inject on ALTS only.** Owner just types commands in public chat "
+                "(no script needed on main)."
+            ),
+            color=0xB45AFF,
+        )
+        await interaction.followup.send(embed=embed, file=file, ephemeral=True)
+    except Exception as e:
+        print("loader_cmd error:", e)
+        await interaction.followup.send(f"Failed to generate loader: {e}", ephemeral=True)
 
 
 @bot.tree.command(name="addcontroller", description="Allow another Roblox user to control your alts via chat")
 @app_commands.describe(username="Roblox username who can type commands")
 async def addcontroller(interaction: discord.Interaction, username: str):
-    if not await buyer_check(interaction):
+    await interaction.response.defer(ephemeral=True)
+    if not await buyer_check(interaction, deferred=True):
         return
-    cfg = get_user_cfg(interaction.user.id)
-    name = username.strip()
-    if not name:
-        await interaction.response.send_message("Invalid username.", ephemeral=True)
-        return
-    ctrls = list(cfg.get("controllers") or [])
-    low = {c.lower() for c in ctrls}
-    if name.lower() not in low:
-        ctrls.append(name)
-    cfg["controllers"] = ctrls
-    set_user_cfg(interaction.user.id, cfg)
-    await interaction.response.send_message(
-        f"Controller **`{name}`** added. Run `/loader` again and re-inject alts.\n"
-        f"They can type the same prefix commands as the owner.",
-        ephemeral=True,
-    )
+    try:
+        cfg = get_user_cfg(interaction.user.id)
+        name = username.strip()
+        if not name:
+            await interaction.followup.send("Invalid username.", ephemeral=True)
+            return
+        ctrls = list(cfg.get("controllers") or [])
+        low = {c.lower() for c in ctrls}
+        if name.lower() not in low:
+            ctrls.append(name)
+        cfg["controllers"] = ctrls
+        set_user_cfg(interaction.user.id, cfg)
+        await interaction.followup.send(
+            f"Controller **`{name}`** added. Run `/loader` again and re-inject alts.\n"
+            f"They can type the same prefix commands as the owner.",
+            ephemeral=True,
+        )
+    except Exception as e:
+        print("addcontroller error:", e)
+        await interaction.followup.send(f"Failed: {e}", ephemeral=True)
 
 
 @bot.tree.command(name="removecontroller", description="Remove a controller username")
 @app_commands.describe(username="Roblox username to remove")
 async def removecontroller(interaction: discord.Interaction, username: str):
-    if not await buyer_check(interaction):
+    await interaction.response.defer(ephemeral=True)
+    if not await buyer_check(interaction, deferred=True):
         return
-    cfg = get_user_cfg(interaction.user.id)
-    name = username.strip().lower()
-    ctrls = [c for c in (cfg.get("controllers") or []) if c.lower() != name]
-    cfg["controllers"] = ctrls
-    set_user_cfg(interaction.user.id, cfg)
-    await interaction.response.send_message(
-        f"Controller **`{username}`** removed. Re-run `/loader`.",
-        ephemeral=True,
-    )
+    try:
+        cfg = get_user_cfg(interaction.user.id)
+        name = username.strip().lower()
+        ctrls = [c for c in (cfg.get("controllers") or []) if c.lower() != name]
+        cfg["controllers"] = ctrls
+        set_user_cfg(interaction.user.id, cfg)
+        await interaction.followup.send(
+            f"Controller **`{username}`** removed. Re-run `/loader`.",
+            ephemeral=True,
+        )
+    except Exception as e:
+        print("removecontroller error:", e)
+        await interaction.followup.send(f"Failed: {e}", ephemeral=True)
 
 
 # -------------------- STAFF --------------------
@@ -1669,7 +1734,9 @@ async def setrank_cmd(
     cfg = get_user_cfg(user.id)
     cfg["rank"] = rank.value
     set_user_cfg(user.id, cfg)
-    await interaction.response.send_message(
+    global _ranked_owners_cache_ts
+    _ranked_owners_cache_ts = 0.0  # force next /loader to reload ranks
+    await interaction.response.send_message(   # this one is still fine as response because staff_check already replied if needed
         f"Set **{user}** rank to **`{rank.value}`**.\n"
         f"They must run `/loader` again and re-inject alts.\n"
         f"• free — default\n"
@@ -1892,19 +1959,16 @@ async def status_cmd(
     state: app_commands.Choice[str],
     note: Optional[str] = None,
 ):
-    if not await staff_check(interaction):
+    await interaction.response.defer(ephemeral=True)
+    if not await staff_check(interaction, deferred=True):
         return
     try:
-        await interaction.response.defer(ephemeral=True)
-        try:
-            err = await update_status_channel(
-                state.value,
-                note=note or "",
-                by=interaction.user,
-                announce=True,
-            )
-        except Exception as exc:
-            err = f"Status update crashed: {exc}"
+        err = await update_status_channel(
+            state.value,
+            note=note or "",
+            by=interaction.user,
+            announce=True,
+        )
         if err:
             await interaction.followup.send(f"Failed: {err}", ephemeral=True)
             return
@@ -1917,13 +1981,10 @@ async def status_cmd(
         )
     except Exception as exc:
         print("status command fatal error:", exc)
-        try:
-            await interaction.followup.send(
-                "Status command failed unexpectedly. Check the bot logs.",
-                ephemeral=True,
-            )
-        except Exception:
-            pass
+        await interaction.followup.send(
+            "Status command failed unexpectedly. Check the bot logs.",
+            ephemeral=True,
+        )
 
 
 @bot.tree.command(
