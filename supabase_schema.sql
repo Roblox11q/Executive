@@ -67,8 +67,22 @@ insert into stand_status (id, status, note)
 values ('current', 'up', '')
 on conflict (id) do nothing;
 
+create table if not exists stand_changelog (
+  id bigserial primary key,
+  title text not null default 'Update',
+  notes text not null default '',
+  version text not null default '',
+  by text not null default 'System',
+  automatic boolean not null default false,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists stand_changelog_created_at_idx
+  on stand_changelog (created_at desc);
+
 -- If your project uses RLS, enable it and allow the service_role key full access.
 -- Example (service role bypasses RLS in Supabase by default):
 -- alter table stand_configs enable row level security;
 -- alter table stand_blacklist enable row level security;
 -- alter table stand_status enable row level security;
+-- alter table stand_changelog enable row level security;

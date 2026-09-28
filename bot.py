@@ -71,6 +71,7 @@ MAINTENANCE_BLOCK_STATES = frozenset({"down", "updating"})
 STATUS_CHANNEL_LABEL = os.getenv("STATUS_CHANNEL_LABEL", "Stand")
 STATUS_FILE = Path(__file__).resolve().parent / "data" / "system_status.json"
 DEPLOY_FILE = Path(__file__).resolve().parent / "data" / "last_deploy.json"
+CHANGELOG_HISTORY_FILE = Path(__file__).resolve().parent / "data" / "changelog_history.json"
 # Files watched for automatic changelog on restart/redeploy
 _WATCHED_FILES = ("bot.py", "StandMain.lua", "requirements.txt", "render.yaml")
 
@@ -819,6 +820,25 @@ async def update_status_channel(
     return None
 
 
+def _format_changelog_notes(notes: str) -> str:
+    """Normalize notes into a user-friendly bullet list for changelog embeds."""
+    text = (notes or "").strip()
+    if not text:
+        return "_No details provided._"
+    lines = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if line.startswith(("•", "-", "*")):
+            lines.append(line)
+        else:
+            lines.append(f"• {line}")
+    if not lines:
+        return "_No details provided._"
+    return "\n".join(lines[:12])
+
+
 async def post_changelog(
     title: str,
     notes: str,
@@ -840,7 +860,7 @@ async def post_changelog(
 
     embed = discord.Embed(
         title=f"📝 {title.strip() or 'Update'}",
-        description=notes.strip() or "_No details provided._",
+        description=_format_changelog_notes(notes),
         color=0x9B59B6,
     )
     if version and version.strip():
@@ -855,6 +875,14 @@ async def post_changelog(
         await channel.send(embed=embed)
     except Exception as e:
         return f"Failed to post changelog: {e}"
+
+    _record_changelog_event(
+        title=title,
+        notes=notes,
+        version=version or "",
+        by=by,
+        automatic=automatic,
+    )
     return None
 
 
@@ -911,6 +939,80 @@ def _save_last_deploy(snap: dict) -> None:
         DEPLOY_FILE.write_text(json.dumps(snap, indent=2), encoding="utf-8")
     except Exception as e:
         print("save last_deploy error:", e)
+
+
+def _load_changelog_history() -> list[dict]:
+    # Local JSON fallback for quick offline history when no Supabase table is available.
+    history: list[dict] = []
+    if supabase:
+        try:
+            res = supabase.table("stand_changelog").select("*").order("created_at", desc=True).limit(10).execute()
+            for row in res.data or []:
+                history.append(
+                    {
+                        "title": str(row.get("title") or "Update"),
+                        "notes": str(row.get("notes") or ""),
+                        "version": str(row.get("version") or ""),
+                        "by": str(row.get("by") or "System"),
+                        "automatic": bool(row.get("automatic")),
+                        "timestamp": row.get("created_at") or datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+                    }
+                )
+            if history:
+                return history
+        except Exception as e:
+            print("load changelog history from supabase error:", e)
+    try:
+        if not CHANGELOG_HISTORY_FILE.is_file():
+            return []
+        data = json.loads(CHANGELOG_HISTORY_FILE.read_text(encoding="utf-8"))
+        return data if isinstance(data, list) else []
+    except Exception as e:
+        print("load changelog history error:", e)
+        return []
+
+
+def _save_changelog_history(entries: list[dict]) -> None:
+    try:
+        CHANGELOG_HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
+        CHANGELOG_HISTORY_FILE.write_text(json.dumps(entries[:50], indent=2), encoding="utf-8")
+    except Exception as e:
+        print("save changelog history error:", e)
+
+
+def _record_changelog_event(
+    title: str,
+    notes: str,
+    *,
+    version: str = "",
+    by: Optional[discord.abc.User] = None,
+    automatic: bool = False,
+) -> None:
+    item = {
+        "title": str(title or "Update").strip() or "Update",
+        "notes": str(notes or "").strip(),
+        "version": str(version or "").strip(),
+        "by": str(by) if by else ("Auto (deploy)" if automatic else "System"),
+        "automatic": bool(automatic),
+        "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+    }
+    history = _load_changelog_history()
+    history.insert(0, item)
+    _save_changelog_history(history)
+
+    if supabase:
+        try:
+            supabase.table("stand_changelog").insert(
+                {
+                    "title": item["title"],
+                    "notes": item["notes"],
+                    "version": item["version"],
+                    "by": item["by"],
+                    "automatic": item["automatic"],
+                }
+            ).execute()
+        except Exception as e:
+            print("save changelog to supabase error:", e)
 
 
 def _auto_changelog_notes(prev: dict, curr: dict) -> tuple[str, str]:
@@ -1012,6 +1114,8 @@ async def auto_changelog_on_deploy() -> None:
         print(f"Auto changelog posted build={curr_build} first={first}")
 
     _save_last_deploy(curr)
+    if not err:
+        _record_changelog_event(title=title, notes=notes, version=str(curr_build or ""), automatic=True)
 
 
 @bot.event
@@ -1440,6 +1544,34 @@ async def setrank_cmd(
 
 
 @bot.tree.command(
+    name="updates",
+    description="[Staff] View recent Executive Stand update history",
+)
+async def updates_cmd(interaction: discord.Interaction):
+    if not await staff_check(interaction):
+        return
+    history = _load_changelog_history()
+    if not history:
+        await interaction.response.send_message("No update history yet.", ephemeral=True)
+        return
+
+    lines = []
+    for item in history[:5]:
+        title = item.get("title") or "Update"
+        version = item.get("version")
+        stamp = item.get("timestamp") or "unknown"
+        by = item.get("by") or "System"
+        lines.append(f"• **{title}** — {stamp} | {by}{f' | `{version}`' if version else ''}")
+
+    embed = discord.Embed(
+        title="Executive Stand Update History",
+        description="\n".join(lines),
+        color=0xB45AFF,
+    )
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+@bot.tree.command(
     name="status",
     description="[Staff] Set maintenance / system status (updates status channel dot)",
 )
@@ -1494,11 +1626,11 @@ async def status_cmd(
 
 @bot.tree.command(
     name="changelog",
-    description="[Staff] Optional manual changelog (auto posts on every deploy)",
+    description="[Staff] Post a user-facing update summary with what changed",
 )
 @app_commands.describe(
-    title="Optional title (auto-deploy already posts without this)",
-    notes="Optional notes",
+    title="Example: Combat system + loader fix",
+    notes="Example: • Combat system: improved hit detection\n• Loader: fixed status sync\n• Fix: player config saving",
     version="Optional version tag",
     set_updating="If true, also set status channel to 🔵 Updating first",
     set_up_after="If true, set status channel to 🟢 Up after posting",
@@ -1536,6 +1668,14 @@ async def changelog_cmd(
             )
         except Exception as exc:
             err = f"Changelog crashed: {exc}"
+        if not err:
+            _record_changelog_event(
+                title=title,
+                notes=notes,
+                version=version or "",
+                by=interaction.user,
+                automatic=False,
+            )
         if err:
             await interaction.followup.send(f"Changelog failed: {err}", ephemeral=True)
             return
