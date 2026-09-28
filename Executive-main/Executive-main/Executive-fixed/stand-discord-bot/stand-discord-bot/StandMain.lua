@@ -912,9 +912,10 @@ end
 -- COMBAT: STRAFE + VOID EAT
 ----------------------------------------------------------------------
 local FOOD_NAMES = {
-    "chicken", "pizza", "taco", "hotdog", "burger", "food", "apple",
+    "chicken", "pizza", "taco", "hotdog", "burger", "hamburger", "food", "apple",
     "meat", "sandwich", "fries", "donut", "cake", "bread", "cheese",
-    "lettuce", "crap", "popcorn", "krab",
+    "lettuce", "crap", "popcorn", "krab", "latte", "starblox", "noodles",
+    "bagel", "cookie", "soda", "water", "milk", "juice", "candy",
 }
 
 local function isFoodName(name)
@@ -1013,50 +1014,78 @@ local function buyFood()
     return findFood() ~= nil
 end
 
+local function fireEatRemotes(food)
+    if not MainEvent then return end
+    pcall(function() MainEvent:FireServer("Eat", food) end)
+    pcall(function() MainEvent:FireServer("Eat") end)
+    pcall(function() MainEvent:FireServer("Eating") end)
+    pcall(function() MainEvent:FireServer("Eating", food) end)
+    if food then
+        pcall(function() MainEvent:FireServer("Eat", food.Name) end)
+        -- Da Hood sometimes wants the tool as 2nd arg with string first
+        pcall(function() MainEvent:FireServer("Eat", food, food) end)
+    end
+    if UnreliableMainEvent then
+        pcall(function() UnreliableMainEvent:FireServer("Eat", food) end)
+        pcall(function() UnreliableMainEvent:FireServer("Eat") end)
+    end
+end
+
 local function eatFood()
     local food = findFood()
-    -- never shop-TP while void-healing (yanks character out of void)
+    -- never shop-TP while already void-healing (yanks character out)
     if not food and not State.VoidEat then
         buyFood()
         food = findFood()
     end
     if food then
-        food = equipTool(food, 0.45)
+        -- longer equip timeout in void (character state can be weird)
+        food = equipTool(food, State.VoidEat and 0.9 or 0.45)
         if food then
-            for _ = 1, 8 do
+            for _ = 1, 12 do
                 if State.VoidEat then
-                    -- stay pinned while activating
-                    local hrp = getHRP()
-                    if hrp then
-                        pcall(function()
-                            hrp.CFrame = VoidCF
-                            hrp.AssemblyLinearVelocity = Vector3.zero
-                        end)
-                    end
+                    pinToVoid()
                 end
-                activateTool(food)
                 pcall(function()
-                    if MainEvent then
-                        MainEvent:FireServer("Eat", food)
-                        MainEvent:FireServer("Eating")
-                        MainEvent:FireServer("Eat")
+                    food:Activate()
+                end)
+                activateTool(food)
+                fireEatRemotes(food)
+                -- click simulation helps some places
+                pcall(function()
+                    local vim = game:GetService("VirtualInputManager")
+                    if vim then
+                        vim:SendMouseButtonEvent(0, 0, 0, true, game, 0)
+                        task.wait(0.02)
+                        vim:SendMouseButtonEvent(0, 0, 0, false, game, 0)
                     end
                 end)
-                task.wait(0.07)
+                pcall(function()
+                    local vu = game:GetService("VirtualUser")
+                    if vu then
+                        vu:ClickButton1(Vector2.new(0, 0))
+                    end
+                end)
+                task.wait(0.08)
             end
-        end
-    else
-        -- still try eat remotes even if tool missing
-        if MainEvent then
-            for _, n in ipairs({"Eat", "Eating", "BuyChicken", "Chicken"}) do
-                pcall(function() MainEvent:FireServer(n) end)
-            end
+            return true
         end
     end
-    -- DO NOT spoof BodyEffects Blood/Health client-side.
-    -- That made combatSurviveTick think we were healed and leave void instantly.
+    -- no tool — still spam eat/buy remotes
+    fireEatRemotes(nil)
+    if MainEvent then
+        for _, n in ipairs({
+            "BuyChicken", "BuyPizza", "BuyTaco", "BuyHamburger", "BuyDonut",
+            "Chicken", "Pizza", "Taco", "Hamburger", "Donut",
+        }) do
+            pcall(function() MainEvent:FireServer(n) end)
+            pcall(function() MainEvent:FireServer("Buy", n) end)
+        end
+    end
+    return false
 end
 
+-- Focused void heal: buy if needed, equip food, eat hard while pinned
 local function getLocalBlood()
     local c = getChar()
     if not c then return nil end
@@ -1125,6 +1154,41 @@ local function startVoidPinRender()
     end)
 end
 
+local function voidHealBurst()
+    if not State.VoidEat then return end
+    pinToVoid()
+
+    if not findFood() then
+        -- remote-buy first (no TP)
+        if MainEvent then
+            for _, n in ipairs({
+                "BuyChicken", "BuyPizza", "BuyTaco", "BuyHamburger", "BuyDonut",
+                "Chicken", "Pizza", "Taco", "Hamburger", "Donut", "Food", "BuyFood",
+            }) do
+                pcall(function() MainEvent:FireServer(n) end)
+                pcall(function() MainEvent:FireServer("Buy", n) end)
+            end
+        end
+        task.wait(0.2)
+        pinToVoid()
+        -- if still no food, brief shop trip then back to void
+        if not findFood() then
+            pcall(buyFood)
+            pinToVoid()
+            task.wait(0.15)
+            pinToVoid()
+        end
+    end
+
+    for _ = 1, 6 do
+        if not State.VoidEat then break end
+        pinToVoid()
+        eatFood()
+        pinToVoid()
+        task.wait(0.1)
+    end
+end
+
 local function enterCombatVoid()
     if State.VoidEat then
         pinToVoid()
@@ -1135,8 +1199,8 @@ local function enterCombatVoid()
     State.Tracking = false
     _voidEnterBusy = true
     local now = tick()
-    VoidRecoverUntil = now + 3.0   -- max time in void then forced return
-    VoidMinUntil = now + 1.2      -- MUST stay at least this long (food needs time)
+    VoidRecoverUntil = now + 4.5   -- max time in void then forced return
+    VoidMinUntil = now + 2.0      -- MUST stay long enough to buy + eat
     VoidBloodAtEnter = getLocalBlood()
 
     clearCamlock()
@@ -1157,20 +1221,9 @@ local function enterCombatVoid()
 
     pinToVoid()
 
-    -- buy once if no food (shop TP is OK — we return to void after)
-    if not findFood() then
-        pcall(buyFood)
-        pinToVoid()
-    end
-
-    -- eat several times while pinned
-    for _ = 1, 10 do
-        if not State.VoidEat then break end
-        pinToVoid()
-        pcall(eatFood)
-        pinToVoid()
-        task.wait(0.15)
-    end
+    -- dedicated void heal: buy + equip + eat while pinned
+    pcall(voidHealBurst)
+    pinToVoid()
 end
 
 local function getCombatReturnCF()
@@ -1267,25 +1320,33 @@ local function exitCombatVoid()
     end
 end
 
--- Fast orbit strafe around target (call every shot / frame)
+-- Orbit strafe around target (gentler to avoid client/server path desync errors)
 local function strafeTarget(plr, radius)
-    if State.VoidEat or State.InVoid then return end -- never strafe out of void
-    radius = radius or 9
+    if State.VoidEat or State.InVoid then return end
+    radius = radius or 10
     local my = getHRP()
     local their = getHRP(plr)
     if not my or not their then return end
     local aim = getAimPos(plr) or their.Position
-    -- spin fast
-    State.StrafeAngle = (State.StrafeAngle or 0) + 0.85
+    -- slower orbit step — big angle jumps cause ERROR_CLIENT_PATHFINDING_UNSYNCED_SERVER
+    State.StrafeAngle = (State.StrafeAngle or 0) + 0.35
     local ang = State.StrafeAngle
-    local offset = Vector3.new(math.cos(ang) * radius, 1.2, math.sin(ang) * radius)
-    local pos = their.Position + offset
+    local offset = Vector3.new(math.cos(ang) * radius, 1.5, math.sin(ang) * radius)
+    local targetPos = their.Position + offset
+    -- limit how far we snap per call (smooths replication)
+    local cur = my.Position
+    local delta = targetPos - cur
+    local maxStep = 18
+    if delta.Magnitude > maxStep then
+        targetPos = cur + delta.Unit * maxStep
+    end
     pcall(function()
-        local ch = getChar()
-        local cf = CFrame.new(pos, aim)
-        if ch and ch.PivotTo then ch:PivotTo(cf) end
+        local look = Vector3.new(aim.X, targetPos.Y, aim.Z)
+        local cf = CFrame.new(targetPos, look)
         my.CFrame = cf
-        my.AssemblyLinearVelocity = Vector3.zero
+        -- damp velocity instead of hard zero (less desync)
+        my.AssemblyLinearVelocity = my.AssemblyLinearVelocity * 0.2
+        my.AssemblyAngularVelocity = Vector3.zero
     end)
 end
 
@@ -1316,17 +1377,24 @@ local function combatSurviveTick()
     if State.VoidEat then
         pinToVoid()
 
-        -- keep eating (NEVER buyFood here — shop TP yanks us out of void)
-        if tick() - _lastVoidEatAt >= 0.4 then
+        -- keep eating while voided
+        if tick() - _lastVoidEatAt >= 0.55 then
             _lastVoidEatAt = tick()
             pcall(function()
                 if findFood() then
                     eatFood()
-                end
-                if not findFood() and MainEvent then
-                    for _, n in ipairs({"Eat", "Eating", "BuyChicken", "Chicken"}) do
-                        pcall(function() MainEvent:FireServer(n) end)
+                else
+                    -- remote buy only (no shop TP from heartbeat)
+                    if MainEvent then
+                        for _, n in ipairs({
+                            "BuyChicken", "BuyPizza", "BuyTaco", "BuyHamburger",
+                            "Chicken", "Pizza", "Taco", "Hamburger", "Eat", "Eating",
+                        }) do
+                            pcall(function() MainEvent:FireServer(n) end)
+                            pcall(function() MainEvent:FireServer("Buy", n) end)
+                        end
                     end
+                    fireEatRemotes(nil)
                 end
             end)
             pinToVoid()
@@ -1436,12 +1504,12 @@ local function shootTarget(plr)
             if not gun then break end
         end
 
-        -- FAST STRAFE around target each shot
-        strafeTarget(plr, 8 + (shot % 3))
+        -- strafe around target each shot (capped movement)
+        strafeTarget(plr, 9 + (shot % 2))
         local aim = getAimPos(plr)
         if not aim then break end
 
-        for _ = 1, 8 do
+        for _ = 1, 4 do
             fireMouse(aim)
         end
         pcall(function()
@@ -2632,6 +2700,85 @@ local function cmdKick()
     end)
 end
 
+local function cmdBuyFood()
+    State.Tracking = false
+    notify("Buying food...")
+    task.spawn(function()
+        local ok, err = pcall(function()
+            local had = findFood() ~= nil
+            if not had then
+                buyFood()
+            end
+            task.wait(0.25)
+            if findFood() then
+                notify("Food ready: " .. tostring(findFood().Name))
+            else
+                -- one more remote-only attempt
+                if MainEvent then
+                    for _, n in ipairs({
+                        "BuyChicken", "BuyPizza", "BuyTaco", "BuyHamburger", "BuyDonut",
+                        "Chicken", "Pizza", "Taco", "Hamburger", "Donut",
+                    }) do
+                        pcall(function() MainEvent:FireServer(n) end)
+                        pcall(function() MainEvent:FireServer("Buy", n) end)
+                    end
+                end
+                task.wait(0.3)
+                if findFood() then
+                    notify("Food ready: " .. tostring(findFood().Name))
+                else
+                    notify("No food — try near shop")
+                end
+            end
+        end)
+        if not ok then warn("[Stand] buyfood:", err) end
+        if not State.CombatActive and not State.VoidEat then
+            State.Tracking = true
+            returnToOwner()
+        end
+    end)
+end
+
+local function cmdHeal()
+    if State.VoidEat then
+        notify("Already healing")
+        return
+    end
+    notify("Heal — void + eat")
+    State.Tracking = false
+    task.spawn(function()
+        local ok, err = pcall(function()
+            -- force combat-void style heal even outside combat
+            local wasCombat = State.CombatActive
+            State.CombatActive = true
+            enterCombatVoid()
+            -- wait until void heal finishes (exitCombatVoid clears VoidEat)
+            local t0 = tick()
+            while State.VoidEat and tick() - t0 < 6 do
+                task.wait(0.15)
+            end
+            if State.VoidEat then
+                exitCombatVoid()
+            end
+            if not wasCombat then
+                State.CombatActive = false
+            end
+            -- ensure out of void and near owner/target
+            warpOutOfVoid()
+            if not State.CombatActive then
+                State.Tracking = true
+                returnToOwner()
+            end
+            notify("Heal done")
+        end)
+        if not ok then
+            warn("[Stand] heal:", err)
+            pcall(exitCombatVoid)
+            State.Tracking = true
+        end
+    end)
+end
+
 local function cmdHelp()
     notify("See F9 for command list")
     print("[Stand] Commands:")
@@ -2651,7 +2798,8 @@ local function cmdHelp()
     print("  " .. Prefix .. "sweep / unsweep")
     print("  " .. Prefix .. "protect <user> / unprotect / wl / uwl")
     print("  " .. Prefix .. "target <user> / untarget")
-    print("  " .. Prefix .. "armor / mask / reload / autoreload / fix / kick / help")
+    print("  " .. Prefix .. "armor / mask / buyfood / heal")
+    print("  " .. Prefix .. "reload / autoreload / fix / kick / help")
 end
 
 ----------------------------------------------------------------------
@@ -2717,6 +2865,8 @@ local function onControlChat(msg, speaker)
     elseif cmd == "untarget" or cmd == "unt" then cmdUntarget()
     elseif cmd == "armor" then cmdArmor()
     elseif cmd == "mask" then cmdMask()
+    elseif cmd == "buyfood" or cmd == "food" or cmd == "bf" then cmdBuyFood()
+    elseif cmd == "heal" or cmd == "eat" then cmdHeal()
     elseif cmd == "reload" then
         reloadGun(findGun())
         notify("Reload")
