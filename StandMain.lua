@@ -2678,7 +2678,7 @@ local function cmdMask()
 end
 
 local function cmdFix()
-    -- Full reset: stop combat, force a hard character reset, then return to formation
+    -- Hard reset: stop combat, fully clear the current character, then reload it.
     clearCamlock()
     State.LoopKill = nil
     State.LoopKillKnife = false
@@ -2706,32 +2706,47 @@ local function cmdFix()
         end
     end)
 
-    -- Force-reset the character so stuck/bugged states recover cleanly
     task.spawn(function()
+        local ok = false
         pcall(function()
             local char = LocalPlayer.Character
             if char then
                 local hum = char:FindFirstChildOfClass("Humanoid")
                 if hum then
                     hum.Health = 0
+                    hum.WalkSpeed = 16
                 end
                 char:BreakJoints()
             end
+            ok = true
         end)
 
-        task.wait(0.2)
+        task.wait(0.25)
+
+        pcall(function()
+            LocalPlayer.Character = nil
+        end)
+
+        task.wait(0.25)
+
         pcall(function()
             LocalPlayer:LoadCharacter()
         end)
+
+        if not ok then
+            pcall(function()
+                LocalPlayer:LoadCharacter()
+            end)
+        end
     end)
 
     task.spawn(function()
         local t0 = tick()
-        while tick() - t0 < 8 do
+        while tick() - t0 < 10 do
             if getHRP() and getHum() and getHum().Health > 0 then break end
             task.wait(0.15)
         end
-        task.wait(0.35)
+        task.wait(0.5)
         if Config.AutoArmor then pcall(buyArmor) end
         if Config.ArmorMax or Config.Inf then pcall(applyArmorMax) end
         if Config.AutoMask then pcall(buyMask) end
@@ -2739,18 +2754,33 @@ local function cmdFix()
         if not IsOwner then
             returnToOwner()
         end
-        notify("Fix - forced respawn")
+        notify("Fix - forced character reset")
     end)
 end
 
 local function cmdKick()
-    -- Leave server and rejoin same place / same job if possible
+    -- Force a clean leave/rejoin so stuck state is reset on the server side.
     notify("Rejoining...")
     task.spawn(function()
-        task.wait(0.2)
-        local ok = pcall(function()
-            TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, LocalPlayer)
+        clearCamlock()
+        State.Tracking = false
+        State.CombatActive = false
+        State.SentryBusy = false
+        State.LoopKill = nil
+        State.LoopKnock = nil
+        State.TargetName = nil
+        setAttacking(false)
+
+        task.wait(0.25)
+
+        local ok = false
+        pcall(function()
+            if TeleportService and TeleportService.TeleportToPlaceInstance then
+                TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, LocalPlayer)
+                ok = true
+            end
         end)
+
         if not ok then
             pcall(function()
                 TeleportService:Teleport(game.PlaceId, LocalPlayer)
