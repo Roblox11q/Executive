@@ -1058,16 +1058,74 @@ local function eatFood()
     end)
 end
 
+local function getLocalHurt()
+    -- Da Hood / hood games: Blood/HP live on BodyEffects; Humanoid.Health is secondary
+    local c = getChar()
+    if not c then return true end
+    local be = c:FindFirstChild("BodyEffects")
+    if be then
+        for _, name in ipairs({"Blood", "Health", "HP"}) do
+            local v = be:FindFirstChild(name)
+            if v and (v:IsA("NumberValue") or v:IsA("IntValue")) then
+                if v.Value < 85 then return true end
+            end
+        end
+    end
+    local hum = getHum()
+    if not hum then return true end
+    if hum.Health < hum.MaxHealth * 0.9 then return true end
+    if isKO(LocalPlayer) then return true end
+    return false
+end
+
+local function getLocalHealed()
+    local c = getChar()
+    if not c then return false end
+    local be = c:FindFirstChild("BodyEffects")
+    if be then
+        for _, name in ipairs({"Blood", "Health", "HP"}) do
+            local v = be:FindFirstChild(name)
+            if v and (v:IsA("NumberValue") or v:IsA("IntValue")) then
+                if v.Value >= 95 then return true end
+                return false
+            end
+        end
+    end
+    local hum = getHum()
+    if not hum then return false end
+    if isKO(LocalPlayer) then return false end
+    return hum.Health >= hum.MaxHealth * 0.95
+end
+
+local VoidRecoverUntil = 0 -- tick() deadline while recovering in void
+local _voidEnterBusy = false
+
 local function enterCombatVoid()
+    if State.VoidEat then
+        -- already recovering — just pin to void
+        local hrp = getHRP()
+        if hrp then
+            pcall(function()
+                hrp.CFrame = VoidCF
+                hrp.AssemblyLinearVelocity = Vector3.zero
+            end)
+        end
+        return
+    end
     State.InVoid = true
     State.VoidEat = true
     State.Tracking = false
+    _voidEnterBusy = true
+    VoidRecoverUntil = tick() + 3.5 -- stay long enough to buy + eat + heal
     clearCamlock()
     clearAimLock()
     pcall(function()
         local h = getHum()
         if h then
             h.PlatformStand = false
+            h.Sit = false
+            h:ChangeState(Enum.HumanoidStateType.GettingUp)
+            h:ChangeState(Enum.HumanoidStateType.Running)
             h:UnequipTools()
         end
     end)
@@ -1082,7 +1140,7 @@ local function enterCombatVoid()
     if not findFood() then
         buyFood()
     end
-    for _ = 1, 5 do
+    for _ = 1, 8 do
         eatFood()
         local my = getHRP()
         if my then
@@ -1091,13 +1149,24 @@ local function enterCombatVoid()
                 my.AssemblyLinearVelocity = Vector3.zero
             end)
         end
-        task.wait(0.1)
+        task.wait(0.12)
+        if getLocalHealed() then break end
     end
 end
 
 local function exitCombatVoid()
     State.InVoid = false
     State.VoidEat = false
+    VoidRecoverUntil = 0
+    _voidEnterBusy = false
+    pcall(function()
+        local h = getHum()
+        if h then
+            h.PlatformStand = false
+            h.Sit = false
+            h:ChangeState(Enum.HumanoidStateType.Running)
+        end
+    end)
 end
 
 -- Fast orbit strafe around target (call every shot / frame)
@@ -1123,22 +1192,24 @@ end
 
 local function beginCombat()
     State.CombatActive = true
-    State.VoidEat = false
+    -- do NOT clear VoidEat here — if already recovering from a shot, keep healing
 end
 
 local function endCombat()
     State.CombatActive = false
     State.VoidEat = false
-    if State.InVoid then
-        State.InVoid = false
-    end
+    State.InVoid = false
+    VoidRecoverUntil = 0
+    _voidEnterBusy = false
 end
 
--- If shot during combat → void + eat, then resume
+-- If shot during combat → void + eat, then resume when healed
+local _lastVoidEatAt = 0
 local function combatSurviveTick()
     if not State.CombatActive or IsOwner then return end
+
+    -- Already recovering: pin to void, keep eating, leave only when healed or timeout
     if State.VoidEat then
-        -- stay in void and keep eating
         local hrp = getHRP()
         if hrp then
             pcall(function()
@@ -1146,26 +1217,46 @@ local function combatSurviveTick()
                 hrp.AssemblyLinearVelocity = Vector3.zero
             end)
         end
+        -- re-eat every ~0.35s while voided
+        if tick() - _lastVoidEatAt >= 0.35 then
+            _lastVoidEatAt = tick()
+            pcall(function()
+                if not findFood() then buyFood() end
+                eatFood()
+            end)
+        end
+        -- exit when healed OR recovery window elapsed
+        if getLocalHealed() or tick() >= VoidRecoverUntil then
+            exitCombatVoid()
+            _voidEnterBusy = false
+            local h = getHum()
+            if h then
+                pcall(function()
+                    h.PlatformStand = false
+                    h.Sit = false
+                    h:ChangeState(Enum.HumanoidStateType.Running)
+                end)
+            end
+        end
         return
     end
-    local hum = getHum()
-    if not hum then return end
-    local hurt = hum.Health < hum.MaxHealth * 0.85 or isKO(LocalPlayer)
-    if hurt then
+
+    -- Not yet voiding — detect damage (Humanoid + BodyEffects Blood)
+    if getLocalHurt() and not _voidEnterBusy then
+        _voidEnterBusy = true
         notify("Combat void — eating")
-        enterCombatVoid()
-        -- brief recover then leave void to continue fight
+        _lastVoidEatAt = tick()
         task.spawn(function()
-            task.wait(0.8)
-            if State.CombatActive then
-                exitCombatVoid()
-                local h = getHum()
-                if h then
-                    pcall(function()
-                        h.PlatformStand = false
-                        h:ChangeState(Enum.HumanoidStateType.Running)
-                    end)
-                end
+            local ok, err = pcall(enterCombatVoid)
+            if not ok then
+                warn("[Stand] enterCombatVoid:", err)
+                _voidEnterBusy = false
+                State.VoidEat = false
+                State.InVoid = false
+            end
+            -- keep _voidEnterBusy true while VoidEat; cleared on exit
+            if not State.VoidEat then
+                _voidEnterBusy = false
             end
         end)
     end
@@ -1177,10 +1268,12 @@ local function shootTarget(plr)
     if not plr or isProtected(plr) or not isAlive(plr) then return end
     if State.InVoid and not State.VoidEat then State.InVoid = false end
     if State.VoidEat then
-        -- wait out void-eat then continue
+        -- wait for heal void to finish (up to recover window), don't force-exit early
         local t0 = tick()
-        while State.VoidEat and tick() - t0 < 2 do task.wait(0.1) end
-        exitCombatVoid()
+        while State.VoidEat and tick() - t0 < 4 do task.wait(0.1) end
+        if State.VoidEat then
+            exitCombatVoid()
+        end
     end
 
     local gun = findGun()
@@ -1207,10 +1300,12 @@ local function shootTarget(plr)
         -- if we got voided mid-fight, wait and resume
         if State.VoidEat or State.InVoid then
             local t0 = tick()
-            while (State.VoidEat or State.InVoid) and tick() - t0 < 2.5 do
+            while (State.VoidEat or State.InVoid) and tick() - t0 < 4 do
                 task.wait(0.1)
             end
-            exitCombatVoid()
+            if State.VoidEat or State.InVoid then
+                exitCombatVoid()
+            end
             gun = equipTool(findGun(), 0.5)
             if not gun then break end
             setAimLock(plr)
