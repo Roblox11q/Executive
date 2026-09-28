@@ -52,7 +52,7 @@ before update on stand_blacklist
 for each row
 execute function set_blacklist_updated_at();
 
--- Optional: status table if you want the bot to persist maintenance state in Supabase too.
+-- System status (persisted so maintenance locks survive Render restarts / multi-instance)
 create table if not exists stand_status (
   id text primary key default 'current',
   status text not null default 'up',
@@ -67,6 +67,7 @@ insert into stand_status (id, status, note)
 values ('current', 'up', '')
 on conflict (id) do nothing;
 
+-- Changelog history (written whenever staff or auto-deploy posts a changelog)
 create table if not exists stand_changelog (
   id bigserial primary key,
   title text not null default 'Update',
