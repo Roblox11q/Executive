@@ -2678,7 +2678,7 @@ local function cmdMask()
 end
 
 local function cmdFix()
-    -- Hard reset: force death + destroy the avatar then respawn.
+    -- Force a real reset by killing the humanoid, which triggers Roblox respawn.
     clearCamlock()
     State.LoopKill = nil
     State.LoopKillKnife = false
@@ -2703,43 +2703,13 @@ local function cmdFix()
             h.JumpHeight = 7.2
             h:ChangeState(Enum.HumanoidStateType.GettingUp)
             h:UnequipTools()
+            h.Health = 0
         end
     end)
 
     task.spawn(function()
-        local char = LocalPlayer.Character
-        local hum = char and char:FindFirstChildOfClass("Humanoid")
-
-        if hum then
-            pcall(function() hum.Health = 0 end)
-            pcall(function() hum:TakeDamage(999999) end)
-            pcall(function() hum:ChangeState(Enum.HumanoidStateType.Dead) end)
-            pcall(function() hum.WalkSpeed = 0 end)
-            pcall(function() hum.JumpPower = 0 end)
-        end
-
-        task.wait(0.05)
-
-        pcall(function()
-            if LocalPlayer.Character then
-                LocalPlayer.Character:Destroy()
-            end
-        end)
-
-        task.wait(0.05)
-
-        pcall(function()
-            LocalPlayer.Character = nil
-        end)
-
-        task.wait(0.1)
-
-        pcall(function()
-            LocalPlayer:LoadCharacter()
-        end)
-
         local t0 = tick()
-        while tick() - t0 < 12 do
+        while tick() - t0 < 8 do
             local c = LocalPlayer.Character
             local h = c and c:FindFirstChildOfClass("Humanoid")
             if c and h and h.Health > 0 then break end
@@ -2754,7 +2724,7 @@ local function cmdFix()
         if not IsOwner then
             returnToOwner()
         end
-        notify("Fix - forced respawn")
+        notify("Fix - reset by humanoid death")
     end)
 end
 
