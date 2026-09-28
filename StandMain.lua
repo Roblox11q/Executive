@@ -2678,7 +2678,7 @@ local function cmdMask()
 end
 
 local function cmdFix()
-    -- Hard client-side reset that actually kills + respawns the character
+    -- Nuclear client reset — multiple methods so at least one forces a real respawn
     clearCamlock()
     clearAimLock()
     State.LoopKill = nil
@@ -2704,13 +2704,14 @@ local function cmdFix()
 
     local char = getChar()
     local hum = getHum()
+    local oldChar = char
 
-      -- 1) Clear hood KO / ragdoll flags then force death
+    -- 1) BodyEffects death flags
     pcall(function()
         if char then
             local be = char:FindFirstChild("BodyEffects")
             if be then
-                for _, name in ipairs({"K.O", "KO", "Knocked", "IsKnocked", "Downed", "Dead", "Death"}) do
+                for _, name in ipairs({"K.O", "KO", "Knocked", "IsKnocked", "Downed", "Dead", "Death", "SDeath"}) do
                     local v = be:FindFirstChild(name)
                     if v then
                         if typeof(v.Value) == "boolean" then v.Value = true end
@@ -2719,57 +2720,63 @@ local function cmdFix()
                 end
             end
         end
+    end)
+
+    -- 2) Humanoid death
+    pcall(function()
         if hum then
             hum.PlatformStand = false
             hum.Sit = false
-            hum.WalkSpeed = 16
-            hum.JumpPower = 50
-            hum.JumpHeight = 7.2
             hum:UnequipTools()
             hum:ChangeState(Enum.HumanoidStateType.Dead)
             hum.Health = 0
+            pcall(function() hum:TakeDamage(9e9) end)
         end
     end)
 
-    -- 2) Break joints (most reliable client-side kill on hood games)
+    -- 3) BreakJoints
+    pcall(function()
+        if char then char:BreakJoints() end
+    end)
+
+    -- 4) Destroy HRP + Head (forces death on most hood games)
     pcall(function()
         if char then
-            char:BreakJoints()
+            local hrp = char:FindFirstChild("HumanoidRootPart")
+            local head = char:FindFirstChild("Head")
+            if hrp then hrp:Destroy() end
+            if head then head:Destroy() end
         end
     end)
 
-    -- 3) Extra force: destroy HumanoidRootPart if still alive after a short wait
-    task.spawn(function()
-        task.wait(0.15)
-        local still = getChar()
-        local stillHum = still and still:FindFirstChildOfClass("Humanoid")
-        if still and stillHum and stillHum.Health > 0 then
-            pcall(function()
-                stillHum.Health = 0
-                still:BreakJoints()
-                local hrp = still:FindFirstChild("HumanoidRootPart")
-                if hrp then hrp:Destroy() end
-            end)
+    -- 5) Full character destroy (most reliable client-side force respawn)
+    pcall(function()
+        if char then
+            char:Destroy()
         end
     end)
 
-    -- Wait for real respawn, then restore stand state
+    -- 6) Last resort: LoadCharacter (works on many executors)
+    pcall(function()
+        if LocalPlayer.LoadCharacter then
+            LocalPlayer:LoadCharacter()
+        end
+    end)
+
+    -- Wait for a brand-new character, then restore stand
     task.spawn(function()
-        local oldChar = char
         local t0 = tick()
-        while tick() - t0 < 10 do
+        while tick() - t0 < 12 do
             local c = LocalPlayer.Character
             local h = c and c:FindFirstChildOfClass("Humanoid")
-            -- New character must exist, be alive, and not be the old one
             if c and c ~= oldChar and h and h.Health > 0 then
                 break
             end
             task.wait(0.1)
         end
 
-        task.wait(0.6)
+        task.wait(0.7)
 
-        -- Re-apply perks on the fresh character
         if Config.AutoArmor then pcall(buyArmor) end
         if Config.ArmorMax or Config.Inf then pcall(applyArmorMax) end
         if Config.AutoMask then pcall(buyMask) end
