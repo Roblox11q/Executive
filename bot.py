@@ -605,7 +605,14 @@ def generate_loader(cfg: dict) -> str:
 
 intents = discord.Intents.default()
 intents.members = True
-bot = commands.Bot(command_prefix="!", intents=intents)
+bot = commands.Bot(
+    command_prefix="!",
+    intents=intents,
+    activity=discord.Activity(
+        type=discord.ActivityType.watching,
+        name="Executive Stand",
+    ),
+)
 
 
 def has_buyer_role(interaction: discord.Interaction) -> bool:
@@ -709,6 +716,23 @@ def _status_channel_name(status: str) -> str:
     return f"{dot}｜{label}"
 
 
+async def _set_discord_presence_for_status(status: str) -> None:
+    """Map the bot's system status to the correct Discord presence state."""
+    normalized = (status or "up").lower().strip()
+    presence_map = {
+        "up": discord.Status.online,
+        "down": discord.Status.do_not_disturb,
+        "updating": discord.Status.idle,
+        "detected": discord.Status.idle,
+    }
+    target_status = presence_map.get(normalized, discord.Status.online)
+    activity = discord.Activity(
+        type=discord.ActivityType.watching,
+        name="Executive Stand",
+    )
+    await bot.change_presence(status=target_status, activity=activity)
+
+
 async def update_status_channel(
     status: str,
     *,
@@ -733,6 +757,11 @@ async def update_status_channel(
     elif status == "up":
         _status_note = ""
     _save_persisted_status()
+
+    try:
+        await _set_discord_presence_for_status(status)
+    except Exception as e:
+        print("discord presence update error:", e)
 
     channel = bot.get_channel(STATUS_CHANNEL_ID)
     if channel is None:
@@ -981,6 +1010,12 @@ async def on_ready():
     except Exception as e:
         print("Sync error:", e)
     print(f"Logged in as {bot.user}")
+    await bot.change_presence(
+        activity=discord.Activity(
+            type=discord.ActivityType.watching,
+            name="Executive Stand",
+        )
+    )
     print(f"Buyer role: {BUYER_ROLE_ID} | Supabase: {'yes' if supabase else 'NO'}")
     print(f"System status: {get_system_status()} | maintenance_block={is_maintenance()}")
     # Refresh status channel from persisted state (do NOT force online — keep maintenance locks)
