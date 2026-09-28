@@ -1,20 +1,5 @@
-services:
-  - type: web
-    name: stand-discord-bot
-    runtime: python
-    buildCommand: pip install -r requirements.txt
-    startCommand: python bot.py
-    plan: free
-    envVars:
-      - key: DISCORD_TOKEN
-        sync: false
-      - key: BUYER_ROLE_ID
-        sync: false
-      - key: MAIN_SCRIPT_URL
-        sync: false
-      - key: SUPABASE_URL
-        sync: false
-      - key: SUPABASE_KEY
-        sync: false
-      - key: KEY_API_BASE
-        sync: false
+discord.py>=2.3.2
+python-dotenv>=1.0.0
+supabase>=2.4.0
+httpx>=0.27.0
+aiohttp>=3.9.0
