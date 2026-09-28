@@ -778,26 +778,23 @@ def clear_blacklist(discord_id) -> None:
         print("clear_blacklist error:", e)
 
 
-async def buyer_check(interaction: discord.Interaction) -> bool:
+async def buyer_check(interaction: discord.Interaction, *, deferred: bool = False) -> bool:
+    async def deny(message: str) -> None:
+        if deferred:
+            await interaction.followup.send(message, ephemeral=True)
+        else:
+            await interaction.response.send_message(message, ephemeral=True)
+
     if is_blacklisted(interaction.user.id):
-        await interaction.response.send_message(
-            "You are **blacklisted** from this bot.",
-            ephemeral=True,
-        )
+        await deny("You are **blacklisted** from this bot.")
         return False
     # Maintenance / updating: block all non-staff buyers (loader + config)
     if is_maintenance() and not has_staff_role(interaction):
-        await interaction.response.send_message(
-            maintenance_message(),
-            ephemeral=True,
-        )
+        await deny(maintenance_message())
         return False
     if has_buyer_role(interaction):
         return True
-    await interaction.response.send_message(
-        "You need the **buyer** role to use this command.",
-        ephemeral=True,
-    )
+    await deny("You need the **buyer** role to use this command.")
     return False
 
 
@@ -1255,18 +1252,19 @@ async def on_ready():
     key="Your license key (XXXX-XXXX)",
 )
 async def setuploader(interaction: discord.Interaction, owner: str, key: str):
-    if not await buyer_check(interaction):
+    await interaction.response.defer(ephemeral=True)
+    if not await buyer_check(interaction, deferred=True):
         return
     owner_name = normalize_username(owner)
     if not owner_name:
-        await interaction.response.send_message(
+        await interaction.followup.send(
             "Owner username is required. Example: `YourMainAccount`",
             ephemeral=True,
         )
         return
     key_value = str(key).strip()
     if not key_value:
-        await interaction.response.send_message(
+        await interaction.followup.send(
             "A license key is required. Use `/setkey` or `/setuploader` with a valid key.",
             ephemeral=True,
         )
@@ -1277,7 +1275,7 @@ async def setuploader(interaction: discord.Interaction, owner: str, key: str):
     set_user_cfg(interaction.user.id, cfg)
     alt_count = len(cfg.get("alts") or {})
     masked = cfg["key"][:4] + "****" if len(cfg["key"]) >= 4 else "****"
-    await interaction.response.send_message(
+    await interaction.followup.send(
         f"**Owner set to** `{cfg['owner']}`\n"
         f"**Key saved:** `{masked}`\n"
         f"Linked alts: **{alt_count}**\n"
