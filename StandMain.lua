@@ -158,6 +158,7 @@ local State = {
     AssistName    = nil,   -- .assist user — apply sentry modes for that user too
     SentryBusy    = false,
     CombatActive  = false, -- true during knock/stomp/loop/etc
+    CombatTarget  = nil,
     StrafeAngle   = 0,
     VoidEat       = false, -- void + eat while combat to avoid dying
 }
@@ -1228,7 +1229,7 @@ end
 
 local function getCombatReturnCF()
     -- Prefer current fight target, else owner formation
-    local targetName = State.LoopKill or State.LoopKnock or State.TargetName
+    local targetName = State.CombatTarget or State.LoopKill or State.LoopKnock or State.TargetName
     if targetName then
         local plr = findPlayer(targetName)
         local their = plr and getHRP(plr)
@@ -1244,6 +1245,16 @@ local function getCombatReturnCF()
     end
     -- last resort: above origin so we leave void coords
     return CFrame.new(0, 50, 0)
+end
+
+local function isCombatTargetStillValid()
+    local targetName = State.CombatTarget or State.LoopKill or State.LoopKnock
+    if not targetName then return false end
+    local target = findPlayer(targetName)
+    if not target or string.lower(target.Name) ~= string.lower(tostring(targetName)) then
+        return false
+    end
+    return not isProtected(target)
 end
 
 local function warpOutOfVoid()
@@ -1300,17 +1311,25 @@ local function exitCombatVoid()
         end
     end)
 
-    -- Resume combat if still fighting, otherwise return to owner
-    if State.CombatActive and (State.LoopKill or State.LoopKnock or State.SentryBusy) then
+    -- Resume only if the active combat target is still valid.
+    local wasCombatActive = State.CombatActive
+    local hadCombatTarget = State.CombatTarget or State.LoopKill or State.LoopKnock
+    if wasCombatActive and hadCombatTarget and isCombatTargetStillValid() then
         State.Tracking = false
         State.LoopKillBusy = false -- allow loop worker to start again
         notify("Combat resume")
-    elseif State.CombatActive then
-        State.Tracking = false
-        notify("Combat resume")
     else
+        if wasCombatActive and hadCombatTarget then
+            State.CombatActive = false
+            State.CombatTarget = nil
+            State.LoopKill = nil
+            State.LoopKnock = nil
+            State.LoopKillKnife = false
+            State.LoopKillBusy = false
+            clearCamlock()
+        end
         State.Tracking = true
-        notify("Healed — back")
+        notify(wasCombatActive and hadCombatTarget and "Combat target ended" or "Healed — back")
         task.spawn(function()
             task.wait(0.1)
             if not State.CombatActive and not State.VoidEat then
@@ -1350,13 +1369,15 @@ local function strafeTarget(plr, radius)
     end)
 end
 
-local function beginCombat()
+local function beginCombat(target)
     State.CombatActive = true
+    State.CombatTarget = target and target.Name or nil
     -- do NOT clear VoidEat — if already recovering from a shot, keep healing
 end
 
 local function endCombat()
     State.CombatActive = false
+    State.CombatTarget = nil
     State.VoidEat = false
     State.InVoid = false
     VoidRecoverUntil = 0
@@ -1366,6 +1387,15 @@ local function endCombat()
     pcall(function()
         RunService:UnbindFromRenderStep("StandVoidPin")
     end)
+end
+
+local function shouldPanicHeal()
+    local hum = getHum()
+    if not hum or hum.Health <= 0 or hum.MaxHealth <= 0 then return false end
+    if isKO(LocalPlayer) then return true end
+    local blood = getLocalBlood()
+    if blood ~= nil and blood <= 45 then return true end
+    return hum.Health <= hum.MaxHealth * 0.35
 end
 
 -- If shot during combat → void + eat, then ALWAYS leave void and resume combat
@@ -1434,7 +1464,9 @@ local function combatSurviveTick()
     -- Only enter void when actively in combat
     if not State.CombatActive then return end
 
-    if getLocalHurt() and not _voidEnterBusy and tick() >= _voidCooldownUntil then
+    local panicHeal = shouldPanicHeal()
+    if (getLocalHurt() or panicHeal) and not _voidEnterBusy
+        and (tick() >= _voidCooldownUntil or panicHeal) then
         _voidEnterBusy = true
         notify("Combat void — eating")
         _lastVoidEatAt = tick()
@@ -1910,7 +1942,7 @@ local function cmdKnock(user)
         return
     end
     State.Tracking = false
-    beginCombat()
+    beginCombat(plr)
     task.spawn(function()
         shootTarget(plr)
         local t0 = tick()
@@ -1935,7 +1967,7 @@ local function cmdStomp(user)
     local plr = findPlayer(user)
     if not plr then notify("Stomp: not found") return end
     State.Tracking = false
-    beginCombat()
+    beginCombat(plr)
     task.spawn(function()
         stompTarget(plr, 12)
         endCombat()
@@ -2031,7 +2063,7 @@ local function cmdLoopKill(user, useKnife)
     State.LoopKillKnife = useKnife and true or false
     State.LoopKillBusy = false
     State.Tracking = false
-    beginCombat()
+    beginCombat(plr)
     notify("LoopKill " .. (useKnife and "knife " or "gun ") .. "ON " .. plr.Name)
 end
 
@@ -2049,7 +2081,7 @@ local function cmdLoopKnock(user)
     State.LoopKnock = plr.Name
     State.LoopKillBusy = false
     State.Tracking = false
-    beginCombat()
+    beginCombat(plr)
     notify("LoopKnock ON " .. plr.Name)
 end
 
@@ -2203,7 +2235,7 @@ local function sentryReact(plr, doStomp)
     if State.SentryBusy then return end
     State.SentryBusy = true
     State.Tracking = false
-    beginCombat()
+    beginCombat(plr)
     notify("Sentry → " .. plr.Name .. (doStomp and " (stomp)" or ""))
     task.spawn(function()
         local ok, err = pcall(function()
