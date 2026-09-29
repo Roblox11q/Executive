@@ -1320,7 +1320,7 @@ local function exitCombatVoid()
     end
 end
 
--- Orbit strafe around target (gentler to avoid client/server path desync errors)
+-- Orbit strafe around target — full TP (no step limit) so knock/lk teleports instead of walking
 local function strafeTarget(plr, radius)
     if State.VoidEat or State.InVoid then return end
     radius = radius or 10
@@ -1328,24 +1328,19 @@ local function strafeTarget(plr, radius)
     local their = getHRP(plr)
     if not my or not their then return end
     local aim = getAimPos(plr) or their.Position
-    -- slower orbit step — big angle jumps cause ERROR_CLIENT_PATHFINDING_UNSYNCED_SERVER
     State.StrafeAngle = (State.StrafeAngle or 0) + 0.35
     local ang = State.StrafeAngle
     local offset = Vector3.new(math.cos(ang) * radius, 1.5, math.sin(ang) * radius)
     local targetPos = their.Position + offset
-    -- limit how far we snap per call (smooths replication)
-    local cur = my.Position
-    local delta = targetPos - cur
-    local maxStep = 18
-    if delta.Magnitude > maxStep then
-        targetPos = cur + delta.Unit * maxStep
-    end
     pcall(function()
         local look = Vector3.new(aim.X, targetPos.Y, aim.Z)
         local cf = CFrame.new(targetPos, look)
+        local ch = getChar()
+        if ch and ch.PivotTo then
+            ch:PivotTo(cf)
+        end
         my.CFrame = cf
-        -- damp velocity instead of hard zero (less desync)
-        my.AssemblyLinearVelocity = my.AssemblyLinearVelocity * 0.2
+        my.AssemblyLinearVelocity = Vector3.zero
         my.AssemblyAngularVelocity = Vector3.zero
     end)
 end
@@ -1431,23 +1426,12 @@ local function combatSurviveTick()
         return
     end
 
-    -- Only enter void when actively in combat
-    if not State.CombatActive then return end
-
-    if getLocalHurt() and not _voidEnterBusy and tick() >= _voidCooldownUntil then
-        _voidEnterBusy = true
-        notify("Combat void — eating")
-        _lastVoidEatAt = tick()
-        task.spawn(function()
-            local ok, err = pcall(enterCombatVoid)
-            if not ok then
-                warn("[Stand] enterCombatVoid:", err)
-                exitCombatVoid()
-            elseif not State.VoidEat then
-                _voidEnterBusy = false
-            end
-        end)
-    end
+    -- Auto void-heal on shot DISABLED — stand no longer TPs to void when damaged
+    -- (manual .heal still works via cmdHeal)
+    -- if not State.CombatActive then return end
+    -- if getLocalHurt() and not _voidEnterBusy and tick() >= _voidCooldownUntil then
+    --     ...
+    -- end
 end
 
 -- COMBAT: SHOOT
