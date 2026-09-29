@@ -168,7 +168,6 @@ local State = {
     CombatActive  = false, -- true during knock/stomp/loop/etc
     CombatTarget  = nil,
     StrafeAngle   = 0,
-    VoidEat       = false, -- void + eat while combat to avoid dying
 }
 
 local Whitelist    = {}
@@ -918,7 +917,7 @@ local function autoReloadTick()
     end
 end
 
--- COMBAT: STRAFE + VOID EAT
+-- COMBAT: FOOD / EAT (manual .heal / .buyfood)
 ----------------------------------------------------------------------
 local FOOD_NAMES = {
     "chicken", "pizza", "taco", "hotdog", "burger", "hamburger", "food", "apple",
@@ -1006,10 +1005,10 @@ local function buyFood()
             end
         end
 
-        -- return to void / previous pos
+        -- return to previous pos (or void if .void is active)
         if my then
             pcall(function()
-                if State.InVoid or State.VoidEat then
+                if State.InVoid then
                     my.CFrame = VoidCF
                 elseif savedCF then
                     my.CFrame = savedCF
@@ -1042,19 +1041,14 @@ end
 
 local function eatFood()
     local food = findFood()
-    -- never shop-TP while already void-healing (yanks character out)
-    if not food and not State.VoidEat then
+    if not food then
         buyFood()
         food = findFood()
     end
     if food then
-        -- longer equip timeout in void (character state can be weird)
-        food = equipTool(food, State.VoidEat and 0.9 or 0.45)
+        food = equipTool(food, 0.45)
         if food then
             for _ = 1, 12 do
-                if State.VoidEat then
-                    pinToVoid()
-                end
                 pcall(function()
                     food:Activate()
                 end)
@@ -1094,262 +1088,9 @@ local function eatFood()
     return false
 end
 
--- Focused void heal: buy if needed, equip food, eat hard while pinned
-local function getLocalBlood()
-    local c = getChar()
-    if not c then return nil end
-    local be = c:FindFirstChild("BodyEffects")
-    if not be then return nil end
-    for _, name in ipairs({"Blood", "Health", "HP"}) do
-        local v = be:FindFirstChild(name)
-        if v and (v:IsA("NumberValue") or v:IsA("IntValue")) then
-            return v.Value, v
-        end
-    end
-    return nil
-end
-
-local function getLocalHurt()
-    -- Prefer BodyEffects blood; fall back to Humanoid + KO
-    local blood = getLocalBlood()
-    if blood ~= nil and blood < 90 then return true end
-    local hum = getHum()
-    if not hum then return true end
-    if hum.Health < hum.MaxHealth * 0.9 then return true end
-    if isKO(LocalPlayer) then return true end
-    return false
-end
-
-local VoidRecoverUntil = 0
-local VoidMinUntil = 0       -- hard minimum time in void before any exit
-local VoidBloodAtEnter = nil -- blood snapshot when we entered (ignore client writes)
-local _voidEnterBusy = false
-local _lastVoidEatAt = 0
-local _voidCooldownUntil = 0 -- prevent instant re-void after exit
-
-local function pinToVoid()
-    local hrp = getHRP()
-    if not hrp then return end
-    pcall(function()
-        local ch = getChar()
-        if ch and ch.PivotTo then
-            ch:PivotTo(VoidCF)
-        end
-        hrp.CFrame = VoidCF
-        hrp.AssemblyLinearVelocity = Vector3.zero
-        hrp.AssemblyAngularVelocity = Vector3.zero
-    end)
-    pcall(function()
-        local h = getHum()
-        if h then
-            h.PlatformStand = false
-            h.Sit = false
-            -- keep upright so tools can equip
-            if h:GetState() == Enum.HumanoidStateType.Physics
-                or h:GetState() == Enum.HumanoidStateType.Ragdoll then
-                h:ChangeState(Enum.HumanoidStateType.GettingUp)
-            end
-        end
-    end)
-end
-
-local function startVoidPinRender()
-    pcall(function()
-        RunService:UnbindFromRenderStep("StandVoidPin")
-        RunService:BindToRenderStep("StandVoidPin", Enum.RenderPriority.Camera.Value - 1, function()
-            if not State.VoidEat then return end
-            pinToVoid()
-        end)
-    end)
-end
-
-local function voidHealBurst()
-    if not State.VoidEat then return end
-    pinToVoid()
-
-    if not findFood() then
-        -- remote-buy first (no TP)
-        if MainEvent then
-            for _, n in ipairs({
-                "BuyChicken", "BuyPizza", "BuyTaco", "BuyHamburger", "BuyDonut",
-                "Chicken", "Pizza", "Taco", "Hamburger", "Donut", "Food", "BuyFood",
-            }) do
-                pcall(function() MainEvent:FireServer(n) end)
-                pcall(function() MainEvent:FireServer("Buy", n) end)
-            end
-        end
-        task.wait(0.2)
-        pinToVoid()
-        -- if still no food, brief shop trip then back to void
-        if not findFood() then
-            pcall(buyFood)
-            pinToVoid()
-            task.wait(0.15)
-            pinToVoid()
-        end
-    end
-
-    for _ = 1, 6 do
-        if not State.VoidEat then break end
-        pinToVoid()
-        eatFood()
-        pinToVoid()
-        task.wait(0.1)
-    end
-end
-
-local function enterCombatVoid()
-    if State.VoidEat then
-        pinToVoid()
-        return
-    end
-    State.InVoid = true
-    State.VoidEat = true
-    State.Tracking = false
-    _voidEnterBusy = true
-    local now = tick()
-    VoidRecoverUntil = now + 4.5   -- max time in void then forced return
-    VoidMinUntil = now + 2.0      -- MUST stay long enough to buy + eat
-    VoidBloodAtEnter = getLocalBlood()
-
-    clearCamlock()
-    clearAimLock()
-    startVoidPinRender()
-    pinToVoid()
-
-    pcall(function()
-        local h = getHum()
-        if h then
-            h.PlatformStand = false
-            h.Sit = false
-            h:ChangeState(Enum.HumanoidStateType.GettingUp)
-            h:ChangeState(Enum.HumanoidStateType.Running)
-            h:UnequipTools()
-        end
-    end)
-
-    pinToVoid()
-
-    -- dedicated void heal: buy + equip + eat while pinned
-    pcall(voidHealBurst)
-    pinToVoid()
-end
-
-local function getCombatReturnCF()
-    -- Prefer current fight target, else owner formation
-    local targetName = State.CombatTarget or State.LoopKill or State.LoopKnock or State.TargetName
-    if targetName then
-        local plr = findPlayer(targetName)
-        local their = plr and getHRP(plr)
-        if their then
-            return their.CFrame * CFrame.new(0, 2, 6)
-        end
-    end
-    local owner = getOwner()
-    local oHRP = owner and getHRP(owner)
-    if oHRP then
-        local offset = SLOT_CF[MySlot] or SLOT_CF[2]
-        return oHRP.CFrame * offset
-    end
-    -- last resort: above origin so we leave void coords
-    return CFrame.new(0, 50, 0)
-end
-
-local function isCombatTargetStillValid()
-    local targetName = State.CombatTarget or State.LoopKill or State.LoopKnock
-    if not targetName then return false end
-    local target = findPlayer(targetName)
-    if not target or string.lower(target.Name) ~= string.lower(tostring(targetName)) then
-        return false
-    end
-    return not isProtected(target)
-end
-
-local function warpOutOfVoid()
-    local cf = getCombatReturnCF()
-    for _ = 1, 8 do
-        if State.VoidEat then return end
-        pcall(function()
-            local h = getHum()
-            if h then
-                h.PlatformStand = false
-                h.Sit = false
-                h:ChangeState(Enum.HumanoidStateType.GettingUp)
-                h:ChangeState(Enum.HumanoidStateType.Running)
-            end
-            local hrp = getHRP()
-            local ch = getChar()
-            if ch and ch.PivotTo then
-                ch:PivotTo(cf)
-            end
-            if hrp then
-                hrp.CFrame = cf
-                hrp.AssemblyLinearVelocity = Vector3.zero
-                hrp.AssemblyAngularVelocity = Vector3.zero
-            end
-        end)
-        task.wait(0.03)
-    end
-end
-
-local function exitCombatVoid()
-    State.InVoid = false
-    State.VoidEat = false
-    VoidRecoverUntil = 0
-    VoidMinUntil = 0
-    VoidBloodAtEnter = nil
-    _voidEnterBusy = false
-    _voidCooldownUntil = tick() + 1.25 -- don't re-void immediately
-    pcall(function()
-        RunService:UnbindFromRenderStep("StandVoidPin")
-    end)
-
-    -- MUST leave void coordinates or stand stays stuck under map / in sky
-    task.spawn(function()
-        warpOutOfVoid()
-    end)
-
-    pcall(function()
-        local h = getHum()
-        if h then
-            h.PlatformStand = false
-            h.Sit = false
-            h:ChangeState(Enum.HumanoidStateType.GettingUp)
-            h:ChangeState(Enum.HumanoidStateType.Running)
-        end
-    end)
-
-    -- Resume only if the active combat target is still valid.
-    local wasCombatActive = State.CombatActive
-    local hadCombatTarget = State.CombatTarget or State.LoopKill or State.LoopKnock
-    if wasCombatActive and hadCombatTarget and isCombatTargetStillValid() then
-        State.Tracking = false
-        State.LoopKillBusy = false -- allow loop worker to start again
-        notify("Combat resume")
-    else
-        if wasCombatActive and hadCombatTarget then
-            State.CombatActive = false
-            State.CombatTarget = nil
-            State.LoopKill = nil
-            State.LoopKnock = nil
-            State.LoopKillKnife = false
-            State.LoopKillBusy = false
-            clearCamlock()
-        end
-        State.Tracking = true
-        notify(wasCombatActive and hadCombatTarget and "Combat target ended" or "Healed — back")
-        task.spawn(function()
-            task.wait(0.1)
-            if not State.CombatActive and not State.VoidEat then
-                pcall(returnToOwner)
-            end
-        end)
-    end
-end
-
 -- Orbit strafe around target (gentler to avoid client/server path desync errors)
 local function strafeTarget(plr, radius)
-    if State.VoidEat or State.InVoid then return end
+    if State.InVoid then return end
     radius = radius or 10
     local my = getHRP()
     local their = getHRP(plr)
@@ -1380,129 +1121,19 @@ end
 local function beginCombat(target)
     State.CombatActive = true
     State.CombatTarget = target and target.Name or nil
-    -- do NOT clear VoidEat — if already recovering from a shot, keep healing
 end
 
 local function endCombat()
     State.CombatActive = false
     State.CombatTarget = nil
-    State.VoidEat = false
     State.InVoid = false
-    VoidRecoverUntil = 0
-    VoidMinUntil = 0
-    VoidBloodAtEnter = nil
-    _voidEnterBusy = false
-    pcall(function()
-        RunService:UnbindFromRenderStep("StandVoidPin")
-    end)
-end
-
-local function shouldPanicHeal()
-    local hum = getHum()
-    if not hum or hum.Health <= 0 or hum.MaxHealth <= 0 then return false end
-    if isKO(LocalPlayer) then return true end
-    local blood = getLocalBlood()
-    if blood ~= nil and blood <= 45 then return true end
-    return hum.Health <= hum.MaxHealth * 0.35
-end
-
--- If shot during combat → void + eat, then ALWAYS leave void and resume combat
-local function combatSurviveTick()
-    if IsOwner then return end
-
-    -- CRITICAL: always process void recovery even if CombatActive became false,
-    -- otherwise the stand gets permanently stuck in void.
-    if State.VoidEat then
-        pinToVoid()
-
-        -- keep eating while voided
-        if tick() - _lastVoidEatAt >= 0.55 then
-            _lastVoidEatAt = tick()
-            pcall(function()
-                if findFood() then
-                    eatFood()
-                else
-                    -- remote buy only (no shop TP from heartbeat)
-                    if MainEvent then
-                        for _, n in ipairs({
-                            "BuyChicken", "BuyPizza", "BuyTaco", "BuyHamburger",
-                            "Chicken", "Pizza", "Taco", "Hamburger", "Eat", "Eating",
-                        }) do
-                            pcall(function() MainEvent:FireServer(n) end)
-                            pcall(function() MainEvent:FireServer("Buy", n) end)
-                        end
-                    end
-                    fireEatRemotes(nil)
-                end
-            end)
-            pinToVoid()
-        end
-
-        local now = tick()
-        -- safety: if timers were wiped, force exit soon
-        if VoidMinUntil == 0 then VoidMinUntil = now + 1.0 end
-        if VoidRecoverUntil == 0 then VoidRecoverUntil = now + 2.5 end
-
-        local minDone = now >= VoidMinUntil
-        local maxDone = now >= VoidRecoverUntil
-
-        -- Healed = no longer hurt (blood/hp recovered or full health bar)
-        local healed = false
-        if minDone then
-            if not getLocalHurt() then
-                healed = true
-            else
-                local blood = getLocalBlood()
-                if blood ~= nil and blood >= 95 then
-                    healed = true
-                end
-                local hum = getHum()
-                if hum and not isKO(LocalPlayer) and hum.Health >= hum.MaxHealth * 0.92 then
-                    healed = true
-                end
-            end
-        end
-
-        if (minDone and healed) or maxDone then
-            exitCombatVoid()
-        end
-        return
-    end
-
-    -- Only enter void when actively in combat
-    if not State.CombatActive then return end
-
-    local panicHeal = shouldPanicHeal()
-    if (getLocalHurt() or panicHeal) and not _voidEnterBusy
-        and (tick() >= _voidCooldownUntil or panicHeal) then
-        _voidEnterBusy = true
-        notify("Combat void — eating")
-        _lastVoidEatAt = tick()
-        task.spawn(function()
-            local ok, err = pcall(enterCombatVoid)
-            if not ok then
-                warn("[Stand] enterCombatVoid:", err)
-                exitCombatVoid()
-            elseif not State.VoidEat then
-                _voidEnterBusy = false
-            end
-        end)
-    end
 end
 
 -- COMBAT: SHOOT
 ----------------------------------------------------------------------
 local function shootTarget(plr)
     if not plr or isProtected(plr) or not isAlive(plr) then return end
-    if State.InVoid and not State.VoidEat then State.InVoid = false end
-    if State.VoidEat then
-        -- wait for heal void to finish (up to recover window), don't force-exit early
-        local t0 = tick()
-        while State.VoidEat and tick() - t0 < 4 do task.wait(0.1) end
-        if State.VoidEat then
-            exitCombatVoid()
-        end
-    end
+    if State.InVoid then State.InVoid = false end
 
     local gun = findGun()
     if not gun then
@@ -1525,20 +1156,6 @@ local function shootTarget(plr)
 
     for shot = 1, 12 do
         if not isAlive(plr) or isKO(plr) then break end
-        -- if we got voided mid-fight, wait and resume
-        if State.VoidEat or State.InVoid then
-            local t0 = tick()
-            while (State.VoidEat or State.InVoid) and tick() - t0 < 4 do
-                task.wait(0.1)
-            end
-            if State.VoidEat or State.InVoid then
-                exitCombatVoid()
-            end
-            gun = equipTool(findGun(), 0.5)
-            if not gun then break end
-            setAimLock(plr)
-            setCamlock(plr, 3)
-        end
         if gun.Parent ~= getChar() then
             gun = equipTool(findGun(), 0.5)
             if not gun then break end
@@ -2690,7 +2307,6 @@ local function cmdFix()
     State.KnifeBusy = false
     State.SentryBusy = false
     State.InVoid = false
-    State.VoidEat = false
     State.Tracking = false
     State.Armed = false
     State.CombatActive = false
@@ -2698,7 +2314,6 @@ local function cmdFix()
     setAttacking(false)
 
     pcall(function()
-        RunService:UnbindFromRenderStep("StandVoidPin")
         RunService:UnbindFromRenderStep(CAM_BIND)
     end)
 
@@ -2870,7 +2485,7 @@ local function cmdBuyFood()
             end
         end)
         if not ok then warn("[Stand] buyfood:", err) end
-        if not State.CombatActive and not State.VoidEat then
+        if not State.CombatActive then
             State.Tracking = true
             returnToOwner()
         end
@@ -2878,31 +2493,14 @@ local function cmdBuyFood()
 end
 
 local function cmdHeal()
-    if State.VoidEat then
-        notify("Already healing")
-        return
-    end
-    notify("Heal — void + eat")
+    notify("Heal — eating")
     State.Tracking = false
     task.spawn(function()
         local ok, err = pcall(function()
-            -- force combat-void style heal even outside combat
-            local wasCombat = State.CombatActive
-            State.CombatActive = true
-            enterCombatVoid()
-            -- wait until void heal finishes (exitCombatVoid clears VoidEat)
-            local t0 = tick()
-            while State.VoidEat and tick() - t0 < 6 do
-                task.wait(0.15)
+            for _ = 1, 3 do
+                eatFood()
+                task.wait(0.2)
             end
-            if State.VoidEat then
-                exitCombatVoid()
-            end
-            if not wasCombat then
-                State.CombatActive = false
-            end
-            -- ensure out of void and near owner/target
-            warpOutOfVoid()
             if not State.CombatActive then
                 State.Tracking = true
                 returnToOwner()
@@ -2911,7 +2509,6 @@ local function cmdHeal()
         end)
         if not ok then
             warn("[Stand] heal:", err)
-            pcall(exitCombatVoid)
             State.Tracking = true
         end
     end)
@@ -3052,7 +2649,6 @@ Connections.Main = RunService.Heartbeat:Connect(function()
     end
     autoReloadTick()
     pcall(sentryTick)
-    pcall(combatSurviveTick)
 
     -- LoopKnock: shoot only, no stomp
     if State.LoopKnock and not State.LoopKillBusy and not State.KnifeBusy then
