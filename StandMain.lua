@@ -99,7 +99,8 @@ print("[Stand] Place", PlaceId, placeLabel, "| MouseRemote =", MouseRemote)
 ----------------------------------------------------------------------
 -- SLOT / OWNER
 ----------------------------------------------------------------------
-local SLOT_CF = {
+-- Ground formation (Y = 0)
+local SLOT_CF_GROUND = {
     [1] = CFrame.new(-3.5, 0, 0.5),
     [2] = CFrame.new( 3.5, 0, 0.5),
     [3] = CFrame.new( 0,   0, 3.5),
@@ -108,6 +109,19 @@ local SLOT_CF = {
     [6] = CFrame.new( 0,   0, 6),
     [0] = CFrame.new( 2.5, 0, 2.5),
 }
+
+-- Floating summon formation: Y = height above owner, +Z = behind owner
+local SLOT_CF_AIR = {
+    [1] = CFrame.new(-3.2, 4.8, 2.8),  -- left float, slightly behind
+    [2] = CFrame.new( 3.2, 4.8, 2.8),  -- right float, slightly behind
+    [3] = CFrame.new( 0,   5.5, 4.0),  -- center behind, higher
+    [4] = CFrame.new( 0,   4.2,-3.0),  -- front float
+    [5] = CFrame.new(-5.5, 5.2, 3.5),  -- far left float
+    [6] = CFrame.new( 0,   6.5, 5.5),  -- high center back
+    [0] = CFrame.new( 2.5, 4.5, 2.5),  -- default float behind-right
+}
+
+local SLOT_CF = SLOT_CF_AIR  -- default: floating (use .air to toggle)
 
 local function getMySlot()
     local alts = Config.Alts or {}
@@ -132,10 +146,20 @@ local State = {
     ProtectName   = nil,
     LoopKill      = nil,
     LoopKillKnife = false,
+    LoopKnock     = nil,   -- loop knock only (no stomp)
     KnifeBusy     = false,
     LoopKillBusy  = false,
     AutoReload    = true,
     Sweep         = false,
+    Air           = true,  -- floating summon formation (toggle with .air)
+    Sentry        = false, -- .sentry — knock whoever shoots the OWNER
+    Sentry2       = false, -- .sentry2 — knock+stomp whoever shoots the OWNER
+    BSentry       = false, -- .bsentry — knock+stomp whoever shoots THIS stand
+    AssistName    = nil,   -- .assist user — apply sentry modes for that user too
+    SentryBusy    = false,
+    CombatActive  = false, -- true during knock/stomp/loop/etc
+    StrafeAngle   = 0,
+    VoidEat       = false, -- void + eat while combat to avoid dying
 }
 
 local Whitelist    = {}
@@ -143,6 +167,10 @@ local Connections  = {}
 local CamTarget    = nil
 local CamlockUntil = 0
 local lastChatMsg, lastChatAt = "", 0
+local HealthWatch  = {} -- [userId] = lastHealth (sentry)
+local KoWatch      = {} -- [userId] = wasKO
+local ArmorWatch   = {} -- [userId] = last armor value
+local LastSentryAt = 0
 
 ----------------------------------------------------------------------
 -- CHARACTER HELPERS
@@ -157,6 +185,118 @@ end
 local function getHum(p)
     local c = getChar(p)
     return c and c:FindFirstChildOfClass("Humanoid")
+end
+
+----------------------------------------------------------------------
+-- IDLE ANIMATION (from Discord /config anim)
+----------------------------------------------------------------------
+local IdleTrack = nil
+
+local function normalizeAnimId(id)
+    if type(id) ~= "string" and type(id) ~= "number" then return nil end
+    local s = tostring(id):gsub("%s+", "")
+    if s == "" or s == "nil" or s == "0" then return nil end
+    if s:match("^%d+$") then
+        return "rbxassetid://" .. s
+    end
+    if s:match("^rbxassetid://%d+") or s:match("^https?://") then
+        return s
+    end
+    -- bare number with junk or http-ish
+    local num = s:match("(%d+)")
+    if num then return "rbxassetid://" .. num end
+    return nil
+end
+
+local function stopIdleAnim()
+    if IdleTrack then
+        pcall(function() IdleTrack:Stop(0.12) end)
+        IdleTrack = nil
+    end
+end
+
+local function isHoldingTool()
+    local c = getChar()
+    if not c then return false end
+    for _, child in ipairs(c:GetChildren()) do
+        if child:IsA("Tool") then return true end
+    end
+    return false
+end
+
+local function applyIdleAnim()
+    local animId = normalizeAnimId(Config.Anim)
+    if not animId then return end
+
+    -- Don't fight gun/tool hold poses — idle only when unarmed
+    if State.Armed or isHoldingTool() then
+        stopIdleAnim()
+        return
+    end
+
+    local char = getChar()
+    if not char then return end
+    local hum = getHum()
+    if not hum then return end
+
+    -- Already playing same track
+    if IdleTrack and IdleTrack.IsPlaying then return end
+
+    stopIdleAnim()
+
+    local ok, err = pcall(function()
+        -- Reduce conflict with default Animate script
+        local animate = char:FindFirstChild("Animate")
+        if animate and animate:IsA("LocalScript") then
+            pcall(function()
+                animate.Disabled = true
+            end)
+        end
+
+        local animator = hum:FindFirstChildOfClass("Animator")
+        if not animator then
+            animator = Instance.new("Animator")
+            animator.Parent = hum
+        end
+
+        -- Stop other idle-priority tracks so ours sticks
+        for _, t in ipairs(animator:GetPlayingAnimationTracks()) do
+            if t.Priority == Enum.AnimationPriority.Idle or t.Priority == Enum.AnimationPriority.Core then
+                pcall(function() t:Stop(0.1) end)
+            end
+        end
+
+        local anim = Instance.new("Animation")
+        anim.AnimationId = animId
+
+        local track = animator:LoadAnimation(anim)
+        track.Looped = true
+        track.Priority = Enum.AnimationPriority.Action
+        track:Play(0.15)
+        IdleTrack = track
+    end)
+    if not ok then
+        warn("[Stand] Failed to play idle anim:", animId, err)
+    end
+end
+
+-- Watch character for tool equip/unequip so idle never blocks gun hold
+local function hookToolWatch(char)
+    if not char then return end
+    char.ChildAdded:Connect(function(child)
+        if child:IsA("Tool") then
+            stopIdleAnim()
+        end
+    end)
+    char.ChildRemoved:Connect(function(child)
+        if child:IsA("Tool") then
+            task.defer(function()
+                if not State.Armed and not isHoldingTool() then
+                    applyIdleAnim()
+                end
+            end)
+        end
+    end)
 end
 
 local function isKO(p)
@@ -769,11 +909,560 @@ local function autoReloadTick()
     end
 end
 
+-- COMBAT: STRAFE + VOID EAT
+----------------------------------------------------------------------
+local FOOD_NAMES = {
+    "chicken", "pizza", "taco", "hotdog", "burger", "hamburger", "food", "apple",
+    "meat", "sandwich", "fries", "donut", "cake", "bread", "cheese",
+    "lettuce", "crap", "popcorn", "krab", "latte", "starblox", "noodles",
+    "bagel", "cookie", "soda", "water", "milk", "juice", "candy",
+}
+
+local function isFoodName(name)
+    local n = string.lower(tostring(name or ""))
+    for _, key in ipairs(FOOD_NAMES) do
+        if n:find(key, 1, true) then return true end
+    end
+    return false
+end
+
+local function findFood()
+    local c = getChar()
+    local bag = LocalPlayer:FindFirstChild("Backpack")
+    for _, container in ipairs({c, bag}) do
+        if container then
+            for _, t in ipairs(container:GetChildren()) do
+                if t:IsA("Tool") and isFoodName(t.Name) then
+                    return t
+                end
+            end
+        end
+    end
+    return nil
+end
+
+-- Auto-buy food from shop if none in inventory (Da Hood / hood-style places)
+local function buyFood()
+    -- 1) remote spam (works on some places without needing shop)
+    if MainEvent then
+        for _, n in ipairs({
+            "BuyChicken", "BuyPizza", "BuyTaco", "BuyHotdog", "BuyBurger",
+            "Chicken", "Pizza", "Taco", "Food", "BuyFood",
+        }) do
+            pcall(function() MainEvent:FireServer(n) end)
+            pcall(function() MainEvent:FireServer("Buy", n) end)
+        end
+    end
+
+    -- 2) click shop food pads under Workspace.Ignored.Shop (classic Da Hood)
+    pcall(function()
+        local shop = Workspace:FindFirstChild("Ignored")
+        shop = shop and shop:FindFirstChild("Shop")
+        if not shop then
+            -- other hood games
+            shop = Workspace:FindFirstChild("Shop")
+                or (Workspace:FindFirstChild("MAP") and Workspace.MAP:FindFirstChild("Shop"))
+        end
+        if not shop then return end
+
+        local my = getHRP()
+        local savedCF = my and my.CFrame
+
+        for _, m in ipairs(shop:GetDescendants()) do
+            if not isFoodName(m.Name) then continue end
+            local cd = m:IsA("ClickDetector") and m or m:FindFirstChildWhichIsA("ClickDetector", true)
+            local part = m:IsA("BasePart") and m or m:FindFirstChildWhichIsA("BasePart", true)
+            if cd then
+                -- teleport next to pad so server accepts click
+                if part and my then
+                    pcall(function()
+                        my.CFrame = part.CFrame * CFrame.new(0, 3, 0)
+                        my.AssemblyLinearVelocity = Vector3.zero
+                    end)
+                    task.wait(0.05)
+                end
+                if fireclickdetector then
+                    pcall(function() fireclickdetector(cd) end)
+                    pcall(function() fireclickdetector(cd, 1) end)
+                end
+                pcall(function()
+                    if firetouchinterest and part and my then
+                        firetouchinterest(my, part, 0)
+                        task.wait(0.05)
+                        firetouchinterest(my, part, 1)
+                    end
+                end)
+                task.wait(0.08)
+                if findFood() then break end
+            end
+        end
+
+        -- return to void / previous pos
+        if my then
+            pcall(function()
+                if State.InVoid or State.VoidEat then
+                    my.CFrame = VoidCF
+                elseif savedCF then
+                    my.CFrame = savedCF
+                end
+                my.AssemblyLinearVelocity = Vector3.zero
+            end)
+        end
+    end)
+
+    task.wait(0.15)
+    return findFood() ~= nil
+end
+
+local function fireEatRemotes(food)
+    if not MainEvent then return end
+    pcall(function() MainEvent:FireServer("Eat", food) end)
+    pcall(function() MainEvent:FireServer("Eat") end)
+    pcall(function() MainEvent:FireServer("Eating") end)
+    pcall(function() MainEvent:FireServer("Eating", food) end)
+    if food then
+        pcall(function() MainEvent:FireServer("Eat", food.Name) end)
+        -- Da Hood sometimes wants the tool as 2nd arg with string first
+        pcall(function() MainEvent:FireServer("Eat", food, food) end)
+    end
+    if UnreliableMainEvent then
+        pcall(function() UnreliableMainEvent:FireServer("Eat", food) end)
+        pcall(function() UnreliableMainEvent:FireServer("Eat") end)
+    end
+end
+
+local function eatFood()
+    local food = findFood()
+    -- never shop-TP while already void-healing (yanks character out)
+    if not food and not State.VoidEat then
+        buyFood()
+        food = findFood()
+    end
+    if food then
+        -- longer equip timeout in void (character state can be weird)
+        food = equipTool(food, State.VoidEat and 0.9 or 0.45)
+        if food then
+            for _ = 1, 12 do
+                if State.VoidEat then
+                    pinToVoid()
+                end
+                pcall(function()
+                    food:Activate()
+                end)
+                activateTool(food)
+                fireEatRemotes(food)
+                -- click simulation helps some places
+                pcall(function()
+                    local vim = game:GetService("VirtualInputManager")
+                    if vim then
+                        vim:SendMouseButtonEvent(0, 0, 0, true, game, 0)
+                        task.wait(0.02)
+                        vim:SendMouseButtonEvent(0, 0, 0, false, game, 0)
+                    end
+                end)
+                pcall(function()
+                    local vu = game:GetService("VirtualUser")
+                    if vu then
+                        vu:ClickButton1(Vector2.new(0, 0))
+                    end
+                end)
+                task.wait(0.08)
+            end
+            return true
+        end
+    end
+    -- no tool — still spam eat/buy remotes
+    fireEatRemotes(nil)
+    if MainEvent then
+        for _, n in ipairs({
+            "BuyChicken", "BuyPizza", "BuyTaco", "BuyHamburger", "BuyDonut",
+            "Chicken", "Pizza", "Taco", "Hamburger", "Donut",
+        }) do
+            pcall(function() MainEvent:FireServer(n) end)
+            pcall(function() MainEvent:FireServer("Buy", n) end)
+        end
+    end
+    return false
+end
+
+-- Focused void heal: buy if needed, equip food, eat hard while pinned
+local function getLocalBlood()
+    local c = getChar()
+    if not c then return nil end
+    local be = c:FindFirstChild("BodyEffects")
+    if not be then return nil end
+    for _, name in ipairs({"Blood", "Health", "HP"}) do
+        local v = be:FindFirstChild(name)
+        if v and (v:IsA("NumberValue") or v:IsA("IntValue")) then
+            return v.Value, v
+        end
+    end
+    return nil
+end
+
+local function getLocalHurt()
+    -- Prefer BodyEffects blood; fall back to Humanoid + KO
+    local blood = getLocalBlood()
+    if blood ~= nil and blood < 90 then return true end
+    local hum = getHum()
+    if not hum then return true end
+    if hum.Health < hum.MaxHealth * 0.9 then return true end
+    if isKO(LocalPlayer) then return true end
+    return false
+end
+
+local VoidRecoverUntil = 0
+local VoidMinUntil = 0       -- hard minimum time in void before any exit
+local VoidBloodAtEnter = nil -- blood snapshot when we entered (ignore client writes)
+local _voidEnterBusy = false
+local _lastVoidEatAt = 0
+local _voidCooldownUntil = 0 -- prevent instant re-void after exit
+
+local function pinToVoid()
+    local hrp = getHRP()
+    if not hrp then return end
+    pcall(function()
+        local ch = getChar()
+        if ch and ch.PivotTo then
+            ch:PivotTo(VoidCF)
+        end
+        hrp.CFrame = VoidCF
+        hrp.AssemblyLinearVelocity = Vector3.zero
+        hrp.AssemblyAngularVelocity = Vector3.zero
+    end)
+    pcall(function()
+        local h = getHum()
+        if h then
+            h.PlatformStand = false
+            h.Sit = false
+            -- keep upright so tools can equip
+            if h:GetState() == Enum.HumanoidStateType.Physics
+                or h:GetState() == Enum.HumanoidStateType.Ragdoll then
+                h:ChangeState(Enum.HumanoidStateType.GettingUp)
+            end
+        end
+    end)
+end
+
+local function startVoidPinRender()
+    pcall(function()
+        RunService:UnbindFromRenderStep("StandVoidPin")
+        RunService:BindToRenderStep("StandVoidPin", Enum.RenderPriority.Camera.Value - 1, function()
+            if not State.VoidEat then return end
+            pinToVoid()
+        end)
+    end)
+end
+
+local function voidHealBurst()
+    if not State.VoidEat then return end
+    pinToVoid()
+
+    if not findFood() then
+        -- remote-buy first (no TP)
+        if MainEvent then
+            for _, n in ipairs({
+                "BuyChicken", "BuyPizza", "BuyTaco", "BuyHamburger", "BuyDonut",
+                "Chicken", "Pizza", "Taco", "Hamburger", "Donut", "Food", "BuyFood",
+            }) do
+                pcall(function() MainEvent:FireServer(n) end)
+                pcall(function() MainEvent:FireServer("Buy", n) end)
+            end
+        end
+        task.wait(0.2)
+        pinToVoid()
+        -- if still no food, brief shop trip then back to void
+        if not findFood() then
+            pcall(buyFood)
+            pinToVoid()
+            task.wait(0.15)
+            pinToVoid()
+        end
+    end
+
+    for _ = 1, 6 do
+        if not State.VoidEat then break end
+        pinToVoid()
+        eatFood()
+        pinToVoid()
+        task.wait(0.1)
+    end
+end
+
+local function enterCombatVoid()
+    if State.VoidEat then
+        pinToVoid()
+        return
+    end
+    State.InVoid = true
+    State.VoidEat = true
+    State.Tracking = false
+    _voidEnterBusy = true
+    local now = tick()
+    VoidRecoverUntil = now + 4.5   -- max time in void then forced return
+    VoidMinUntil = now + 2.0      -- MUST stay long enough to buy + eat
+    VoidBloodAtEnter = getLocalBlood()
+
+    clearCamlock()
+    clearAimLock()
+    startVoidPinRender()
+    pinToVoid()
+
+    pcall(function()
+        local h = getHum()
+        if h then
+            h.PlatformStand = false
+            h.Sit = false
+            h:ChangeState(Enum.HumanoidStateType.GettingUp)
+            h:ChangeState(Enum.HumanoidStateType.Running)
+            h:UnequipTools()
+        end
+    end)
+
+    pinToVoid()
+
+    -- dedicated void heal: buy + equip + eat while pinned
+    pcall(voidHealBurst)
+    pinToVoid()
+end
+
+local function getCombatReturnCF()
+    -- Prefer current fight target, else owner formation
+    local targetName = State.LoopKill or State.LoopKnock or State.TargetName
+    if targetName then
+        local plr = findPlayer(targetName)
+        local their = plr and getHRP(plr)
+        if their then
+            return their.CFrame * CFrame.new(0, 2, 6)
+        end
+    end
+    local owner = getOwner()
+    local oHRP = owner and getHRP(owner)
+    if oHRP then
+        local offset = SLOT_CF[MySlot] or SLOT_CF[2]
+        return oHRP.CFrame * offset
+    end
+    -- last resort: above origin so we leave void coords
+    return CFrame.new(0, 50, 0)
+end
+
+local function warpOutOfVoid()
+    local cf = getCombatReturnCF()
+    for _ = 1, 8 do
+        if State.VoidEat then return end
+        pcall(function()
+            local h = getHum()
+            if h then
+                h.PlatformStand = false
+                h.Sit = false
+                h:ChangeState(Enum.HumanoidStateType.GettingUp)
+                h:ChangeState(Enum.HumanoidStateType.Running)
+            end
+            local hrp = getHRP()
+            local ch = getChar()
+            if ch and ch.PivotTo then
+                ch:PivotTo(cf)
+            end
+            if hrp then
+                hrp.CFrame = cf
+                hrp.AssemblyLinearVelocity = Vector3.zero
+                hrp.AssemblyAngularVelocity = Vector3.zero
+            end
+        end)
+        task.wait(0.03)
+    end
+end
+
+local function exitCombatVoid()
+    State.InVoid = false
+    State.VoidEat = false
+    VoidRecoverUntil = 0
+    VoidMinUntil = 0
+    VoidBloodAtEnter = nil
+    _voidEnterBusy = false
+    _voidCooldownUntil = tick() + 1.25 -- don't re-void immediately
+    pcall(function()
+        RunService:UnbindFromRenderStep("StandVoidPin")
+    end)
+
+    -- MUST leave void coordinates or stand stays stuck under map / in sky
+    task.spawn(function()
+        warpOutOfVoid()
+    end)
+
+    pcall(function()
+        local h = getHum()
+        if h then
+            h.PlatformStand = false
+            h.Sit = false
+            h:ChangeState(Enum.HumanoidStateType.GettingUp)
+            h:ChangeState(Enum.HumanoidStateType.Running)
+        end
+    end)
+
+    -- Resume combat if still fighting, otherwise return to owner
+    if State.CombatActive and (State.LoopKill or State.LoopKnock or State.SentryBusy) then
+        State.Tracking = false
+        State.LoopKillBusy = false -- allow loop worker to start again
+        notify("Combat resume")
+    elseif State.CombatActive then
+        State.Tracking = false
+        notify("Combat resume")
+    else
+        State.Tracking = true
+        notify("Healed — back")
+        task.spawn(function()
+            task.wait(0.1)
+            if not State.CombatActive and not State.VoidEat then
+                pcall(returnToOwner)
+            end
+        end)
+    end
+end
+
+-- Orbit strafe around target (gentler to avoid client/server path desync errors)
+local function strafeTarget(plr, radius)
+    if State.VoidEat or State.InVoid then return end
+    radius = radius or 10
+    local my = getHRP()
+    local their = getHRP(plr)
+    if not my or not their then return end
+    local aim = getAimPos(plr) or their.Position
+    -- slower orbit step — big angle jumps cause ERROR_CLIENT_PATHFINDING_UNSYNCED_SERVER
+    State.StrafeAngle = (State.StrafeAngle or 0) + 0.35
+    local ang = State.StrafeAngle
+    local offset = Vector3.new(math.cos(ang) * radius, 1.5, math.sin(ang) * radius)
+    local targetPos = their.Position + offset
+    -- limit how far we snap per call (smooths replication)
+    local cur = my.Position
+    local delta = targetPos - cur
+    local maxStep = 18
+    if delta.Magnitude > maxStep then
+        targetPos = cur + delta.Unit * maxStep
+    end
+    pcall(function()
+        local look = Vector3.new(aim.X, targetPos.Y, aim.Z)
+        local cf = CFrame.new(targetPos, look)
+        my.CFrame = cf
+        -- damp velocity instead of hard zero (less desync)
+        my.AssemblyLinearVelocity = my.AssemblyLinearVelocity * 0.2
+        my.AssemblyAngularVelocity = Vector3.zero
+    end)
+end
+
+local function beginCombat()
+    State.CombatActive = true
+    -- do NOT clear VoidEat — if already recovering from a shot, keep healing
+end
+
+local function endCombat()
+    State.CombatActive = false
+    State.VoidEat = false
+    State.InVoid = false
+    VoidRecoverUntil = 0
+    VoidMinUntil = 0
+    VoidBloodAtEnter = nil
+    _voidEnterBusy = false
+    pcall(function()
+        RunService:UnbindFromRenderStep("StandVoidPin")
+    end)
+end
+
+-- If shot during combat → void + eat, then ALWAYS leave void and resume combat
+local function combatSurviveTick()
+    if IsOwner then return end
+
+    -- CRITICAL: always process void recovery even if CombatActive became false,
+    -- otherwise the stand gets permanently stuck in void.
+    if State.VoidEat then
+        pinToVoid()
+
+        -- keep eating while voided
+        if tick() - _lastVoidEatAt >= 0.55 then
+            _lastVoidEatAt = tick()
+            pcall(function()
+                if findFood() then
+                    eatFood()
+                else
+                    -- remote buy only (no shop TP from heartbeat)
+                    if MainEvent then
+                        for _, n in ipairs({
+                            "BuyChicken", "BuyPizza", "BuyTaco", "BuyHamburger",
+                            "Chicken", "Pizza", "Taco", "Hamburger", "Eat", "Eating",
+                        }) do
+                            pcall(function() MainEvent:FireServer(n) end)
+                            pcall(function() MainEvent:FireServer("Buy", n) end)
+                        end
+                    end
+                    fireEatRemotes(nil)
+                end
+            end)
+            pinToVoid()
+        end
+
+        local now = tick()
+        -- safety: if timers were wiped, force exit soon
+        if VoidMinUntil == 0 then VoidMinUntil = now + 1.0 end
+        if VoidRecoverUntil == 0 then VoidRecoverUntil = now + 2.5 end
+
+        local minDone = now >= VoidMinUntil
+        local maxDone = now >= VoidRecoverUntil
+
+        -- Healed = no longer hurt (blood/hp recovered or full health bar)
+        local healed = false
+        if minDone then
+            if not getLocalHurt() then
+                healed = true
+            else
+                local blood = getLocalBlood()
+                if blood ~= nil and blood >= 95 then
+                    healed = true
+                end
+                local hum = getHum()
+                if hum and not isKO(LocalPlayer) and hum.Health >= hum.MaxHealth * 0.92 then
+                    healed = true
+                end
+            end
+        end
+
+        if (minDone and healed) or maxDone then
+            exitCombatVoid()
+        end
+        return
+    end
+
+    -- Only enter void when actively in combat
+    if not State.CombatActive then return end
+
+    if getLocalHurt() and not _voidEnterBusy and tick() >= _voidCooldownUntil then
+        _voidEnterBusy = true
+        notify("Combat void — eating")
+        _lastVoidEatAt = tick()
+        task.spawn(function()
+            local ok, err = pcall(enterCombatVoid)
+            if not ok then
+                warn("[Stand] enterCombatVoid:", err)
+                exitCombatVoid()
+            elseif not State.VoidEat then
+                _voidEnterBusy = false
+            end
+        end)
+    end
+end
+
 -- COMBAT: SHOOT
 ----------------------------------------------------------------------
 local function shootTarget(plr)
     if not plr or isProtected(plr) or not isAlive(plr) then return end
-    if State.InVoid then State.InVoid = false end
+    if State.InVoid and not State.VoidEat then State.InVoid = false end
+    if State.VoidEat then
+        -- wait for heal void to finish (up to recover window), don't force-exit early
+        local t0 = tick()
+        while State.VoidEat and tick() - t0 < 4 do task.wait(0.1) end
+        if State.VoidEat then
+            exitCombatVoid()
+        end
+    end
 
     local gun = findGun()
     if not gun then
@@ -790,51 +1479,37 @@ local function shootTarget(plr)
     pcall(ensureSilentAim)
     setCamlock(plr, 4)
 
-    -- face target + get into range
-    local function faceAndClose()
-        local my = getHRP()
-        local their = getHRP(plr)
-        if not my or not their then return end
-        local aim = getAimPos(plr) or their.Position
-        local dist = (my.Position - their.Position).Magnitude
-        -- double barrel is short range — stay ~8-14 studs in front
-        local ideal = 10
-        if dist > 18 or dist < 4 then
-            local dir = (my.Position - their.Position)
-            if dir.Magnitude < 0.1 then dir = their.CFrame.LookVector end
-            dir = dir.Unit
-            local pos = their.Position + dir * ideal + Vector3.new(0, 0.5, 0)
-            pcall(function()
-                local ch = getChar()
-                local cf = CFrame.new(pos, aim)
-                if ch and ch.PivotTo then ch:PivotTo(cf) end
-                my.CFrame = cf
-                my.AssemblyLinearVelocity = Vector3.zero
-            end)
-        else
-            pcall(function()
-                my.CFrame = CFrame.new(my.Position, aim)
-            end)
-        end
-    end
-
-    faceAndClose()
+    strafeTarget(plr, 9)
     reloadGun(gun)
-    task.wait(0.15)
+    task.wait(0.08)
 
-    for shot = 1, 10 do
+    for shot = 1, 12 do
         if not isAlive(plr) or isKO(plr) then break end
+        -- if we got voided mid-fight, wait and resume
+        if State.VoidEat or State.InVoid then
+            local t0 = tick()
+            while (State.VoidEat or State.InVoid) and tick() - t0 < 4 do
+                task.wait(0.1)
+            end
+            if State.VoidEat or State.InVoid then
+                exitCombatVoid()
+            end
+            gun = equipTool(findGun(), 0.5)
+            if not gun then break end
+            setAimLock(plr)
+            setCamlock(plr, 3)
+        end
         if gun.Parent ~= getChar() then
             gun = equipTool(findGun(), 0.5)
             if not gun then break end
         end
 
-        faceAndClose()
+        -- strafe around target each shot (capped movement)
+        strafeTarget(plr, 9 + (shot % 2))
         local aim = getAimPos(plr)
         if not aim then break end
 
-        -- spam mouse aim BEFORE shot (critical for hits)
-        for _ = 1, 8 do
+        for _ = 1, 4 do
             fireMouse(aim)
         end
         pcall(function()
@@ -843,7 +1518,6 @@ local function shootTarget(plr)
             if mp then mp.Value = aim end
         end)
 
-        -- look with camera softly
         pcall(function()
             if Camera then
                 Camera.CFrame = CFrame.new(Camera.CFrame.Position, aim)
@@ -852,12 +1526,11 @@ local function shootTarget(plr)
 
         activateTool(gun)
 
-        -- mouse click (some guns key off input not Activate)
         pcall(function()
             local vim = game:GetService("VirtualInputManager")
             if vim then
                 vim:SendMouseButtonEvent(0, 0, 0, true, game, 0)
-                task.wait(0.03)
+                task.wait(0.02)
                 vim:SendMouseButtonEvent(0, 0, 0, false, game, 0)
             end
         end)
@@ -870,9 +1543,9 @@ local function shootTarget(plr)
 
         if shot % 4 == 0 then
             reloadGun(gun)
-            task.wait(0.2)
+            task.wait(0.12)
         end
-        task.wait(0.14)
+        task.wait(0.09) -- faster shots while strafing
     end
 
     reloadGun(gun)
@@ -896,8 +1569,10 @@ local function stompTarget(plr, times)
         local my = getHRP()
         local their = getHRP(plr)
         if my and their then
-            -- stand on their torso / head area (classic hood stomp pos)
-            local pos = their.Position + Vector3.new(0, 2.5, 0)
+            -- slight strafe while stomping so harder to hit
+            State.StrafeAngle = (State.StrafeAngle or 0) + 0.6
+            local a = State.StrafeAngle
+            local pos = their.Position + Vector3.new(math.cos(a) * 1.2, 2.5, math.sin(a) * 1.2)
             pcall(function()
                 local ch = getChar()
                 local cf = CFrame.new(pos)
@@ -1181,6 +1856,21 @@ local function cmdTrack()
     notify("Track " .. (State.Tracking and "ON" or "OFF"))
 end
 
+local function cmdAir(arg)
+    if arg == "on" or arg == "1" or arg == "true" then
+        State.Air = true
+    elseif arg == "off" or arg == "0" or arg == "false" then
+        State.Air = false
+    else
+        State.Air = not State.Air
+    end
+    SLOT_CF = State.Air and SLOT_CF_AIR or SLOT_CF_GROUND
+    if not IsOwner and State.Tracking and not State.InVoid then
+        returnToOwner()
+    end
+    notify("Air " .. (State.Air and "ON (floating)" or "OFF (ground)"))
+end
+
 local function cmdPos(slot)
     local n = tonumber(slot)
     if n and SLOT_CF[n] then
@@ -1194,6 +1884,7 @@ end
 local function cmdArm()
     local g = findGun()
     if not g then notify("No gun found") return end
+    stopIdleAnim()
     g = equipTool(g, 0.7)
     State.Armed = g ~= nil
     notify(State.Armed and ("Armed " .. g.Name) or "Arm failed")
@@ -1205,9 +1896,11 @@ local function cmdUnarm()
         if h then h:UnequipTools() end
     end)
     State.Armed = false
+    task.defer(applyIdleAnim)
     notify("Unarmed")
 end
 
+-- .d — knock only (no stomp)
 local function cmdKnock(user)
     local plr = findPlayer(user)
     if not plr then notify("Knock: not found (" .. tostring(user) .. ")") return end
@@ -1217,37 +1910,35 @@ local function cmdKnock(user)
         return
     end
     State.Tracking = false
+    beginCombat()
     task.spawn(function()
         shootTarget(plr)
-        -- wait briefly for KO to register
         local t0 = tick()
         while tick() - t0 < 2.5 do
             if isKO(plr) then break end
             if not getChar(plr) then break end
             task.wait(0.15)
         end
-        if isKO(plr) or (getHum(plr) and getHum(plr).Health < 20) then
-            notify("Stomping " .. plr.Name)
-            stompTarget(plr, 14)
-        else
-            -- try a bit more shooting then stomp attempt
+        if not isKO(plr) then
             shootTarget(plr)
-            task.wait(0.4)
-            stompTarget(plr, 10)
         end
         clearAimLock()
         clearCamlock()
+        endCombat()
         State.Tracking = true
         returnToOwner()
     end)
 end
 
+-- .s — stomp only
 local function cmdStomp(user)
     local plr = findPlayer(user)
     if not plr then notify("Stomp: not found") return end
     State.Tracking = false
+    beginCombat()
     task.spawn(function()
-        stompTarget(plr, 10)
+        stompTarget(plr, 12)
+        endCombat()
         State.Tracking = true
         returnToOwner()
     end)
@@ -1264,6 +1955,69 @@ local function cmdKnife(user)
     knifeTarget(plr)
 end
 
+-- .b — bring target near owner
+local function cmdBring(user)
+    local plr = findPlayer(user)
+    if not plr then notify("Bring: not found (" .. tostring(user) .. ")") return end
+    local prot, why = isProtected(plr)
+    if prot then
+        notify("Bring: protected (" .. tostring(why) .. ")")
+        return
+    end
+    State.Tracking = false
+    task.spawn(function()
+        local owner = getOwner()
+        local oHRP = owner and getHRP(owner)
+        local their = getHRP(plr)
+        local my = getHRP()
+        if not their or not my then
+            State.Tracking = true
+            returnToOwner()
+            return
+        end
+        -- go to target
+        for _ = 1, 8 do
+            their = getHRP(plr)
+            my = getHRP()
+            if not their or not my then break end
+            pcall(function()
+                my.CFrame = their.CFrame * CFrame.new(0, 0, 2)
+                my.AssemblyLinearVelocity = Vector3.zero
+            end)
+            -- common grab/carry remotes
+            if MainEvent then
+                pcall(function() MainEvent:FireServer("Grabbing", true) end)
+                pcall(function() MainEvent:FireServer("Grab") end)
+                pcall(function() MainEvent:FireServer("Carry") end)
+            end
+            task.wait(0.08)
+        end
+        -- haul toward owner
+        oHRP = owner and getHRP(owner)
+        for _ = 1, 12 do
+            oHRP = owner and getHRP(owner)
+            my = getHRP()
+            their = getHRP(plr)
+            if not oHRP or not my then break end
+            pcall(function()
+                my.CFrame = oHRP.CFrame * CFrame.new(0, 0, 3)
+                my.AssemblyLinearVelocity = Vector3.zero
+            end)
+            if MainEvent then
+                pcall(function() MainEvent:FireServer("Grabbing", true) end)
+            end
+            task.wait(0.07)
+        end
+        if MainEvent then
+            pcall(function() MainEvent:FireServer("Grabbing", false) end)
+        end
+        State.Tracking = true
+        returnToOwner()
+        notify("Bring done " .. plr.Name)
+    end)
+end
+
+-- .l — loop kill (shoot + stomp)
 local function cmdLoopKill(user, useKnife)
     local plr = findPlayer(user)
     if not plr then notify("LoopKill: not found (" .. tostring(user) .. ")") return end
@@ -1272,20 +2026,473 @@ local function cmdLoopKill(user, useKnife)
         notify("LoopKill: protected (" .. tostring(why) .. " = " .. plr.Name .. ")")
         return
     end
+    State.LoopKnock = nil
     State.LoopKill = plr.Name
     State.LoopKillKnife = useKnife and true or false
     State.LoopKillBusy = false
     State.Tracking = false
+    beginCombat()
     notify("LoopKill " .. (useKnife and "knife " or "gun ") .. "ON " .. plr.Name)
+end
+
+-- .lk — loop knock only (no stomp)
+local function cmdLoopKnock(user)
+    local plr = findPlayer(user)
+    if not plr then notify("LoopKnock: not found (" .. tostring(user) .. ")") return end
+    local prot, why = isProtected(plr)
+    if prot then
+        notify("LoopKnock: protected (" .. tostring(why) .. ")")
+        return
+    end
+    State.LoopKill = nil
+    State.LoopKillKnife = false
+    State.LoopKnock = plr.Name
+    State.LoopKillBusy = false
+    State.Tracking = false
+    beginCombat()
+    notify("LoopKnock ON " .. plr.Name)
 end
 
 local function cmdUnLoopKill()
     State.LoopKill = nil
     State.LoopKillKnife = false
+    State.LoopKnock = nil
     State.LoopKillBusy = false
+    endCombat()
     clearCamlock()
     if not IsOwner then State.Tracking = true end
-    notify("LoopKill OFF")
+    notify("Loop OFF")
+end
+
+local function parseOnOff(arg, current)
+    if arg == "on" or arg == "1" or arg == "true" then return true end
+    if arg == "off" or arg == "0" or arg == "false" then return false end
+    return not current
+end
+
+local function baselineSentryPlayer(plr)
+    if not plr then return end
+    local hum = getHum(plr)
+    if not hum then return end
+    HealthWatch[plr.UserId] = hum.Health
+    KoWatch[plr.UserId] = isKO(plr)
+    local armor = 0
+    local c = getChar(plr)
+    local be = c and c:FindFirstChild("BodyEffects")
+    if be then
+        for _, name in ipairs({"Armor", "Defence", "Defense", "Helmet", "CurrentArmor"}) do
+            local v = be:FindFirstChild(name)
+            if v and typeof(v.Value) == "number" then armor = armor + v.Value end
+        end
+    end
+    ArmorWatch[plr.UserId] = armor
+end
+
+local function cmdSentry(arg)
+    State.Sentry = parseOnOff(arg, State.Sentry)
+    if State.Sentry then State.Sentry2 = false end
+    local o = getOwner()
+    baselineSentryPlayer(o)
+    notify("Sentry " .. (State.Sentry and "ON" or "OFF")
+        .. " (knock who shoots owner)"
+        .. (State.Sentry and (o and (" | owner=" .. o.Name) or " | WARNING: no owner set") or ""))
+end
+
+local function cmdSentry2(arg)
+    State.Sentry2 = parseOnOff(arg, State.Sentry2)
+    if State.Sentry2 then State.Sentry = false end
+    local o = getOwner()
+    baselineSentryPlayer(o)
+    notify("Sentry2 " .. (State.Sentry2 and "ON" or "OFF")
+        .. " (knock+stomp who shoots owner)"
+        .. (State.Sentry2 and (o and (" | owner=" .. o.Name) or " | WARNING: no owner set") or ""))
+end
+
+local BSentryConn = nil
+local BSentryCharConn = nil
+
+local function hookBSentryLocal()
+    if BSentryConn then pcall(function() BSentryConn:Disconnect() end) BSentryConn = nil end
+    if BSentryCharConn then pcall(function() BSentryCharConn:Disconnect() end) BSentryCharConn = nil end
+    if not State.BSentry then return end
+
+    local function attach(hum)
+        if not hum then return end
+        baselineSentryPlayer(LocalPlayer)
+        if BSentryConn then pcall(function() BSentryConn:Disconnect() end) end
+        local last = hum.Health
+        BSentryConn = hum.HealthChanged:Connect(function(hp)
+            if not State.BSentry then return end
+            if hp < last - 0.5 or isKO(LocalPlayer) then
+                last = hp
+                -- immediate reaction on local damage (most reliable)
+                task.defer(function()
+                    if State.SentryBusy then return end
+                    onVictimDamaged(LocalPlayer, true)
+                end)
+            else
+                last = hp
+            end
+        end)
+    end
+
+    attach(getHum(LocalPlayer))
+    BSentryCharConn = LocalPlayer.CharacterAdded:Connect(function()
+        task.wait(0.5)
+        if State.BSentry then attach(getHum(LocalPlayer)) end
+    end)
+end
+
+local function cmdBSentry(arg)
+    State.BSentry = parseOnOff(arg, State.BSentry)
+    baselineSentryPlayer(LocalPlayer)
+    hookBSentryLocal()
+    notify("BSentry " .. (State.BSentry and "ON" or "OFF") .. " (knock+stomp who shoots stand)")
+end
+
+local function cmdAssist(user)
+    local plr = findPlayer(user)
+    if not plr then notify("Assist: not found") return end
+    State.AssistName = plr.Name
+    baselineSentryPlayer(plr)
+    notify("Assist ON " .. plr.Name .. " (sentry covers them too)")
+end
+
+local function cmdUnassist()
+    State.AssistName = nil
+    notify("Assist OFF")
+end
+
+local function cmdSay(msg)
+    if not msg or msg == "" then
+        notify("Usage: " .. Prefix .. "say <message>")
+        return
+    end
+    pcall(function()
+        local tcs = game:GetService("TextChatService")
+        local channel = tcs and tcs.TextChannels and (
+            tcs.TextChannels:FindFirstChild("RBXGeneral")
+            or tcs.TextChannels:FindFirstChild("General")
+        )
+        if channel and channel.SendAsync then
+            channel:SendAsync(msg)
+            return
+        end
+    end)
+    pcall(function()
+        local chat = game:GetService("Chat")
+        if chat and chat.Chat then
+            chat:Chat(getChar() or LocalPlayer, msg)
+        end
+    end)
+    pcall(function()
+        local rs = game:GetService("ReplicatedStorage")
+        local re = rs:FindFirstChild("DefaultChatSystemChatEvents")
+        if re then
+            local say = re:FindFirstChild("SayMessageRequest")
+            if say then say:FireServer(msg, "All") end
+        end
+    end)
+end
+
+-- React to attacker (sentry / sentry2 / bsentry / assist)
+local function sentryReact(plr, doStomp)
+    if not plr or isProtected(plr) then return end
+    if plr == LocalPlayer then return end
+    if not isAlive(plr) and not isKO(plr) then return end
+    if State.SentryBusy then return end
+    State.SentryBusy = true
+    State.Tracking = false
+    beginCombat()
+    notify("Sentry → " .. plr.Name .. (doStomp and " (stomp)" or ""))
+    task.spawn(function()
+        local ok, err = pcall(function()
+            -- if WE are knocked, try to stand back up so we can shoot
+            pcall(function()
+                local h = getHum()
+                if h and (h.PlatformStand or isKO(LocalPlayer)) then
+                    h.PlatformStand = false
+                    h:ChangeState(Enum.HumanoidStateType.GettingUp)
+                    h:ChangeState(Enum.HumanoidStateType.Running)
+                end
+            end)
+            task.wait(0.05)
+
+            if isKO(plr) and doStomp then
+                stompTarget(plr, 14)
+            else
+                setCamlock(plr, 4)
+                setAimLock(plr)
+                -- force arm + shoot even if we just took damage
+                local gun = findGun()
+                if gun then
+                    stopIdleAnim()
+                    equipTool(gun, 0.5)
+                    State.Armed = true
+                end
+                shootTarget(plr)
+                local t0 = tick()
+                while tick() - t0 < 2.8 do
+                    if isKO(plr) then break end
+                    if not getChar(plr) then break end
+                    task.wait(0.1)
+                end
+                if doStomp then
+                    if isKO(plr) then
+                        stompTarget(plr, 14)
+                    else
+                        shootTarget(plr)
+                        task.wait(0.35)
+                        if isKO(plr) then stompTarget(plr, 12) end
+                    end
+                end
+            end
+        end)
+        if not ok then warn("[Stand] sentryReact:", err) end
+        clearAimLock()
+        clearCamlock()
+        endCombat()
+        State.Tracking = true
+        returnToOwner()
+        task.wait(0.2)
+        State.SentryBusy = false
+    end)
+end
+
+local function resolvePlayerFromValue(val)
+    if not val then return nil end
+    if typeof(val) == "Instance" then
+        if val:IsA("Player") then return val end
+        if val:IsA("Model") then return Players:GetPlayerFromCharacter(val) end
+        if val:IsA("ObjectValue") and val.Value then
+            return resolvePlayerFromValue(val.Value)
+        end
+    elseif type(val) == "string" then
+        return findPlayer(val)
+    elseif type(val) == "number" then
+        return Players:GetPlayerByUserId(val)
+    end
+    return nil
+end
+
+-- Find who most likely shot `victim`
+local function findAttacker(victim)
+    if not victim then return nil end
+    local char = getChar(victim)
+    local hum = getHum(victim)
+
+    -- 1) Creator / attacker tags on humanoid & character
+    if hum then
+        for _, inst in ipairs(hum:GetChildren()) do
+            local n = string.lower(inst.Name)
+            if n:find("creat") or n:find("attack") or n:find("kill") or n:find("hit") or n:find("shoot") then
+                local p = resolvePlayerFromValue(inst.Value or inst)
+                if p and p ~= victim and p ~= LocalPlayer and not isProtected(p) then return p end
+            end
+        end
+    end
+    if char then
+        local be = char:FindFirstChild("BodyEffects")
+        if be then
+            for _, inst in ipairs(be:GetDescendants()) do
+                local n = string.lower(inst.Name)
+                if n:find("creat") or n:find("attack") or n:find("kill") or n:find("shoot") or n:find("last") then
+                    local p = resolvePlayerFromValue(inst.Value)
+                    if p and p ~= victim and p ~= LocalPlayer and not isProtected(p) then return p end
+                end
+            end
+        end
+        for _, inst in ipairs(char:GetChildren()) do
+            local n = string.lower(inst.Name)
+            if n:find("creat") or n:find("attack") then
+                local p = resolvePlayerFromValue(inst.Value)
+                if p and p ~= victim and p ~= LocalPlayer and not isProtected(p) then return p end
+            end
+        end
+    end
+
+    -- 2) Player looking at victim with a gun equipped (most reliable fallback)
+    local vHRP = getHRP(victim)
+    if not vHRP then return nil end
+    local best, bestScore = nil, -1
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= victim and plr ~= LocalPlayer and not isProtected(plr) and isAlive(plr) then
+            local hrp = getHRP(plr)
+            local ch = getChar(plr)
+            if hrp and ch then
+                local hasTool = false
+                for _, c in ipairs(ch:GetChildren()) do
+                    if c:IsA("Tool") then hasTool = true break end
+                end
+                if hasTool then
+                    local dist = (hrp.Position - vHRP.Position).Magnitude
+                    if dist < 120 then
+                        local look = hrp.CFrame.LookVector
+                        local toVic = (vHRP.Position - hrp.Position)
+                        if toVic.Magnitude > 0.5 then
+                            local dot = look:Dot(toVic.Unit)
+                            -- prefer players facing the victim + closer
+                            local score = dot * 2 - (dist / 120)
+                            if dot > 0.35 and score > bestScore then
+                                bestScore = score
+                                best = plr
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    if best then return best end
+
+    -- 3) Closest armed player within range
+    local closest, closestD = nil, 70
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= victim and plr ~= LocalPlayer and not isProtected(plr) and isAlive(plr) then
+            local hrp = getHRP(plr)
+            local ch = getChar(plr)
+            if hrp and ch then
+                local hasTool = false
+                for _, c in ipairs(ch:GetChildren()) do
+                    if c:IsA("Tool") then hasTool = true break end
+                end
+                if hasTool then
+                    local d = (hrp.Position - vHRP.Position).Magnitude
+                    if d < closestD then
+                        closestD = d
+                        closest = plr
+                    end
+                end
+            end
+        end
+    end
+    return closest
+end
+
+local function readArmor(plr)
+    local c = getChar(plr)
+    if not c then return 0 end
+    local be = c:FindFirstChild("BodyEffects")
+    if not be then return 0 end
+    local sum = 0
+    for _, name in ipairs({"Armor", "Defence", "Defense", "Helmet", "CurrentArmor"}) do
+        local v = be:FindFirstChild(name)
+        if v and typeof(v.Value) == "number" then
+            sum = sum + v.Value
+        end
+    end
+    return sum
+end
+
+local function onVictimDamaged(victim, doStomp)
+    if State.SentryBusy then return end
+    if tick() - LastSentryAt < 0.45 then return end
+    local attacker = findAttacker(victim)
+    if not attacker then
+        -- last resort: any armed player within 100 studs of victim
+        local vHRP = getHRP(victim)
+        if vHRP then
+            local best, bestD = nil, 100
+            for _, plr in ipairs(Players:GetPlayers()) do
+                if plr ~= victim and plr ~= LocalPlayer and not isProtected(plr) and isAlive(plr) then
+                    local hrp = getHRP(plr)
+                    local ch = getChar(plr)
+                    if hrp and ch then
+                        local armed = false
+                        for _, c in ipairs(ch:GetChildren()) do
+                            if c:IsA("Tool") then armed = true break end
+                        end
+                        if armed then
+                            local d = (hrp.Position - vHRP.Position).Magnitude
+                            if d < bestD then bestD = d best = plr end
+                        end
+                    end
+                end
+            end
+            attacker = best
+        end
+    end
+    if attacker then
+        LastSentryAt = tick()
+        sentryReact(attacker, doStomp)
+    else
+        notify("Sentry: damage on " .. (victim and victim.Name or "?") .. " — no shooter found")
+    end
+end
+
+-- Multi-signal poll: health, KO, armor (Da Hood style)
+local function sentryTick()
+    if IsOwner then return end
+    if State.SentryBusy then return end
+    if not (State.Sentry or State.Sentry2 or State.BSentry) then return end
+
+    local function check(plr, doStomp)
+        if not plr then return end
+        local hum = getHum(plr)
+        local char = getChar(plr)
+        if not hum or not char then return end
+        local key = plr.UserId
+
+        local hp = hum.Health
+        local prevHp = HealthWatch[key]
+        local knocked = isKO(plr)
+        local wasKO = KoWatch[key]
+        local armor = readArmor(plr)
+        local prevArmor = ArmorWatch[key]
+
+        if prevHp == nil then
+            HealthWatch[key] = hp
+            KoWatch[key] = knocked
+            ArmorWatch[key] = armor
+            return
+        end
+
+        local hit = false
+        -- 1) health dropped
+        if hp < prevHp - 0.5 then hit = true end
+        -- 2) just got knocked
+        if knocked and not wasKO then hit = true end
+        -- 3) armor/defense dropped (hood games)
+        if prevArmor ~= nil and armor < prevArmor - 1 then hit = true end
+
+        HealthWatch[key] = hp
+        KoWatch[key] = knocked
+        ArmorWatch[key] = armor
+
+        if hit then
+            onVictimDamaged(plr, doStomp)
+        end
+    end
+
+    local owner = getOwner()
+    if owner and (State.Sentry or State.Sentry2) then
+        check(owner, State.Sentry2 and true or false)
+    end
+    if State.BSentry then
+        check(LocalPlayer, true)
+    end
+    if State.AssistName and (State.Sentry or State.Sentry2 or State.BSentry) then
+        local ap = findPlayer(State.AssistName)
+        if ap then
+            check(ap, (State.Sentry2 or State.BSentry) and true or false)
+        end
+    end
+end
+
+local function refreshSentryWatches()
+    local function baseline(plr)
+        if not plr then return end
+        local hum = getHum(plr)
+        if not hum then return end
+        HealthWatch[plr.UserId] = hum.Health
+        KoWatch[plr.UserId] = isKO(plr)
+        ArmorWatch[plr.UserId] = readArmor(plr)
+    end
+    baseline(getOwner())
+    baseline(LocalPlayer)
+    if State.AssistName then
+        baseline(findPlayer(State.AssistName))
+    end
 end
 
 -- One full attack cycle for loopkill (gun or knife). Called once at a time.
@@ -1429,10 +2636,12 @@ local function cmdFix()
     clearCamlock()
     State.LoopKill = nil
     State.LoopKillKnife = false
+    State.LoopKnock = nil
     State.LoopKillBusy = false
     State.Sweep = false
     State.TargetName = nil
     State.KnifeBusy = false
+    State.SentryBusy = false
     State.InVoid = false
     State.Tracking = false  -- pause formation until respawn finishes
     State.Armed = false
@@ -1491,19 +2700,106 @@ local function cmdKick()
     end)
 end
 
+local function cmdBuyFood()
+    State.Tracking = false
+    notify("Buying food...")
+    task.spawn(function()
+        local ok, err = pcall(function()
+            local had = findFood() ~= nil
+            if not had then
+                buyFood()
+            end
+            task.wait(0.25)
+            if findFood() then
+                notify("Food ready: " .. tostring(findFood().Name))
+            else
+                -- one more remote-only attempt
+                if MainEvent then
+                    for _, n in ipairs({
+                        "BuyChicken", "BuyPizza", "BuyTaco", "BuyHamburger", "BuyDonut",
+                        "Chicken", "Pizza", "Taco", "Hamburger", "Donut",
+                    }) do
+                        pcall(function() MainEvent:FireServer(n) end)
+                        pcall(function() MainEvent:FireServer("Buy", n) end)
+                    end
+                end
+                task.wait(0.3)
+                if findFood() then
+                    notify("Food ready: " .. tostring(findFood().Name))
+                else
+                    notify("No food — try near shop")
+                end
+            end
+        end)
+        if not ok then warn("[Stand] buyfood:", err) end
+        if not State.CombatActive and not State.VoidEat then
+            State.Tracking = true
+            returnToOwner()
+        end
+    end)
+end
+
+local function cmdHeal()
+    if State.VoidEat then
+        notify("Already healing")
+        return
+    end
+    notify("Heal — void + eat")
+    State.Tracking = false
+    task.spawn(function()
+        local ok, err = pcall(function()
+            -- force combat-void style heal even outside combat
+            local wasCombat = State.CombatActive
+            State.CombatActive = true
+            enterCombatVoid()
+            -- wait until void heal finishes (exitCombatVoid clears VoidEat)
+            local t0 = tick()
+            while State.VoidEat and tick() - t0 < 6 do
+                task.wait(0.15)
+            end
+            if State.VoidEat then
+                exitCombatVoid()
+            end
+            if not wasCombat then
+                State.CombatActive = false
+            end
+            -- ensure out of void and near owner/target
+            warpOutOfVoid()
+            if not State.CombatActive then
+                State.Tracking = true
+                returnToOwner()
+            end
+            notify("Heal done")
+        end)
+        if not ok then
+            warn("[Stand] heal:", err)
+            pcall(exitCombatVoid)
+            State.Tracking = true
+        end
+    end)
+end
+
 local function cmdHelp()
     notify("See F9 for command list")
     print("[Stand] Commands:")
-    print("  " .. Prefix .. "void / call / track / pos <1-6>")
+    print("  " .. Prefix .. "void / call / track / air [on|off] / pos <1-6>")
     print("  " .. Prefix .. "arm / unarm")
-    print("  " .. Prefix .. "knock <user>  |  stomp <user>  |  knife <user>")
-    print("  " .. Prefix .. "lk <user>  |  lkk <user>  |  unlk")
-    print("  " .. Prefix .. "sweep  |  unsweep   -- kill whole server")
-    print("  " .. Prefix .. "protect <user>  |  unprotect")
-    print("  " .. Prefix .. "wl <user>  |  uwl [user]")
-    print("  " .. Prefix .. "target <user>  |  untarget")
-    print("  " .. Prefix .. "armor / mask / reload / autoreload")
-    print("  " .. Prefix .. "fix / kick / help")
+    print("  " .. Prefix .. "d <user>   -- knock")
+    print("  " .. Prefix .. "b <user>   -- bring")
+    print("  " .. Prefix .. "s <user>   -- stomp")
+    print("  " .. Prefix .. "l <user>   -- loop kill")
+    print("  " .. Prefix .. "lk <user>  -- loop knock")
+    print("  " .. Prefix .. "unlk / knife <user>")
+    print("  " .. Prefix .. "sentry on|off  -- knock who shoots owner")
+    print("  " .. Prefix .. "sentry2 on|off -- knock+stomp who shoots owner")
+    print("  " .. Prefix .. "bsentry on|off -- knock+stomp who shoots stand")
+    print("  " .. Prefix .. "assist <user> / unassist  -- sentry covers that user too")
+    print("  " .. Prefix .. "say <message>")
+    print("  " .. Prefix .. "sweep / unsweep")
+    print("  " .. Prefix .. "protect <user> / unprotect / wl / uwl")
+    print("  " .. Prefix .. "target <user> / untarget")
+    print("  " .. Prefix .. "armor / mask / buyfood / heal")
+    print("  " .. Prefix .. "reload / autoreload / fix / kick / help")
 end
 
 ----------------------------------------------------------------------
@@ -1522,25 +2818,43 @@ local function onControlChat(msg, speaker)
     lastChatMsg = msg
     lastChatAt = now
 
-    local body = string.lower(string.sub(msg, #Prefix + 1))
+    local rawBody = string.sub(msg, #Prefix + 1)
+    local body = string.lower(rawBody)
     local parts = {}
     for w in string.gmatch(body, "%S+") do parts[#parts + 1] = w end
     if #parts == 0 then return end
 
     local cmd, a1 = parts[1], parts[2]
+    -- original-case remainder for .say
+    local sayMsg = nil
+    if cmd == "say" then
+        local rest = string.match(rawBody, "^%s*[Ss][Aa][Yy]%s+(.*)$")
+        sayMsg = rest
+    end
 
     if cmd == "void" then cmdVoid()
     elseif cmd == "call" or cmd == "come" then cmdCall()
     elseif cmd == "track" or cmd == "follow" then cmdTrack()
+    elseif cmd == "air" or cmd == "float" or cmd == "summon" then cmdAir(a1)
     elseif cmd == "pos" or cmd == "slot" then cmdPos(a1)
     elseif cmd == "arm" then cmdArm()
     elseif cmd == "unarm" then cmdUnarm()
-    elseif cmd == "knock" or cmd == "k" then cmdKnock(a1)
-    elseif cmd == "stomp" or cmd == "s" then cmdStomp(a1)
-    elseif cmd == "knife" then cmdKnife(a1)
-    elseif cmd == "lk" or cmd == "loopkill" then cmdLoopKill(a1, false)
+    -- combat shortcuts
+    elseif cmd == "d" or cmd == "knock" or cmd == "k" then cmdKnock(a1)
+    elseif cmd == "b" or cmd == "bring" then cmdBring(a1)
+    elseif cmd == "s" or cmd == "stomp" then cmdStomp(a1)
+    elseif cmd == "l" or cmd == "loopkill" then cmdLoopKill(a1, false)
+    elseif cmd == "lk" then cmdLoopKnock(a1)
     elseif cmd == "lkk" then cmdLoopKill(a1, true)
-    elseif cmd == "unlk" or cmd == "unloopkill" then cmdUnLoopKill()
+    elseif cmd == "knife" then cmdKnife(a1)
+    elseif cmd == "unlk" or cmd == "unloopkill" or cmd == "unl" then cmdUnLoopKill()
+    -- protection
+    elseif cmd == "sentry" then cmdSentry(a1)
+    elseif cmd == "sentry2" then cmdSentry2(a1)
+    elseif cmd == "bsentry" then cmdBSentry(a1)
+    elseif cmd == "assist" then cmdAssist(a1)
+    elseif cmd == "unassist" then cmdUnassist()
+    elseif cmd == "say" then cmdSay(sayMsg or "")
     elseif cmd == "sweep" then cmdSweep()
     elseif cmd == "unsweep" or cmd == "stopsweep" then cmdUnSweep()
     elseif cmd == "protect" or cmd == "prot" then cmdProtect(a1)
@@ -1551,6 +2865,8 @@ local function onControlChat(msg, speaker)
     elseif cmd == "untarget" or cmd == "unt" then cmdUntarget()
     elseif cmd == "armor" then cmdArmor()
     elseif cmd == "mask" then cmdMask()
+    elseif cmd == "buyfood" or cmd == "food" or cmd == "bf" then cmdBuyFood()
+    elseif cmd == "heal" or cmd == "eat" then cmdHeal()
     elseif cmd == "reload" then
         reloadGun(findGun())
         notify("Reload")
@@ -1592,10 +2908,45 @@ end)
 ----------------------------------------------------------------------
 Connections.Main = RunService.Heartbeat:Connect(function()
     if IsOwner then return end
-    if not State.KnifeBusy and not State.LoopKillBusy and not State.Sweep and not State.LoopKill then
+    if not State.KnifeBusy and not State.LoopKillBusy and not State.Sweep
+        and not State.LoopKill and not State.LoopKnock and not State.SentryBusy then
         followOwner()
     end
     autoReloadTick()
+    pcall(sentryTick)
+    pcall(combatSurviveTick)
+
+    -- LoopKnock: shoot only, no stomp
+    if State.LoopKnock and not State.LoopKillBusy and not State.KnifeBusy then
+        local hum = getHum()
+        if hum and hum.Health <= 0 then return end
+        local lk = findPlayer(State.LoopKnock)
+        if not lk then return end
+        if isProtected(lk) then
+            notify("LoopKnock stopped: protected " .. lk.Name)
+            State.LoopKnock = nil
+            State.Tracking = true
+            return
+        end
+        State.LoopKillBusy = true
+        task.spawn(function()
+            local ok, err = pcall(function()
+                if isAlive(lk) then
+                    setCamlock(lk, 2)
+                    shootTarget(lk)
+                    task.wait(0.4)
+                else
+                    task.wait(0.5)
+                end
+            end)
+            if not ok then warn("[Stand] LoopKnock error:", err) end
+            State.LoopKillBusy = false
+            if not State.LoopKnock and not IsOwner then
+                State.Tracking = true
+                clearCamlock()
+            end
+        end)
+    end
 
     -- LoopKill: single-flight worker (never stack shootTarget every frame)
     if State.LoopKill and not State.LoopKillBusy and not State.KnifeBusy then
@@ -1604,7 +2955,6 @@ Connections.Main = RunService.Heartbeat:Connect(function()
         local name = State.LoopKill
         local lk = findPlayer(name)
         if not lk then
-            -- target left; keep name, wait for rejoin
             return
         end
         local prot = isProtected(lk)
@@ -1621,7 +2971,6 @@ Connections.Main = RunService.Heartbeat:Connect(function()
             local ok, err = pcall(function()
                 if isKO(lk) then
                     stompTarget(lk, 5)
-                    -- wait for respawn / stand up
                     local t0 = tick()
                     while tick() - t0 < 4 and State.LoopKill do
                         if not getChar(lk) then break end
@@ -1634,7 +2983,6 @@ Connections.Main = RunService.Heartbeat:Connect(function()
                     loopKillCycle(lk)
                     task.wait(0.35)
                 else
-                    -- dead or no char — wait
                     task.wait(0.5)
                 end
             end)
@@ -1650,16 +2998,52 @@ Connections.Main = RunService.Heartbeat:Connect(function()
     end
 end)
 
-LocalPlayer.CharacterAdded:Connect(function()
+----------------------------------------------------------------------
+-- SENTRY HEALTH WATCH (shot detection)
+----------------------------------------------------------------------
+task.spawn(function()
+    while true do
+        pcall(refreshSentryWatches)
+        task.wait(1.5)
+    end
+end)
+
+LocalPlayer.CharacterAdded:Connect(function(char)
     task.wait(1)
+    hookToolWatch(char)
+    pcall(refreshSentryWatches)
     if Config.AutoArmor then buyArmor() end
     if Config.ArmorMax or Config.Inf then applyArmorMax() end
     if Config.AutoMask then buyMask() end
+    if Config.Muscle then applyMuscle() end
+    if not State.Armed and not isHoldingTool() then
+        applyIdleAnim()
+    else
+        stopIdleAnim()
+    end
+end)
+
+-- Initial character (already spawned)
+task.spawn(function()
+    local t0 = tick()
+    while tick() - t0 < 8 do
+        if getHum() then
+            task.wait(0.8)
+            local c = getChar()
+            hookToolWatch(c)
+            pcall(refreshSentryWatches)
+            if not State.Armed and not isHoldingTool() then
+                applyIdleAnim()
+            end
+            break
+        end
+        task.wait(0.25)
+    end
 end)
 
 startAutoPerks()
 pcall(ensureSilentAim)
 
 print("[Stand] Main v2 loaded |", IsOwner and "OWNER" or ("ALT slot " .. tostring(MySlot)),
-    "| prefix", Prefix, "| owner", OwnerName)
+    "| prefix", Prefix, "| owner", OwnerName, "| anim", tostring(Config.Anim or "none"))
 notify(IsOwner and "Owner ready" or ("Alt slot " .. tostring(MySlot)))
