@@ -36,6 +36,8 @@ STATUS_TABLE = "stand_status"
 CHANGELOG_TABLE = "stand_changelog"
 BLACKLIST_TABLE = "stand_blacklist"
 TABLE = "stand_configs"
+KEY_STOCK_TABLE = "key_stock"
+ROBLOX_KEYS_TABLE = "roblox_keys"
 
 # Verification roles
 VERIFY_ROLE_ID = int(os.getenv("VERIFY_ROLE_ID", "1554782511781908600") or "1554782511781908600")
@@ -931,6 +933,105 @@ async def setrank_cmd(
     set_user_cfg(user.id, cfg)
     await interaction.response.send_message(
         f"Set rank of **{user}** to `{rank.value}`.",
+        ephemeral=True,
+    )
+
+
+
+@bot.tree.command(name="addstock", description="[Staff] Add License Hub keys to Roblox shop stock")
+@app_commands.describe(
+    product="Which product these keys belong to",
+    keys="Keys separated by commas, spaces, or new lines (paste from License Hub)",
+)
+@app_commands.choices(product=[
+    app_commands.Choice(name="Executive Stand", value="stand"),
+    app_commands.Choice(name="Premium Commands", value="premium"),
+    app_commands.Choice(name="Shield Bypass", value="shield"),
+])
+async def addstock(
+    interaction: discord.Interaction,
+    product: app_commands.Choice[str],
+    keys: str,
+):
+    """Bulk-load keys generated on License Hub into the Roblox shop stock."""
+    if not await staff_check(interaction):
+        return
+    if not supabase:
+        return await interaction.response.send_message("Database unavailable.", ephemeral=True)
+
+    raw = re.split(r"[\s,;]+", keys.strip())
+    cleaned = [k.strip().upper() for k in raw if k.strip()]
+    seen = set()
+    unique = []
+    for k in cleaned:
+        if k not in seen:
+            seen.add(k)
+            unique.append(k)
+
+    if not unique:
+        return await interaction.response.send_message("No keys found in input.", ephemeral=True)
+
+    await interaction.response.defer(ephemeral=True)
+    prod = product.value
+    added = 0
+    skipped = 0
+    for k in unique:
+        try:
+            supabase.table(KEY_STOCK_TABLE).upsert(
+                {"key": k, "product": prod, "reserved": False},
+                on_conflict="key",
+            ).execute()
+            added += 1
+        except Exception as e:
+            print(f"[addstock] skip {k}: {e}")
+            skipped += 1
+
+    label = {
+        "stand": "Executive Stand",
+        "premium": "Premium Commands",
+        "shield": "Shield Bypass",
+    }.get(prod, prod)
+
+    await interaction.followup.send(
+        f"✅ Stocked **{added}** `{label}` key(s) from License Hub"
+        + (f" ({skipped} skipped)" if skipped else "")
+        + ".\nPlayers who buy the GamePass will receive these automatically.\n"
+        + "In-game shop shows counts only — keys appear after purchase.",
+        ephemeral=True,
+    )
+
+
+@bot.tree.command(name="stock", description="[Staff] Check how many License Hub keys are left in Roblox shop stock")
+async def stock_cmd(interaction: discord.Interaction):
+    if not await staff_check(interaction):
+        return
+    if not supabase:
+        return await interaction.response.send_message("Database unavailable.", ephemeral=True)
+    await interaction.response.defer(ephemeral=True)
+    labels = {
+        "stand": "Executive Stand",
+        "premium": "Premium Commands",
+        "shield": "Shield Bypass",
+    }
+    lines = []
+    for p, label in labels.items():
+        try:
+            res = (
+                supabase.table(KEY_STOCK_TABLE)
+                .select("id", count="exact")
+                .eq("product", p)
+                .eq("reserved", False)
+                .execute()
+            )
+            count = getattr(res, "count", None)
+            if count is None:
+                count = len(res.data or [])
+            lines.append(f"**{label}**: `{count}` available")
+        except Exception as e:
+            lines.append(f"**{label}**: error `{e}`")
+    await interaction.followup.send(
+        "**Roblox key stock**\n" + "\n".join(lines)
+        + "\n\nAdd more with `/addstock`.",
         ephemeral=True,
     )
 
