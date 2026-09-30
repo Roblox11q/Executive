@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+ #!/usr/bin/env python3
 """Stand Loader Configurator Bot - Render + Supabase."""
 from __future__ import annotations
 
@@ -37,6 +37,12 @@ TABLE = "stand_configs"
 BLACKLIST_TABLE = "stand_blacklist"
 STATUS_TABLE = "stand_status"
 CHANGELOG_TABLE = "stand_changelog"
+KEY_STOCK_TABLE = "key_stock"
+ROBLOX_KEYS_TABLE = "roblox_keys"
+
+# Shared secret for Roblox KeySystem → POST /api/v1/dispense-key
+# Must match BACKEND_SECRET in KeySystem.lua
+REGISTER_KEY_SECRET = (os.getenv("REGISTER_KEY_SECRET") or "").strip()
 
 # Status / changelog channels
 STATUS_CHANNEL_ID = int(os.getenv("STATUS_CHANNEL_ID", "1554079705022595174") or "1554079705022595174")
@@ -1362,8 +1368,11 @@ async def removecontroller(interaction: discord.Interaction, username: str):
 # Staff commands (blacklist, status, etc.) live in staff_bot.py
 
 async def _start_http():
-    """Minimal HTTP server so Render free Web Service stays up + status API for loaders."""
+    """HTTP server: health, loader status, Roblox key stock + dispense."""
+    import hmac
     from aiohttp import web
+
+    VALID_PRODUCTS = ("stand", "premium", "shield")
 
     async def health(_request):
         st = get_system_status()
@@ -1393,17 +1402,151 @@ async def _start_http():
         }
         return web.json_response(payload, status=503 if blocked else 200)
 
+    async def api_stock(_request):
+        """GET /api/v1/stock — available (unreserved) key counts for Roblox shop."""
+        stock = {p: 0 for p in VALID_PRODUCTS}
+        if not supabase:
+            return web.json_response({"ok": False, "error": "database unavailable", "stock": stock}, status=503)
+        try:
+            for p in VALID_PRODUCTS:
+                res = (
+                    supabase.table(KEY_STOCK_TABLE)
+                    .select("id", count="exact")
+                    .eq("product", p)
+                    .eq("reserved", False)
+                    .execute()
+                )
+                count = getattr(res, "count", None)
+                if count is None:
+                    count = len(res.data or [])
+                stock[p] = int(count or 0)
+            return web.json_response({"ok": True, "stock": stock})
+        except Exception as e:
+            print(f"[api/stock] error: {e}")
+            return web.json_response({"ok": False, "error": str(e), "stock": stock}, status=500)
+
+    async def api_dispense_key(request):
+        """POST /api/v1/dispense-key — reserve one License Hub key for a Roblox buyer."""
+        if not REGISTER_KEY_SECRET:
+            return web.json_response({"ok": False, "error": "REGISTER_KEY_SECRET not configured"}, status=503)
+        if not supabase:
+            return web.json_response({"ok": False, "error": "database unavailable"}, status=503)
+
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"ok": False, "error": "invalid json"}, status=400)
+
+        if not isinstance(body, dict):
+            return web.json_response({"ok": False, "error": "invalid body"}, status=400)
+
+        secret = str(body.get("secret") or "")
+        if not hmac.compare_digest(secret, REGISTER_KEY_SECRET):
+            return web.json_response({"ok": False, "error": "unauthorized"}, status=401)
+
+        product = str(body.get("product") or "").strip().lower()
+        if product not in VALID_PRODUCTS:
+            return web.json_response({"ok": False, "error": "invalid product"}, status=400)
+
+        try:
+            roblox_user_id = int(body.get("roblox_user_id") or 0)
+        except (TypeError, ValueError):
+            roblox_user_id = 0
+        roblox_username = str(body.get("roblox_username") or "")[:64]
+
+        if roblox_user_id <= 0:
+            return web.json_response({"ok": False, "error": "invalid roblox_user_id"}, status=400)
+
+        now = datetime.now(timezone.utc).isoformat()
+
+        try:
+            # Already assigned a key for this product + user? Reuse it (idempotent).
+            existing = (
+                supabase.table(KEY_STOCK_TABLE)
+                .select("key")
+                .eq("product", product)
+                .eq("assigned_to_roblox_user_id", roblox_user_id)
+                .eq("reserved", True)
+                .limit(1)
+                .execute()
+            )
+            rows = existing.data or []
+            if rows and rows[0].get("key"):
+                return web.json_response({"ok": True, "key": rows[0]["key"], "reused": True})
+
+            # Next available key
+            avail = (
+                supabase.table(KEY_STOCK_TABLE)
+                .select("id, key")
+                .eq("product", product)
+                .eq("reserved", False)
+                .order("id")
+                .limit(1)
+                .execute()
+            )
+            avail_rows = avail.data or []
+            if not avail_rows:
+                return web.json_response({"ok": False, "error": "out of stock"}, status=409)
+
+            row = avail_rows[0]
+            key = row["key"]
+            row_id = row["id"]
+
+            # Reserve only if still unreserved (best-effort race guard)
+            updated = (
+                supabase.table(KEY_STOCK_TABLE)
+                .update(
+                    {
+                        "reserved": True,
+                        "reserved_at": now,
+                        "assigned_to_roblox_user_id": roblox_user_id,
+                        "assigned_to_roblox_username": roblox_username,
+                        "assigned_at": now,
+                    }
+                )
+                .eq("id", row_id)
+                .eq("reserved", False)
+                .execute()
+            )
+            if not (updated.data):
+                return web.json_response({"ok": False, "error": "race — try again"}, status=409)
+
+            # History row (best-effort)
+            try:
+                supabase.table(ROBLOX_KEYS_TABLE).upsert(
+                    {
+                        "key": key,
+                        "product": product,
+                        "roblox_user_id": roblox_user_id,
+                        "roblox_username": roblox_username,
+                    },
+                    on_conflict="key",
+                ).execute()
+            except Exception as e:
+                print(f"[api/dispense-key] roblox_keys upsert: {e}")
+
+            print(f"[api/dispense-key] dispensed {product} key to rbx={roblox_user_id} ({roblox_username})")
+            return web.json_response({"ok": True, "key": key, "reused": False})
+        except Exception as e:
+            print(f"[api/dispense-key] error: {e}")
+            return web.json_response({"ok": False, "error": str(e)}, status=500)
+
     app = web.Application()
     app.router.add_get("/", health)
     app.router.add_get("/health", health)
     app.router.add_get("/api/status", api_status)
     app.router.add_get("/api/v1/status", api_status)
+    app.router.add_get("/api/v1/stock", api_stock)
+    app.router.add_post("/api/v1/dispense-key", api_dispense_key)
     runner = web.AppRunner(app)
     await runner.setup()
     port = int(os.environ.get("PORT", "10000"))
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-    print(f"HTTP health + /api/status on 0.0.0.0:{port} | status={get_system_status()}")
+    print(
+        f"HTTP on 0.0.0.0:{port} | status={get_system_status()} | "
+        f"stock+dispense={'on' if REGISTER_KEY_SECRET else 'OFF (set REGISTER_KEY_SECRET)'}"
+    )
 
 
 async def _amain():
