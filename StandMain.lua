@@ -158,7 +158,7 @@ local State = {
     AssistName    = nil,   -- .assist user — apply sentry modes for that user too
     SentryBusy    = false,
     CombatActive  = false, -- true during knock/stomp/loop/etc
-    HoverHeight   = 6,     -- studs above target while attacking
+    HoverHeight   = 4,     -- studs above target while attacking (lower = more reliable hits)
     VoidEat       = false, -- void + eat while combat to avoid dying
 }
 
@@ -493,26 +493,20 @@ local function ensureSilentAim()
         end))
     end)
 
-    -- always: keep mouse remotes + camera on target while locked
+    -- keep mouse remotes on target while locked (no HRP twist — fights hover/stomp and errors gun clients)
     RunService.RenderStepped:Connect(function()
         local plr = AimLockPlayer
         if not plr then return end
         if not getChar(plr) then return end
         local aim = getAimPos(plr)
         if not aim then return end
-        fireMouse(aim)
+        pcall(function() fireMouse(aim) end)
         pcall(function()
             if Camera and Camera.CameraType ~= Enum.CameraType.Scriptable then
                 Camera.CFrame = CFrame.new(Camera.CFrame.Position, aim)
             end
         end)
-        pcall(function()
-            local my = getHRP()
-            if my then
-                local pos = my.Position
-                my.CFrame = CFrame.new(pos, Vector3.new(aim.X, pos.Y, aim.Z))
-            end
-        end)
+        -- do NOT rotate local HRP here — hoverOverTarget / stomp already set full CFrame
     end)
 end
 
@@ -1320,17 +1314,18 @@ local function exitCombatVoid()
     end
 end
 
--- Hover directly above target (no orbit) — full TP so knock/lk teleports instead of walking
+-- Hover above target (slight offset so gun rays aren't pure vertical — pure top-down breaks many hood gun clients)
 local function hoverOverTarget(plr, height)
     if State.VoidEat or State.InVoid then return end
-    height = height or State.HoverHeight or 6
+    height = height or State.HoverHeight or 4
     local my = getHRP()
     local their = getHRP(plr)
     if not my or not their then return end
     local aim = getAimPos(plr) or their.Position
-    local targetPos = their.Position + Vector3.new(0, height, 0)
+    -- small horizontal offset so camera/gun ray has a clean angle (avoids client ray errors)
+    local targetPos = their.Position + Vector3.new(0.35, height, 0.35)
     pcall(function()
-        local look = Vector3.new(aim.X, targetPos.Y - 1, aim.Z)
+        local look = Vector3.new(aim.X, their.Position.Y + 1.2, aim.Z)
         local cf = CFrame.new(targetPos, look)
         local ch = getChar()
         if ch and ch.PivotTo then
@@ -1462,9 +1457,9 @@ local function shootTarget(plr)
 
     hoverOverTarget(plr)
     reloadGun(gun)
-    task.wait(0.08)
+    task.wait(0.1)
 
-    for shot = 1, 12 do
+    for shot = 1, 14 do
         if not isAlive(plr) or isKO(plr) then break end
         -- if we got voided mid-fight, wait and resume
         if State.VoidEat or State.InVoid then
@@ -1485,22 +1480,20 @@ local function shootTarget(plr)
             if not gun then break end
         end
 
-        -- hover above target each shot
         hoverOverTarget(plr)
         local aim = getAimPos(plr)
         if not aim then break end
 
-        for _ = 1, 4 do
-            fireMouse(aim)
-        end
+        -- mouse pos only (legitimate path) — no fake "Shoot"/"Hit" remotes (cause red client errors on Hood Customs)
+        pcall(function() fireMouse(aim) end)
         pcall(function()
             local be = getChar() and getChar():FindFirstChild("BodyEffects")
             local mp = be and be:FindFirstChild("MousePos")
-            if mp then mp.Value = aim end
+            if mp and mp:IsA("Vector3Value") then mp.Value = aim end
         end)
 
         pcall(function()
-            if Camera then
+            if Camera and Camera.CameraType ~= Enum.CameraType.Scriptable then
                 Camera.CFrame = CFrame.new(Camera.CFrame.Position, aim)
             end
         end)
@@ -1511,22 +1504,20 @@ local function shootTarget(plr)
             local vim = game:GetService("VirtualInputManager")
             if vim then
                 vim:SendMouseButtonEvent(0, 0, 0, true, game, 0)
-                task.wait(0.02)
+                task.wait(0.025)
                 vim:SendMouseButtonEvent(0, 0, 0, false, game, 0)
             end
         end)
+        pcall(function()
+            local vu = game:GetService("VirtualUser")
+            if vu then vu:ClickButton1(Vector2.new(0, 0)) end
+        end)
 
-        if MainEvent then
-            pcall(function() MainEvent:FireServer(MouseRemote, aim) end)
-            pcall(function() MainEvent:FireServer("Shoot", aim) end)
-            pcall(function() MainEvent:FireServer("Hit", getChar(plr)) end)
-        end
-
-        if shot % 4 == 0 then
+        if shot % 5 == 0 then
             reloadGun(gun)
-            task.wait(0.12)
+            task.wait(0.1)
         end
-        task.wait(0.09) -- faster shots while strafing
+        task.wait(0.11)
     end
 
     reloadGun(gun)
@@ -1536,25 +1527,37 @@ end
 ----------------------------------------------------------------------
 local function stompTarget(plr, times)
     if not plr then return end
-    times = times or 12
+    times = times or 16
     State.Tracking = false
+    clearAimLock()
+
+    -- unequip so stomp input isn't eaten by gun/tool
+    pcall(function()
+        local h = getHum()
+        if h then h:UnequipTools() end
+    end)
+    State.Armed = false
+    task.wait(0.05)
 
     for i = 1, times do
         if not getChar(plr) then break end
         -- if they got up and are no longer KO, stop stomping this cycle
-        if not isKO(plr) and i > 2 then
+        if not isKO(plr) and i > 3 then
             local h = getHum(plr)
-            if h and h.Health > 15 then break end
+            if h and h.Health > 20 then break end
         end
 
         local my = getHRP()
+        local theirChar = getChar(plr)
         local their = getHRP(plr)
-        if my and their then
-            -- hover slightly above while stomping
-            local pos = their.Position + Vector3.new(0, 2.8, 0)
+        -- prefer UpperTorso for standing on knocked body (HRP can float)
+        local standOn = theirChar and (theirChar:FindFirstChild("UpperTorso") or theirChar:FindFirstChild("Torso") or their)
+        if my and standOn then
+            -- plant feet on chest — classic hood stomp distance
+            local pos = standOn.Position + Vector3.new(0, 2.15, 0)
             pcall(function()
                 local ch = getChar()
-                local cf = CFrame.new(pos, their.Position)
+                local cf = CFrame.new(pos)
                 if ch and ch.PivotTo then ch:PivotTo(cf) end
                 my.CFrame = cf
                 my.AssemblyLinearVelocity = Vector3.zero
@@ -1562,12 +1565,25 @@ local function stompTarget(plr, times)
             end)
         end
 
-        -- E key (stomp)
+        -- ensure upright / not ragdolled ourselves
+        pcall(function()
+            local h = getHum()
+            if h then
+                h.PlatformStand = false
+                h.Sit = false
+                if h:GetState() == Enum.HumanoidStateType.Physics
+                    or h:GetState() == Enum.HumanoidStateType.Ragdoll then
+                    h:ChangeState(Enum.HumanoidStateType.GettingUp)
+                end
+            end
+        end)
+
+        -- E key (stomp) — hold a bit longer for server registration
         pcall(function()
             local vim = game:GetService("VirtualInputManager")
             if vim then
                 vim:SendKeyEvent(true, Enum.KeyCode.E, false, game)
-                task.wait(0.06)
+                task.wait(0.08)
                 vim:SendKeyEvent(false, Enum.KeyCode.E, false, game)
             end
         end)
@@ -1575,29 +1591,21 @@ local function stompTarget(plr, times)
             local vu = game:GetService("VirtualUser")
             if vu then
                 vu:SetKeyDown("0x45")
-                task.wait(0.05)
+                task.wait(0.07)
                 vu:SetKeyUp("0x45")
             end
         end)
 
-        local char = getChar(plr)
+        -- primary stomp remote only (spam invalid names can trip client/server)
         if MainEvent then
-            for _, n in ipairs({"Stomp", " stoomp", "KnockedStomp", "Finish", "StompPlayer"}) do
-                pcall(function() MainEvent:FireServer(n) end)
-                pcall(function() MainEvent:FireServer(n, true) end)
-                if char then
-                    pcall(function() MainEvent:FireServer(n, char) end)
-                    pcall(function() MainEvent:FireServer(n, char, true) end)
-                end
-                pcall(function() MainEvent:FireServer(n, plr) end)
-            end
+            pcall(function() MainEvent:FireServer("Stomp") end)
+            pcall(function() MainEvent:FireServer("Stomp", true) end)
         end
         if UnreliableMainEvent then
             pcall(function() UnreliableMainEvent:FireServer("Stomp") end)
-            pcall(function() UnreliableMainEvent:FireServer("Stomp", true) end)
         end
 
-        task.wait(0.1)
+        task.wait(0.12)
     end
 end
 
