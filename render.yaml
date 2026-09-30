@@ -1,0 +1,60 @@
+services:
+  - type: web
+    name: stand-user-bot
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot.py
+    plan: free
+    envVars:
+      - key: DISCORD_TOKEN
+        sync: false
+      - key: BUYER_ROLE_ID
+        sync: false
+      - key: STAFF_ROLE_ID
+        sync: false
+      - key: MAIN_SCRIPT_URL
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      - key: KEY_API_BASE
+        sync: false
+      - key: STATUS_CHANNEL_ID
+        value: "1554079705022595174"
+      - key: STATUS_CHANNEL_LABEL
+        value: "Executive Stand"
+      - key: CHANGELOG_CHANNEL_ID
+        sync: false
+
+  - type: web
+    name: stand-staff-bot
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python staff_bot.py
+    plan: free
+    envVars:
+      - key: STAFF_DISCORD_TOKEN
+        sync: false
+      - key: STAFF_ROLE_ID
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      - key: STATUS_CHANNEL_ID
+        value: "1554079705022595174"
+      - key: STATUS_CHANNEL_LABEL
+        value: "Executive Stand"
+      - key: CHANGELOG_CHANNEL_ID
+        sync: false
+      - key: TRANSCRIPT_CHANNEL_ID
+        value: "1554783241750188112"
+      - key: VERIFY_ROLE_ID
+        value: "1554782511781908600"
+      - key: UNVERIFIED_ROLE_ID
+        value: "1554782544950726746"
+      - key: MEMBER_ROLE_ID
+        value: "1553595287896072192"
+      - key: TICKET_CATEGORY_ID
+        sync: false
