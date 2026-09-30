@@ -158,7 +158,7 @@ local State = {
     AssistName    = nil,   -- .assist user — apply sentry modes for that user too
     SentryBusy    = false,
     CombatActive  = false, -- true during knock/stomp/loop/etc
-    StrafeAngle   = 0,
+    HoverHeight   = 6,     -- studs above target while attacking
     VoidEat       = false, -- void + eat while combat to avoid dying
 }
 
@@ -1320,20 +1320,17 @@ local function exitCombatVoid()
     end
 end
 
--- Orbit strafe around target — full TP (no step limit) so knock/lk teleports instead of walking
-local function strafeTarget(plr, radius)
+-- Hover directly above target (no orbit) — full TP so knock/lk teleports instead of walking
+local function hoverOverTarget(plr, height)
     if State.VoidEat or State.InVoid then return end
-    radius = radius or 10
+    height = height or State.HoverHeight or 6
     local my = getHRP()
     local their = getHRP(plr)
     if not my or not their then return end
     local aim = getAimPos(plr) or their.Position
-    State.StrafeAngle = (State.StrafeAngle or 0) + 0.35
-    local ang = State.StrafeAngle
-    local offset = Vector3.new(math.cos(ang) * radius, 1.5, math.sin(ang) * radius)
-    local targetPos = their.Position + offset
+    local targetPos = their.Position + Vector3.new(0, height, 0)
     pcall(function()
-        local look = Vector3.new(aim.X, targetPos.Y, aim.Z)
+        local look = Vector3.new(aim.X, targetPos.Y - 1, aim.Z)
         local cf = CFrame.new(targetPos, look)
         local ch = getChar()
         if ch and ch.PivotTo then
@@ -1463,7 +1460,7 @@ local function shootTarget(plr)
     pcall(ensureSilentAim)
     setCamlock(plr, 4)
 
-    strafeTarget(plr, 9)
+    hoverOverTarget(plr)
     reloadGun(gun)
     task.wait(0.08)
 
@@ -1488,8 +1485,8 @@ local function shootTarget(plr)
             if not gun then break end
         end
 
-        -- strafe around target each shot (capped movement)
-        strafeTarget(plr, 9 + (shot % 2))
+        -- hover above target each shot
+        hoverOverTarget(plr)
         local aim = getAimPos(plr)
         if not aim then break end
 
@@ -1553,13 +1550,11 @@ local function stompTarget(plr, times)
         local my = getHRP()
         local their = getHRP(plr)
         if my and their then
-            -- slight strafe while stomping so harder to hit
-            State.StrafeAngle = (State.StrafeAngle or 0) + 0.6
-            local a = State.StrafeAngle
-            local pos = their.Position + Vector3.new(math.cos(a) * 1.2, 2.5, math.sin(a) * 1.2)
+            -- hover slightly above while stomping
+            local pos = their.Position + Vector3.new(0, 2.8, 0)
             pcall(function()
                 local ch = getChar()
-                local cf = CFrame.new(pos)
+                local cf = CFrame.new(pos, their.Position)
                 if ch and ch.PivotTo then ch:PivotTo(cf) end
                 my.CFrame = cf
                 my.AssemblyLinearVelocity = Vector3.zero
