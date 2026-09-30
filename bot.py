@@ -39,7 +39,7 @@ STATUS_TABLE = "stand_status"
 CHANGELOG_TABLE = "stand_changelog"
 
 # Status / changelog channels
-STATUS_CHANNEL_ID = int(os.getenv("STATUS_CHANNEL_ID", "1553592357814018139") or "1553592357814018139")
+STATUS_CHANNEL_ID = int(os.getenv("STATUS_CHANNEL_ID", "1554079705022595174") or "1554079705022595174")
 CHANGELOG_CHANNEL_ID = int(os.getenv("CHANGELOG_CHANNEL_ID", "1553592489728933934") or "1553592489728933934")
 # Public URL of this bot (Render) so loaders can poll /api/status during inject
 PUBLIC_BOT_URL = (
@@ -70,7 +70,7 @@ STATUS_COLORS = {
 # States that block buyers from /loader and block script inject
 MAINTENANCE_BLOCK_STATES = frozenset({"down", "updating"})
 # Channel name format: "{dot}｜Stand"  e.g. 🟢｜Stand
-STATUS_CHANNEL_LABEL = os.getenv("STATUS_CHANNEL_LABEL", "Stand")
+STATUS_CHANNEL_LABEL = os.getenv("STATUS_CHANNEL_LABEL", "Executive Stand")
 STATUS_FILE = Path(__file__).resolve().parent / "data" / "system_status.json"
 DEPLOY_FILE = Path(__file__).resolve().parent / "data" / "last_deploy.json"
 # Files watched for automatic changelog on restart/redeploy
@@ -753,7 +753,7 @@ async def staff_check(interaction: discord.Interaction) -> bool:
 def _status_channel_name(status: str) -> str:
     """Channel name: 🟢｜Stand  /  🔴｜Stand  /  🔵｜Stand  /  🟡｜Stand"""
     dot = STATUS_DOTS.get(status, "🟢")
-    label = (STATUS_CHANNEL_LABEL or "Stand").strip() or "Stand"
+    label = (STATUS_CHANNEL_LABEL or "Executive Stand").strip() or "Executive Stand"
     # Discord allows emoji + fullwidth bar + text
     return f"{dot}｜{label}"
 
@@ -1358,205 +1358,8 @@ async def removecontroller(interaction: discord.Interaction, username: str):
 # -------------------- STAFF --------------------
 
 
-@bot.tree.command(name="blacklist", description="[Staff] Blacklist a Discord user from the bot")
-@app_commands.describe(user="Discord user to blacklist", reason="Reason")
-async def blacklist_cmd(
-    interaction: discord.Interaction,
-    user: discord.User,
-    reason: str = "No reason",
-):
-    if not await staff_check(interaction):
-        return
-    set_blacklist(user.id, reason, interaction.user.id)
-    # wipe their config so script/key is useless
-    clear_user(user.id)
-    await interaction.response.send_message(
-        f"Blacklisted **{user}** (`{user.id}`)\nReason: {reason}\nTheir config was wiped.",
-        ephemeral=True,
-    )
 
-
-@bot.tree.command(name="unblacklist", description="[Staff] Remove a user from the blacklist")
-@app_commands.describe(user="Discord user to unblacklist")
-async def unblacklist_cmd(interaction: discord.Interaction, user: discord.User):
-    if not await staff_check(interaction):
-        return
-    clear_blacklist(user.id)
-    await interaction.response.send_message(
-        f"Unblacklisted **{user}** (`{user.id}`).",
-        ephemeral=True,
-    )
-
-
-@bot.tree.command(name="checkblacklist", description="[Staff] Check if a user is blacklisted")
-@app_commands.describe(user="Discord user")
-async def checkblacklist_cmd(interaction: discord.Interaction, user: discord.User):
-    if not await staff_check(interaction):
-        return
-    flagged = is_blacklisted(user.id)
-    await interaction.response.send_message(
-        f"**{user}** (`{user.id}`) is **{'BLACKLISTED' if flagged else 'not blacklisted'}**.",
-        ephemeral=True,
-    )
-
-
-@bot.tree.command(name="forceunlink", description="[Staff] Wipe a buyer's config")
-@app_commands.describe(user="Discord user whose config to wipe")
-async def forceunlink_cmd(interaction: discord.Interaction, user: discord.User):
-    if not await staff_check(interaction):
-        return
-    clear_user(user.id)
-    await interaction.response.send_message(
-        f"Wiped config for **{user}** (`{user.id}`).",
-        ephemeral=True,
-    )
-
-
-@bot.tree.command(name="staffview", description="[Staff] View a buyer's linked owner/alts")
-@app_commands.describe(user="Discord user")
-async def staffview_cmd(interaction: discord.Interaction, user: discord.User):
-    if not await staff_check(interaction):
-        return
-    cfg = get_user_cfg(user.id)
-    alts = cfg.get("alts") or {}
-    ctrls = cfg.get("controllers") or []
-    embed = discord.Embed(title=f"Config for {user}", color=0xE74C3C)
-    embed.add_field(name="Owner", value=f"`{cfg.get('owner') or '—'}`", inline=True)
-    embed.add_field(name="Rank", value=f"`{cfg.get('rank') or 'free'}`", inline=True)
-    embed.add_field(name="Prefix", value=f"`{cfg.get('prefix')}`", inline=True)
-    embed.add_field(name="Gun", value=f"`{cfg.get('gun')}`", inline=True)
-    embed.add_field(name="Blacklisted", value=str(is_blacklisted(user.id)), inline=True)
-    if alts:
-        lines = [f"`{n}` slot {s}" for n, s in alts.items()]
-        embed.add_field(name="Alts", value="\n".join(lines)[:1000], inline=False)
-    if ctrls:
-        embed.add_field(name="Controllers", value=", ".join(f"`{c}`" for c in ctrls), inline=False)
-    await interaction.response.send_message(embed=embed, ephemeral=True)
-
-
-@bot.tree.command(name="setrank", description="[Staff] Set buyer rank: free / premium / bypass")
-@app_commands.describe(user="Discord user", rank="free, premium, or bypass (shield)")
-@app_commands.choices(rank=[
-    app_commands.Choice(name="free", value="free"),
-    app_commands.Choice(name="premium", value="premium"),
-    app_commands.Choice(name="bypass (shield)", value="bypass"),
-])
-async def setrank_cmd(
-    interaction: discord.Interaction,
-    user: discord.User,
-    rank: app_commands.Choice[str],
-):
-    if not await staff_check(interaction):
-        return
-    cfg = get_user_cfg(user.id)
-    cfg["rank"] = rank.value
-    set_user_cfg(user.id, cfg)
-    await interaction.response.send_message(
-        f"Set **{user}** rank to **`{rank.value}`**.\n"
-        f"They must run `/loader` again and re-inject alts.\n"
-        f"• free — default\n"
-        f"• premium — can benx/pkick free users\n"
-        f"• bypass — immune to premium; can command free + premium",
-        ephemeral=True,
-    )
-
-
-@bot.tree.command(
-    name="status",
-    description="[Staff] Set maintenance / system status (updates status channel dot)",
-)
-@app_commands.describe(
-    state="up=🟢 online | down=🔴 maintenance | updating=🔵 | detected=🟡",
-    note="Optional message posted in the status channel",
-)
-@app_commands.choices(state=[
-    app_commands.Choice(name="🟢 Up / Online", value="up"),
-    app_commands.Choice(name="🔴 Down / Maintenance", value="down"),
-    app_commands.Choice(name="🔵 Updating", value="updating"),
-    app_commands.Choice(name="🟡 Detected", value="detected"),
-])
-async def status_cmd(
-    interaction: discord.Interaction,
-    state: app_commands.Choice[str],
-    note: Optional[str] = None,
-):
-    if not await staff_check(interaction):
-        return
-    await interaction.response.defer(ephemeral=True)
-    err = await update_status_channel(
-        state.value,
-        note=note or "",
-        by=interaction.user,
-        announce=True,
-    )
-    if err:
-        await interaction.followup.send(f"Failed: {err}", ephemeral=True)
-        return
-    dot = STATUS_DOTS.get(state.value, "")
-    label = STATUS_LABELS.get(state.value, state.value)
-    await interaction.followup.send(
-        f"Status set to {dot} **{label}** (`{state.value}`).\n"
-        f"Channel <#{STATUS_CHANNEL_ID}> updated.",
-        ephemeral=True,
-    )
-
-
-@bot.tree.command(
-    name="changelog",
-    description="[Staff] Optional manual changelog (auto posts on every deploy)",
-)
-@app_commands.describe(
-    title="Optional title (auto-deploy already posts without this)",
-    notes="Optional notes",
-    version="Optional version tag",
-    set_updating="If true, also set status channel to 🔵 Updating first",
-    set_up_after="If true, set status channel to 🟢 Up after posting",
-)
-async def changelog_cmd(
-    interaction: discord.Interaction,
-    title: str,
-    notes: str,
-    version: Optional[str] = None,
-    set_updating: Optional[bool] = False,
-    set_up_after: Optional[bool] = True,
-):
-    if not await staff_check(interaction):
-        return
-    await interaction.response.defer(ephemeral=True)
-
-    if set_updating:
-        await update_status_channel(
-            "updating",
-            note=f"Deploying: {title}",
-            by=interaction.user,
-            announce=True,
-        )
-
-    err = await post_changelog(
-        title=title,
-        notes=notes,
-        version=version or "",
-        by=interaction.user,
-    )
-    if err:
-        await interaction.followup.send(f"Changelog failed: {err}", ephemeral=True)
-        return
-
-    if set_up_after:
-        await update_status_channel(
-            "up",
-            note=f"Update live: {title}",
-            by=interaction.user,
-            announce=True,
-        )
-
-    await interaction.followup.send(
-        f"Changelog posted in <#{CHANGELOG_CHANNEL_ID}>.\n"
-        f"Title: **{title}**"
-        + (f" (`{version}`)" if version else ""),
-        ephemeral=True,
-    )
-
+# Staff commands (blacklist, status, etc.) live in staff_bot.py
 
 async def _start_http():
     """Minimal HTTP server so Render free Web Service stays up + status API for loaders."""
