@@ -1,12 +1,14 @@
 services:
   - type: web
-    name: stand-user-bot
+    name: executive-stand
     runtime: python
     buildCommand: pip install -r requirements.txt
-    startCommand: python bot.py
+    startCommand: python main.py
     plan: free
     envVars:
       - key: DISCORD_TOKEN
+        sync: false
+      - key: STAFF_DISCORD_TOKEN
         sync: false
       - key: BUYER_ROLE_ID
         sync: false
@@ -20,27 +22,7 @@ services:
         sync: false
       - key: KEY_API_BASE
         sync: false
-      - key: STATUS_CHANNEL_ID
-        value: "1554079705022595174"
-      - key: STATUS_CHANNEL_LABEL
-        value: "Executive Stand"
-      - key: CHANGELOG_CHANNEL_ID
-        sync: false
-
-  - type: web
-    name: stand-staff-bot
-    runtime: python
-    buildCommand: pip install -r requirements.txt
-    startCommand: python staff_bot.py
-    plan: free
-    envVars:
-      - key: STAFF_DISCORD_TOKEN
-        sync: false
-      - key: STAFF_ROLE_ID
-        sync: false
-      - key: SUPABASE_URL
-        sync: false
-      - key: SUPABASE_KEY
+      - key: PUBLIC_BOT_URL
         sync: false
       - key: STATUS_CHANNEL_ID
         value: "1554079705022595174"

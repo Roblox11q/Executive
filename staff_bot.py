@@ -1440,7 +1440,11 @@ async def main():
     print(f"[Staff] STAFF_ROLE_ID={STAFF_ROLE_ID}")
     print(f"[Staff] Supabase={'yes' if supabase else 'NO'}")
 
-    await _start_http()
+    # When launched via main.py (same Render service), user bot owns PORT
+    if os.getenv("COMBINED_SERVICE", "").strip() in ("1", "true", "yes", "on"):
+        print("[Staff] COMBINED_SERVICE=1 — skipping HTTP (user bot binds PORT)")
+    else:
+        await _start_http()
     try:
         async with bot:
             await bot.start(TOKEN)

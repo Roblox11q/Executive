@@ -36,48 +36,47 @@ Create **two** Discord applications (or reuse one token only if you run a single
 
 ---
 
-## 3. Render
+## 3. Render (both bots on ONE service)
 
-Deploy **two** Web Services (or one service + a second service for the staff bot).
+One Web Service runs **both** bots via `main.py`:
 
-### User bot service
-- Build: `pip install -r requirements.txt`
-- Start: `python bot.py`
-- Env:
+| Process | Token env | Role |
+|---------|-----------|------|
+| `bot.py` | `DISCORD_TOKEN` | User / buyer commands + status API |
+| `staff_bot.py` | `STAFF_DISCORD_TOKEN` | Staff, mod, tickets, verification |
 
-| Key | Value |
-|-----|--------|
+### Setup
+1. **Start command:** `python main.py`
+2. Env vars on this **one** service (you already have most):
+
+| Key | Required |
+|-----|----------|
 | `DISCORD_TOKEN` | User bot token |
-| `BUYER_ROLE_ID` | Buyer role ID |
-| `STAFF_ROLE_ID` | Staff role ID (optional; for maintenance bypass) |
-| `MAIN_SCRIPT_URL` | Raw GitHub URL to StandMain.lua |
-| `SUPABASE_URL` | https://xxxx.supabase.co |
-| `SUPABASE_KEY` | service_role key |
-| `STATUS_CHANNEL_ID` | `1554079705022595174` |
-| `STATUS_CHANNEL_LABEL` | `Executive Stand` |
-| `CHANGELOG_CHANNEL_ID` | Changelog channel ID |
-| `PUBLIC_BOT_URL` | Public URL of this service (auto on Render) |
+| `STAFF_DISCORD_TOKEN` | **Different** staff bot token |
+| `BUYER_ROLE_ID` | Buyer role |
+| `STAFF_ROLE_ID` | Staff role |
+| `SUPABASE_URL` / `SUPABASE_KEY` | Shared |
+| `MAIN_SCRIPT_URL` | StandMain.lua raw URL |
+| `PUBLIC_BOT_URL` | This service URL |
+| `STATUS_CHANNEL_ID` | `1554079705022595174` (default) |
+| `TRANSCRIPT_CHANNEL_ID` | `1554783241750188112` (default) |
+| `VERIFY_ROLE_ID` | `1554782511781908600` (default) |
+| `UNVERIFIED_ROLE_ID` | `1554782544950726746` (default) |
+| `MEMBER_ROLE_ID` | `1553595287896072192` (default) |
 
-### Staff bot service
-- Build: `pip install -r requirements.txt`
-- Start: `python staff_bot.py`
-- Env:
+3. Staff Discord app must have **Server Members** + **Message Content** intents.
+4. Invite **both** bots to the server.
 
-| Key | Value |
-|-----|--------|
-| `STAFF_DISCORD_TOKEN` | Staff bot token (falls back to `DISCORD_TOKEN`) |
-| `STAFF_ROLE_ID` | Staff role ID |
-| `SUPABASE_URL` / `SUPABASE_KEY` | Same as user bot |
-| `STATUS_CHANNEL_ID` | `1554079705022595174` |
-| `STATUS_CHANNEL_LABEL` | `Executive Stand` |
-| `CHANGELOG_CHANNEL_ID` | Changelog channel ID |
-| `TRANSCRIPT_CHANNEL_ID` | `1554783241750188112` |
-| `VERIFY_ROLE_ID` | `1554782511781908600` |
-| `UNVERIFIED_ROLE_ID` | `1554782544950726746` |
-| `MEMBER_ROLE_ID` | `1553595287896072192` |
-| `TICKET_CATEGORY_ID` | Optional category for new tickets |
+Logs should show:
+```
+Executive Stand — combined launcher
+  user bot  : bot.py
+  staff bot : staff_bot.py
+[Staff] COMBINED_SERVICE=1 — skipping HTTP (user bot binds PORT)
+Synced ... commands
+Logged in as ...
+```
 
----
 
 ## 4. User bot commands (`bot.py`)
 
