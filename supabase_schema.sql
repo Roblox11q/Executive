@@ -1,17 +1,36 @@
--- Run this in the Supabase SQL Editor once.
--- Prefer the service_role key in the bot so the app can write without RLS issues.
+-- ============================================================
+-- Executive Stand — Roblox Key Registration (run in Supabase)
+-- ============================================================
+-- Adds a table for keys generated from Roblox GamePass purchases.
+-- Players buy in-game → key lands here → they claim it in Discord
+-- with /claimkey or staff can link it.
 
-create table if not exists stand_configs (
-  discord_id text primary key,
-  config jsonb not null default '{}'::jsonb,
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
+create table if not exists roblox_keys (
+  id            bigserial primary key,
+  key           text not null unique,
+  product       text not null,                    -- 'stand' | 'premium' | 'shield'
+  roblox_user_id bigint not null,
+  roblox_username text not null default '',
+  claimed_by_discord_id text,                     -- null until claimed
+  claimed_at    timestamptz,
+  created_at    timestamptz not null default now(),
+  updated_at    timestamptz not null default now()
 );
 
-create index if not exists stand_configs_updated_at_idx
-  on stand_configs (updated_at desc);
+create unique index if not exists roblox_keys_key_idx
+  on roblox_keys (key);
 
-create or replace function set_stand_configs_updated_at()
+create index if not exists roblox_keys_roblox_user_id_idx
+  on roblox_keys (roblox_user_id);
+
+create index if not exists roblox_keys_product_idx
+  on roblox_keys (product);
+
+create index if not exists roblox_keys_unclaimed_idx
+  on roblox_keys (roblox_user_id)
+  where claimed_by_discord_id is null;
+
+create or replace function set_roblox_keys_updated_at()
 returns trigger
 language plpgsql
 as $$
@@ -21,69 +40,11 @@ begin
 end;
 $$;
 
-drop trigger if exists stand_configs_set_updated_at on stand_configs;
-create trigger stand_configs_set_updated_at
-before update on stand_configs
+drop trigger if exists roblox_keys_set_updated_at on roblox_keys;
+create trigger roblox_keys_set_updated_at
+before update on roblox_keys
 for each row
-execute function set_stand_configs_updated_at();
+execute function set_roblox_keys_updated_at();
 
--- Staff blacklist (blocks buyer commands + wiped on blacklist)
-create table if not exists stand_blacklist (
-  discord_id text primary key,
-  reason text not null default '',
-  by text not null default '',
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
-);
-
-create or replace function set_blacklist_updated_at()
-returns trigger
-language plpgsql
-as $$
-begin
-  new.updated_at = now();
-  return new;
-end;
-$$;
-
-drop trigger if exists stand_blacklist_set_updated_at on stand_blacklist;
-create trigger stand_blacklist_set_updated_at
-before update on stand_blacklist
-for each row
-execute function set_blacklist_updated_at();
-
--- System status (persisted so maintenance locks survive Render restarts / multi-instance)
-create table if not exists stand_status (
-  id text primary key default 'current',
-  status text not null default 'up',
-  note text not null default '',
-  updated_at timestamptz not null default now()
-);
-
-create index if not exists stand_status_updated_at_idx
-  on stand_status (updated_at desc);
-
-insert into stand_status (id, status, note)
-values ('current', 'up', '')
-on conflict (id) do nothing;
-
--- Changelog history (written whenever staff or auto-deploy posts a changelog)
-create table if not exists stand_changelog (
-  id bigserial primary key,
-  title text not null default 'Update',
-  notes text not null default '',
-  version text not null default '',
-  by text not null default 'System',
-  automatic boolean not null default false,
-  created_at timestamptz not null default now()
-);
-
-create index if not exists stand_changelog_created_at_idx
-  on stand_changelog (created_at desc);
-
--- If your project uses RLS, enable it and allow the service_role key full access.
--- Example (service role bypasses RLS in Supabase by default):
--- alter table stand_configs enable row level security;
--- alter table stand_blacklist enable row level security;
--- alter table stand_status enable row level security;
--- alter table stand_changelog enable row level security;
+-- Optional: allow service_role full access (default in Supabase)
+-- alter table roblox_keys enable row level security;
