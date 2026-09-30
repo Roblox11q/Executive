@@ -1402,6 +1402,144 @@ async def verifypanel_cmd(interaction: discord.Interaction):
     await interaction.channel.send(embed=embed, view=VerifyView())
 
 
+
+@bot.tree.command(name="rules", description="[Staff] Post the server rules panel")
+@app_commands.describe(channel="Channel to post rules in (defaults to current)")
+async def rules_cmd(
+    interaction: discord.Interaction,
+    channel: Optional[discord.TextChannel] = None,
+):
+    if not await staff_check(interaction):
+        return
+    target = channel or interaction.channel
+    if not isinstance(target, discord.TextChannel):
+        await interaction.response.send_message("Text channels only.", ephemeral=True)
+        return
+
+    embed = discord.Embed(
+        title="📜 Executive Stand — Server Rules",
+        description=(
+            "Welcome to **Executive Stand**. By staying in this server you agree to these rules.\n\n"
+            "**Community**\n"
+            "• Be respectful — no harassment, hate, or toxicity\n"
+            "• No spam, mass pings, or unsolicited ads\n"
+            "• Keep chat clean — no NSFW or illegal content\n\n"
+            "**Product & support**\n"
+            "• Do not leak, resell, or share loaders, keys, or configs\n"
+            "• No scams or abusive chargebacks\n"
+            "• Use the ticket panel for bugs, billing, and partnerships\n\n"
+            "**Access**\n"
+            "• Verify to unlock channels\n"
+            "• Don't mini-mod; contact staff instead\n\n"
+            "**Enforcement**\n"
+            "• Staff decisions are final\n"
+            "• Punishments: warn → timeout → kick → ban / blacklist\n"
+            "• Follow Discord ToS at all times"
+        ),
+        color=0x5865F2,
+    )
+    embed.add_field(
+        name="Support tickets",
+        value=(
+            "❓ **Development** — Report a bug\n"
+            "💰 **Billing** — Payments / missing perks\n"
+            "🔧 **Partnership** — Affiliate applications"
+        ),
+        inline=False,
+    )
+    embed.set_footer(text="Executive Stand • Breaking rules may result in a product blacklist")
+    await interaction.response.send_message(
+        f"Rules posted in {target.mention}.",
+        ephemeral=True,
+    )
+    await target.send(embed=embed)
+
+
+@bot.tree.command(name="announce", description="[Staff] Send an announcement embed to a channel")
+@app_commands.describe(
+    channel="Channel to send the announcement in",
+    message="Announcement text",
+    title="Optional embed title",
+    ping="Optional role to ping",
+    image_url="Optional image URL for the embed",
+)
+async def announce_cmd(
+    interaction: discord.Interaction,
+    channel: discord.TextChannel,
+    message: str,
+    title: Optional[str] = None,
+    ping: Optional[discord.Role] = None,
+    image_url: Optional[str] = None,
+):
+    if not await staff_check(interaction):
+        return
+
+    member = interaction.user
+    is_admin = isinstance(member, discord.Member) and member.guild_permissions.administrator
+    lowered = message.lower()
+    if not is_admin and ("@everyone" in lowered or "@here" in lowered):
+        await interaction.response.send_message(
+            "Only administrators can include @everyone / @here in announcements.",
+            ephemeral=True,
+        )
+        return
+
+    embed = discord.Embed(
+        title=title or "📢 Announcement",
+        description=message,
+        color=0x5865F2,
+        timestamp=datetime.now(timezone.utc),
+    )
+    embed.set_footer(text=f"Executive Stand • Posted by {interaction.user}")
+    if image_url:
+        try:
+            embed.set_image(url=image_url)
+        except Exception:
+            pass
+
+    content = ping.mention if ping else None
+    try:
+        await channel.send(content=content, embed=embed)
+    except Exception as e:
+        await interaction.response.send_message(f"Failed to send: {e}", ephemeral=True)
+        return
+
+    await interaction.response.send_message(
+        f"Announcement sent to {channel.mention}.",
+        ephemeral=True,
+    )
+
+
+@bot.tree.command(name="say", description="[Staff] Send a plain message (no embed) to a channel")
+@app_commands.describe(
+    channel="Channel to send in",
+    message="Message text",
+)
+async def say_cmd(
+    interaction: discord.Interaction,
+    channel: discord.TextChannel,
+    message: str,
+):
+    if not await staff_check(interaction):
+        return
+    if not isinstance(interaction.user, discord.Member) or not interaction.user.guild_permissions.administrator:
+        if "@everyone" in message.lower() or "@here" in message.lower():
+            await interaction.response.send_message(
+                "Only administrators can include @everyone / @here.",
+                ephemeral=True,
+            )
+            return
+    try:
+        await channel.send(message)
+    except Exception as e:
+        await interaction.response.send_message(f"Failed: {e}", ephemeral=True)
+        return
+    await interaction.response.send_message(
+        f"Message sent to {channel.mention}.",
+        ephemeral=True,
+    )
+
+
 # ── Minimal HTTP for Render (optional second service) ─────────────────────────
 async def _start_http():
     from aiohttp import web
