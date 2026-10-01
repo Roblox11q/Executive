@@ -74,6 +74,7 @@ local IsDaStrike    = (PlaceId == 134196333708867)
 local IsDaHoodStyle = IsDaHood or IsDersHood or IsDaStrike
 
 local MainEvent, UnreliableMainEvent, MainFunction
+local StompEffectEvent, GunsFolder, AssetsInvoke
 local MouseRemote = "MousePosUpdate"
 pcall(function()
     MainEvent = ReplicatedStorage:FindFirstChild("MainEvent")
@@ -81,7 +82,15 @@ pcall(function()
         or ReplicatedStorage:FindFirstChild("MAINEVENT")
     UnreliableMainEvent = ReplicatedStorage:FindFirstChild("UnreliableMainEvent")
     MainFunction = ReplicatedStorage:FindFirstChild("MainFunction")
-    if IsDaHoodStyle then
+    StompEffectEvent = ReplicatedStorage:FindFirstChild("STOMPEFFECTEVENT")
+    GunsFolder = ReplicatedStorage:FindFirstChild("guns")
+    local assets = ReplicatedStorage:FindFirstChild("Assets")
+    AssetsInvoke = assets and assets:FindFirstChild("Invoke")
+    if IsDaStrike then
+        -- Da Strike uses MAINEVENT + per-gun .rl remotes under guns/
+        MainEvent = ReplicatedStorage:FindFirstChild("MAINEVENT") or MainEvent
+        MouseRemote = "UpdateMousePosI"
+    elseif IsDaHoodStyle then
         MouseRemote = "UpdateMousePosI"
     elseif IsHoodCustoms then
         MouseRemote = "MousePosUpdate"
@@ -97,7 +106,68 @@ local placeLabel =
     or (IsHoodCustoms and "Hood Customs")
     or (IsDaStrike and "Da Strike")
     or ("Place " .. tostring(PlaceId))
-print("[Stand] Place", PlaceId, placeLabel, "| MouseRemote =", MouseRemote)
+print("[Stand] Place", PlaceId, placeLabel, "| MouseRemote =", MouseRemote,
+    "| MainEvent =", MainEvent and MainEvent.Name or "nil",
+    "| StompFX =", StompEffectEvent and "yes" or "no",
+    "| guns =", GunsFolder and "yes" or "no")
+
+-- Da Strike: map equipped tool name → guns/<folder>.rl remote
+local function getDaStrikeGunRemote(gun)
+    if not IsDaStrike or not GunsFolder or not gun then return nil end
+    local n = string.lower(tostring(gun.Name):gsub("[%[%]]", ""):gsub("%s+", " "))
+    local aliases = {
+        ["doublebarrel"] = "db",
+        ["double-barrel sg"] = "db",
+        ["double barrel"] = "db",
+        ["db"] = "db",
+        ["revolver"] = "rev",
+        ["rev"] = "rev",
+        ["tactical sg"] = "tactical sg",
+        ["sawed off"] = "sawed off",
+        ["silencer"] = "silencer",
+        ["sg"] = "sg",
+        ["sglock"] = "sglock",
+        ["usp"] = "usp",
+        ["type 17"] = "type 17",
+        ["aimlock db"] = "aimlock db",
+        ["aimlock rev"] = "aimlock rev",
+        ["hitscan db"] = "Hitscan db",
+        ["hitscan rev"] = "Hitscan rev",
+        ["hitscantac"] = "hitscanTac",
+    }
+    local folderName = aliases[n]
+    if not folderName then
+        -- fuzzy: match any guns child whose name appears in tool name
+        for _, child in ipairs(GunsFolder:GetChildren()) do
+            local cn = string.lower(child.Name)
+            if string.find(n, cn, 1, true) or string.find(cn, n, 1, true) then
+                folderName = child.Name
+                break
+            end
+        end
+    end
+    if not folderName then return nil end
+    local folder = GunsFolder:FindFirstChild(folderName)
+    if not folder then return nil end
+    return folder:FindFirstChild("rl")
+end
+
+local function fireDaStrikeGun(gun, aim)
+    local rl = getDaStrikeGunRemote(gun)
+    if not rl then return end
+    pcall(function()
+        if aim then
+            rl:FireServer(aim)
+        else
+            rl:FireServer()
+        end
+    end)
+    pcall(function()
+        if aim then
+            rl:FireServer(aim, gun)
+        end
+    end)
+end
 
 ----------------------------------------------------------------------
 -- SLOT / OWNER
@@ -576,6 +646,20 @@ local function fireHitRemotes(plr)
     go(MainEvent, false)
     go(UnreliableMainEvent, false)
     go(MainFunction, true)
+    -- Da Strike: also try Assets.Invoke + MAINEVENT slash variants
+    if IsDaStrike then
+        if AssetsInvoke then
+            pcall(function() AssetsInvoke:InvokeServer("Hit", char) end)
+            pcall(function() AssetsInvoke:InvokeServer("Hit", hum) end)
+            pcall(function() AssetsInvoke:InvokeServer("Slash", char) end)
+            pcall(function() AssetsInvoke:InvokeServer("Combat", char) end)
+        end
+        if MainEvent and aim then
+            pcall(function() MainEvent:FireServer("Slash", aim) end)
+            pcall(function() MainEvent:FireServer("Hit", aim) end)
+            pcall(function() MainEvent:FireServer("Combat", aim) end)
+        end
+    end
 end
 
 ----------------------------------------------------------------------
@@ -849,6 +933,13 @@ local function reloadGun(gun)
     if MainFunction then
         pcall(function() MainFunction:InvokeServer("Reload") end)
         pcall(function() MainFunction:InvokeServer("Reload", gun.Name) end)
+    end
+    -- Da Strike per-gun .rl (reload / shoot shared remote on some clones)
+    if IsDaStrike then
+        fireDaStrikeGun(gun, nil)
+        pcall(function()
+            if MainEvent then MainEvent:FireServer("Reload") end
+        end)
     end
 
     -- 3) tool remotes / values
@@ -1575,6 +1666,14 @@ local function shootTarget(plr)
         end)
 
         activateTool(gun)
+        -- Da Strike: fire per-gun .rl remote with aim pos
+        if IsDaStrike then
+            fireDaStrikeGun(gun, aim)
+            if MainEvent then
+                pcall(function() MainEvent:FireServer(MouseRemote, aim) end)
+                pcall(function() MainEvent:FireServer("Shoot", aim) end)
+            end
+        end
 
         pcall(function()
             local vim = game:GetService("VirtualInputManager")
@@ -1683,12 +1782,22 @@ local function stompTarget(plr, times)
         if UnreliableMainEvent then
             pcall(function() UnreliableMainEvent:FireServer("Stomp") end)
         end
+        -- Da Strike dedicated stomp effect remote
+        if StompEffectEvent then
+            pcall(function() StompEffectEvent:FireServer() end)
+            pcall(function() StompEffectEvent:FireServer(true) end)
+            local their = getHRP(plr)
+            if their then
+                pcall(function() StompEffectEvent:FireServer(their) end)
+                pcall(function() StompEffectEvent:FireServer(plr) end)
+            end
+        end
 
         task.wait(0.12)
     end
 end
 
--- COMBAT: KNIFE
+-- COMBAT: KNIFE / KATANA — charge dash into target for fast KO
 ----------------------------------------------------------------------
 local function knifeTarget(plr)
     if not plr or isProtected(plr) then return end
@@ -1699,40 +1808,68 @@ local function knifeTarget(plr)
 
     task.spawn(function()
         local knife = findKnife()
-        if knife then knife = equipTool(knife, 1.0) end
+        if knife then knife = equipTool(knife, 0.6) end
         if not knife then
-            notify("Knife: equip [Knife] in backpack first")
+            notify("Knife: equip [Katana]/[Knife] in backpack first")
             State.KnifeBusy = false
             State.Tracking = true
             return
         end
         expandKnifeParts(knife)
-        setCamlock(plr, 10)
-        notify("Knife -> " .. plr.Name)
+        setAimLock(plr)
+        pcall(ensureSilentAim)
+        setCamlock(plr, 8)
+        notify("Charge -> " .. plr.Name)
 
+        -- CHARGE: hard dash into target (not a slow lerp)
         do
             local my = getHRP()
             local their = getHRP(plr)
             if my and their then
-                local start = my.Position
-                for step = 1, 10 do
+                -- burst of teleports + velocity toward chest for hit registration
+                for step = 1, 6 do
                     their = getHRP(plr)
                     my = getHRP()
-                    if not my or not their then break end
-                    local goal = their.Position + Vector3.new(0, 0.25, 0)
-                    local pos = start:Lerp(goal, step / 10)
-                    local cf = CFrame.new(pos, their.Position + Vector3.new(0, 1.2, 0))
+                    if not my or not their or isKO(plr) then break end
+                    local goal = their.Position + Vector3.new(0, 0.15, 0)
+                    local dir = (goal - my.Position)
+                    local dist = dir.Magnitude
+                    local nextPos = dist > 4 and (my.Position + dir.Unit * math.min(dist, 18)) or goal
+                    local look = their.Position + Vector3.new(0, 1.0, 0)
+                    local cf = CFrame.new(nextPos, look)
                     pcall(function()
                         local ch = getChar()
                         if ch and ch.PivotTo then ch:PivotTo(cf) end
                         my.CFrame = cf
-                        my.AssemblyLinearVelocity = Vector3.zero
+                        if dist > 2 then
+                            my.AssemblyLinearVelocity = dir.Unit * 90
+                        else
+                            my.AssemblyLinearVelocity = Vector3.zero
+                        end
+                        my.AssemblyAngularVelocity = Vector3.zero
                     end)
-                    task.wait(0.04)
+                    -- swing during charge
+                    setAttacking(true)
+                    if knife and knife.Parent == getChar() then activateTool(knife) end
+                    fireHitRemotes(plr)
+                    local aim = getAimPos(plr)
+                    if aim then
+                        pcall(function() fireMouse(aim) end)
+                    end
+                    pcall(function()
+                        local vim = game:GetService("VirtualInputManager")
+                        if vim then
+                            vim:SendMouseButtonEvent(0, 0, 0, true, game, 0)
+                            task.wait(0.012)
+                            vim:SendMouseButtonEvent(0, 0, 0, false, game, 0)
+                        end
+                    end)
+                    task.wait(0.03)
                 end
             end
         end
 
+        -- Stick on target and multi-hit until KO (fast)
         local under = false
         local lockConn
         lockConn = RunService.Heartbeat:Connect(function()
@@ -1740,46 +1877,55 @@ local function knifeTarget(plr)
             local my = getHRP()
             local their = getHRP(plr)
             if not my or not their then return end
-            local off = under and Vector3.new(0, -1.8, 0) or Vector3.new(0, 0.25, 0)
+            local off = under and Vector3.new(0, -1.6, 0) or Vector3.new(0, 0.2, 0)
             local pos = their.Position + off
-            local cf = CFrame.new(pos, their.Position + Vector3.new(0, 1.2, 0))
+            local cf = CFrame.new(pos, their.Position + Vector3.new(0, 1.0, 0))
             pcall(function()
                 local ch = getChar()
                 if ch and ch.PivotTo then ch:PivotTo(cf) end
                 my.CFrame = cf
                 my.AssemblyLinearVelocity = Vector3.zero
+                my.AssemblyAngularVelocity = Vector3.zero
             end)
         end)
 
         local t0 = tick()
         local swing = 0
-        while tick() - t0 < 6.5 do
+        while tick() - t0 < 3.2 do
             if isKO(plr) or not getChar(plr) then break end
             swing = swing + 1
-            under = (swing % 6) >= 3
+            under = (swing % 4) >= 2
 
             if not knife or knife.Parent ~= getChar() then
-                knife = equipTool(findKnife(), 0.5)
+                knife = equipTool(findKnife(), 0.35)
                 if knife then expandKnifeParts(knife) end
             end
 
             local aim = getAimPos(plr)
-            if aim then for _ = 1, 5 do fireMouse(aim) end end
+            if aim then
+                for _ = 1, 3 do fireMouse(aim) end
+            end
 
             setAttacking(true)
-            if knife then activateTool(knife) end
+            if knife then
+                activateTool(knife)
+                -- double-activate for faster hit reg on katana
+                task.defer(function()
+                    if knife and knife.Parent == getChar() then activateTool(knife) end
+                end)
+            end
             fireHitRemotes(plr)
 
             pcall(function()
                 local vim = game:GetService("VirtualInputManager")
                 if vim then
                     vim:SendMouseButtonEvent(0, 0, 0, true, game, 0)
-                    task.wait(0.02)
+                    task.wait(0.012)
                     vim:SendMouseButtonEvent(0, 0, 0, false, game, 0)
                 end
             end)
 
-            task.wait(0.1)
+            task.wait(0.045)
         end
 
         if lockConn then pcall(function() lockConn:Disconnect() end) end
@@ -1787,12 +1933,13 @@ local function knifeTarget(plr)
 
         if isKO(plr) then
             notify("KO - stomping " .. plr.Name)
-            stompTarget(plr, 8)
+            stompTarget(plr, 10)
         else
-            notify("Knife done (no KO) - try .stomp " .. plr.Name)
+            notify("Charge done (no KO) - try .stomp " .. plr.Name)
         end
 
         clearCamlock()
+        clearAimLock()
         State.KnifeBusy = false
         State.Tracking = true
         returnToOwner()
