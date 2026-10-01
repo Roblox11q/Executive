@@ -1,6 +1,6 @@
 --[[
     STAND BOT MAIN v2 — clean rewrite
-    Places: Da Hood, Ranked DH, DERS HOOD, Des Hood, Hood Customs
+    Places: Da Hood, Ranked DH, DERS HOOD, Des Hood, Hood Customs, Da Strike
     Inject on ALTS only. Owner types commands in public chat (Prefix from config).
     Config comes from Discord loader → StandConfig / getgenv().StandConfig
 ]]
@@ -55,7 +55,8 @@ end
 do
     local pid = game.PlaceId
     local daHoodStyle = (pid == 2788229376 or pid == 16033173781
-        or pid == 96247461091106 or pid == 128413479081937)
+        or pid == 96247461091106 or pid == 128413479081937
+        or pid == 134196333708867) -- Da Strike
     local low = string.lower(PreferredGun:gsub("[%[%]]", ""):gsub("%s+", ""))
     if low == "doublebarrel" or low == "doublebarrelsg" or low == "db" then
         PreferredGun = daHoodStyle and "[Double-Barrel SG]" or "[DoubleBarrel]"
@@ -69,7 +70,8 @@ local PlaceId = game.PlaceId
 local IsDaHood      = (PlaceId == 2788229376 or PlaceId == 16033173781)
 local IsDersHood    = (PlaceId == 96247461091106 or PlaceId == 128413479081937)
 local IsHoodCustoms = (PlaceId == 9825515356)
-local IsDaHoodStyle = IsDaHood or IsDersHood
+local IsDaStrike    = (PlaceId == 134196333708867)
+local IsDaHoodStyle = IsDaHood or IsDersHood or IsDaStrike
 
 local MainEvent, UnreliableMainEvent, MainFunction
 local MouseRemote = "MousePosUpdate"
@@ -93,6 +95,7 @@ local placeLabel =
     or (PlaceId == 96247461091106 and "DERS HOOD")
     or (IsDaHood and "Da Hood")
     or (IsHoodCustoms and "Hood Customs")
+    or (IsDaStrike and "Da Strike")
     or ("Place " .. tostring(PlaceId))
 print("[Stand] Place", PlaceId, placeLabel, "| MouseRemote =", MouseRemote)
 
@@ -628,10 +631,17 @@ local function activateTool(tool)
 end
 
 local function findKnife()
-    return findTool("[Knife]", true)
+    -- Katana first (Da Strike / some hood clones), then classic knife names
+    return findTool("[Katana]", true)
+        or findTool("Katana", true)
+        or findTool("[Katana]", false)
+        or findTool("Katana", false)
+        or findTool("[Knife]", true)
         or findTool("Knife", true)
         or findTool("[Knife]", false)
         or findTool("Knife", false)
+        or findTool("[Combat]", false)
+        or findTool("Combat", false)
 end
 
 local function findGun()
@@ -2011,6 +2021,25 @@ local function cmdKnife(user)
     knifeTarget(plr)
 end
 
+-- .kat <user> — loop kill with katana/knife + stomp
+local function cmdKat(user)
+    local plr = findPlayer(user)
+    if not plr then notify("Kat: not found (" .. tostring(user) .. ")") return end
+    local prot, why = isProtected(plr)
+    if prot then
+        notify("Kat: protected (" .. tostring(why) .. " = " .. plr.Name .. ")")
+        return
+    end
+    -- reuse loopkill knife mode (knifeTarget + stomp when KO)
+    State.LoopKnock = nil
+    State.LoopKill = plr.Name
+    State.LoopKillKnife = true
+    State.LoopKillBusy = false
+    State.Tracking = false
+    beginCombat()
+    notify("Kat loopkill ON " .. plr.Name .. " (katana/knife + stomp)")
+end
+
 -- .b — bring target near owner
 local function cmdBring(user)
     local plr = findPlayer(user)
@@ -2843,8 +2872,9 @@ local function cmdHelp()
     print("  " .. Prefix .. "d <user>   -- knock")
     print("  " .. Prefix .. "b <user>   -- bring")
     print("  " .. Prefix .. "s <user>   -- stomp")
-    print("  " .. Prefix .. "l <user>   -- loop kill")
+    print("  " .. Prefix .. "l <user>   -- loop kill (gun + stomp)")
     print("  " .. Prefix .. "lk <user>  -- loop knock")
+    print("  " .. Prefix .. "kat <user> -- loop kill katana/knife + stomp")
     print("  " .. Prefix .. "unlk / knife <user>")
     print("  " .. Prefix .. "sentry on|off  -- knock who shoots owner")
     print("  " .. Prefix .. "sentry2 on|off -- knock+stomp who shoots owner")
@@ -2902,6 +2932,7 @@ local function onControlChat(msg, speaker)
     elseif cmd == "l" or cmd == "loopkill" then cmdLoopKill(a1, false)
     elseif cmd == "lk" then cmdLoopKnock(a1)
     elseif cmd == "lkk" then cmdLoopKill(a1, true)
+    elseif cmd == "kat" or cmd == "katana" then cmdKat(a1)
     elseif cmd == "knife" then cmdKnife(a1)
     elseif cmd == "unlk" or cmd == "unloopkill" or cmd == "unl" then cmdUnLoopKill()
     -- protection
