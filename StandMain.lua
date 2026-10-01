@@ -587,6 +587,17 @@ local function fireMouse(pos)
         if IsDaStrike then
             -- Spy: MAINEVENT FireServer MOUSE, x, y, z  (NOT a Vector3)
             pcall(function() MainEvent:FireServer("MOUSE", pos.X, pos.Y, pos.Z) end)
+        elseif IsDersHood then
+            -- Der/Des Hood: try all common mouse remote strings (clones differ)
+            for _, name in ipairs({
+                MouseRemote, "UpdateMousePosI", "UpdateMousePos", "MousePosUpdate",
+                "MOUSE", "MousePos", "UpdateMouse",
+            }) do
+                pcall(function() MainEvent:FireServer(name, pos) end)
+            end
+            -- some builds want x,y,z
+            pcall(function() MainEvent:FireServer("UpdateMousePosI", pos.X, pos.Y, pos.Z) end)
+            pcall(function() MainEvent:FireServer("UpdateMousePos", pos.X, pos.Y, pos.Z) end)
         else
             pcall(function() MainEvent:FireServer(MouseRemote, pos) end)
         end
@@ -594,13 +605,24 @@ local function fireMouse(pos)
     -- Hood Customs: UnreliableMainEvent + MousePosUpdate spam is a common red-error source
     if UnreliableMainEvent and not IsHoodCustoms then
         pcall(function() UnreliableMainEvent:FireServer(MouseRemote, pos) end)
+        if IsDersHood then
+            pcall(function() UnreliableMainEvent:FireServer("UpdateMousePosI", pos) end)
+            pcall(function() UnreliableMainEvent:FireServer("UpdateMousePos", pos) end)
+        end
     end
     pcall(function()
         local c = getChar()
         local be = c and c:FindFirstChild("BodyEffects")
-        local mp = be and be:FindFirstChild("MousePos")
-        if mp and mp:IsA("Vector3Value") then
-            mp.Value = pos
+        if not be then return end
+        for _, n in ipairs({"MousePos", "MousePosition", "Mouse", "AimPos"}) do
+            local mp = be:FindFirstChild(n)
+            if mp and (mp:IsA("Vector3Value") or mp:IsA("CFrameValue")) then
+                if mp:IsA("CFrameValue") then
+                    mp.Value = CFrame.new(pos)
+                else
+                    mp.Value = pos
+                end
+            end
         end
     end)
 end
@@ -628,6 +650,8 @@ local function getAimPos(plr)
             local leadT = 0.08
             if IsHoodCustoms then
                 leadT = 0.14
+            elseif IsDersHood then
+                leadT = 0.13
             elseif IsDaStrike then
                 leadT = 0.12
             end
@@ -659,9 +683,8 @@ local function ensureSilentAim()
     local mouse = nil
     pcall(function() mouse = LocalPlayer:GetMouse() end)
 
-    -- NEVER hook __index on Der/Des Hood / Hood Customs — kicks with:
+    -- NEVER hook game.__index on Der/Des Hood / Hood Customs — kicks with:
     -- "indexInstance detector detected (Error Code: 267)"
-    -- Use remote + BodyEffects.MousePos + soft camera only on those places.
     if not NoIndexHook then
         pcall(function()
             if not (hookmetamethod and newcclosure) then return end
@@ -693,12 +716,82 @@ local function ensureSilentAim()
             end))
         end)
     else
-        print("[Stand] Silent aim: remote-only mode (no __index hook) on", placeLabel)
+        print("[Stand] Silent aim: safe mode (no game.__index) on", placeLabel)
+        -- Der Hood: try mouse-only metatable (not game) — many detectors only scan game/Instance
+        if IsDersHood and mouse then
+            pcall(function()
+                if not getrawmetatable then return end
+                local mt = getrawmetatable(mouse)
+                if not mt then return end
+                local oldIndex = mt.__index
+                if type(oldIndex) ~= "function" then return end
+                if setreadonly then setreadonly(mt, false) end
+                mt.__index = newcclosure and newcclosure(function(self, key)
+                    if AimLockPlayer ~= nil and self == mouse then
+                        local k = key
+                        if k == "Hit" or k == "hit" then
+                            local aim = getAimPos(AimLockPlayer)
+                            if aim then return CFrame.new(aim) end
+                        elseif k == "Target" or k == "target" then
+                            local ch = getChar(AimLockPlayer)
+                            if ch then
+                                return ch:FindFirstChild("Head") or getHRP(AimLockPlayer) or ch
+                            end
+                        elseif k == "UnitRay" then
+                            local aim = getAimPos(AimLockPlayer)
+                            if aim and Camera then
+                                local origin = Camera.CFrame.Position
+                                local dir = (aim - origin)
+                                if dir.Magnitude > 0 then
+                                    return Ray.new(origin, dir.Unit * 999)
+                                end
+                            end
+                        end
+                    end
+                    return oldIndex(self, key)
+                end) or function(self, key)
+                    if AimLockPlayer ~= nil and self == mouse then
+                        if key == "Hit" or key == "hit" then
+                            local aim = getAimPos(AimLockPlayer)
+                            if aim then return CFrame.new(aim) end
+                        end
+                    end
+                    return oldIndex(self, key)
+                end
+                if setreadonly then setreadonly(mt, true) end
+                print("[Stand] Silent aim: mouse metatable hooked (Der Hood safe path)")
+            end)
+        end
     end
 
-    -- keep mouse remotes on target while locked (no HRP twist)
+    -- keep mouse remotes + screen aim on target while locked
     local lastMouseFire = 0
     local lastCamSoft = 0
+    local lastScreenAim = 0
+    local function pushAim(aim)
+        pcall(function() fireMouse(aim) end)
+        pcall(function()
+            local be = getChar() and getChar():FindFirstChild("BodyEffects")
+            if not be then return end
+            for _, n in ipairs({"MousePos", "MousePosition", "AimPos"}) do
+                local mp = be:FindFirstChild(n)
+                if mp and mp:IsA("Vector3Value") then mp.Value = aim end
+            end
+        end)
+        -- move real cursor toward target (helps gun LocalScripts that read mouse pixel pos)
+        if IsDersHood or IsHoodCustoms then
+            pcall(function()
+                if not Camera then return end
+                local sp, onScreen = Camera:WorldToViewportPoint(aim)
+                if not onScreen or sp.Z < 0 then return end
+                local vim = game:GetService("VirtualInputManager")
+                if vim then
+                    vim:SendMouseMoveEvent(sp.X, sp.Y, game)
+                end
+            end)
+        end
+    end
+
     RunService.RenderStepped:Connect(function()
         local plr = AimLockPlayer
         if not plr then return end
@@ -706,26 +799,19 @@ local function ensureSilentAim()
         local aim = getAimPos(plr)
         if not aim then return end
         local now = tick()
-        -- Safer intervals on AC-heavy places
         local interval = 0.0
         if IsHoodCustoms then
-            interval = 0.06
+            interval = 0.055
         elseif IsDersHood then
-            interval = 0.04
+            interval = 0.02  -- fast remote spam — Der guns need fresh MousePos
         elseif IsDaStrike then
             interval = 0.02
         end
         if now - lastMouseFire >= interval then
             lastMouseFire = now
-            pcall(function() fireMouse(aim) end)
-            -- always keep BodyEffects.MousePos synced (critical when no __index hook)
-            pcall(function()
-                local be = getChar() and getChar():FindFirstChild("BodyEffects")
-                local mp = be and be:FindFirstChild("MousePos")
-                if mp and mp:IsA("Vector3Value") then mp.Value = aim end
-            end)
+            pushAim(aim)
         end
-        local camInterval = (IsHoodCustoms or IsDersHood) and 0.05 or 0.0
+        local camInterval = IsHoodCustoms and 0.05 or (IsDersHood and 0.0 or 0.0)
         if now - lastCamSoft >= camInterval then
             lastCamSoft = now
             pcall(function()
@@ -741,6 +827,24 @@ local function ensureSilentAim()
             end)
         end
     end)
+
+    -- Der Hood: also Heartbeat so MousePos stays hot even if RenderStepped is throttled
+    if IsDersHood then
+        RunService.Heartbeat:Connect(function()
+            local plr = AimLockPlayer
+            if not plr or not getChar(plr) then return end
+            local aim = getAimPos(plr)
+            if not aim then return end
+            pcall(function()
+                local be = getChar() and getChar():FindFirstChild("BodyEffects")
+                local mp = be and be:FindFirstChild("MousePos")
+                if mp and mp:IsA("Vector3Value") then mp.Value = aim end
+            end)
+            if MainEvent then
+                pcall(function() MainEvent:FireServer("UpdateMousePosI", aim) end)
+            end
+        end)
+    end
 end
 
 
@@ -1795,7 +1899,7 @@ local function shootTarget(plr)
     reloadGun(gun)
     task.wait(0.1)
 
-    local maxShots = IsHoodCustoms and 18 or (IsDaStrike and 16 or 14)
+    local maxShots = IsHoodCustoms and 18 or (IsDersHood and 16 or (IsDaStrike and 16 or 14))
     for shot = 1, maxShots do
         if not isAlive(plr) or isKO(plr) then break end
         -- if we got voided mid-fight, wait and resume
@@ -1822,7 +1926,6 @@ local function shootTarget(plr)
         if not aim then break end
 
         -- mouse pos only (legitimate path) — no fake "Shoot"/"Hit" remotes (cause red client errors on Hood Customs)
-        -- On HC, silent-aim RenderStepped already fires mouse at ~15Hz; only poke once per shot to avoid double spam
         if IsHoodCustoms then
             pcall(function()
                 local be = getChar() and getChar():FindFirstChild("BodyEffects")
@@ -1830,6 +1933,26 @@ local function shootTarget(plr)
                 if mp and mp:IsA("Vector3Value") then mp.Value = aim end
             end)
             pcall(function() fireMouse(aim) end)
+        elseif IsDersHood then
+            -- Der Hood: multi-push aim right before shot so gun LocalScript reads locked pos
+            for _ = 1, 3 do
+                pcall(function() fireMouse(aim) end)
+            end
+            pcall(function()
+                if Camera and Camera.CameraType ~= Enum.CameraType.Scriptable then
+                    local origin = Camera.CFrame.Position
+                    if (aim - origin).Magnitude >= 1.5 then
+                        Camera.CFrame = CFrame.new(origin, aim)
+                    end
+                end
+            end)
+            pcall(function()
+                local sp, onScreen = Camera:WorldToViewportPoint(aim)
+                if onScreen and sp.Z > 0 then
+                    local vim = game:GetService("VirtualInputManager")
+                    if vim then vim:SendMouseMoveEvent(sp.X, sp.Y, game) end
+                end
+            end)
         else
             pcall(function() fireMouse(aim) end)
             pcall(function()
