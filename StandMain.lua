@@ -56,7 +56,8 @@ do
     local pid = game.PlaceId
     local daHoodStyle = (pid == 2788229376 or pid == 16033173781
         or pid == 96247461091106 or pid == 128413479081937
-        or pid == 134196333708867) -- Da Strike
+        or pid == 134531910435633 or pid == 134196333708867
+        or pid == 127490856529061 or pid == 83185437445240) -- Da Strike
     local low = string.lower(PreferredGun:gsub("[%[%]]", ""):gsub("%s+", ""))
     if low == "doublebarrel" or low == "doublebarrelsg" or low == "db" then
         PreferredGun = daHoodStyle and "[Double-Barrel SG]" or "[DoubleBarrel]"
@@ -70,7 +71,11 @@ local PlaceId = game.PlaceId
 local IsDaHood      = (PlaceId == 2788229376 or PlaceId == 16033173781)
 local IsDersHood    = (PlaceId == 96247461091106 or PlaceId == 128413479081937)
 local IsHoodCustoms = (PlaceId == 9825515356)
-local IsDaStrike    = (PlaceId == 134196333708867)
+-- Da Strike has multiple place versions; include current + legacy IDs
+local IsDaStrike    = (PlaceId == 134531910435633
+    or PlaceId == 134196333708867
+    or PlaceId == 127490856529061
+    or PlaceId == 83185437445240)
 local IsDaHoodStyle = IsDaHood or IsDersHood or IsDaStrike
 
 local MainEvent, UnreliableMainEvent, MainFunction
@@ -84,11 +89,25 @@ pcall(function()
     MainFunction = ReplicatedStorage:FindFirstChild("MainFunction")
     StompEffectEvent = ReplicatedStorage:FindFirstChild("STOMPEFFECTEVENT")
     GunsFolder = ReplicatedStorage:FindFirstChild("guns")
+        or ReplicatedStorage:FindFirstChild("Guns")
+        or ReplicatedStorage:FindFirstChild("GUNS")
     local assets = ReplicatedStorage:FindFirstChild("Assets")
     AssetsInvoke = assets and assets:FindFirstChild("Invoke")
     if IsDaStrike then
         -- Da Strike: MAINEVENT + "MOUSE", x, y, z (spy confirmed) + per-gun .rl
-        MainEvent = ReplicatedStorage:FindFirstChild("MAINEVENT") or MainEvent
+        MainEvent = ReplicatedStorage:FindFirstChild("MAINEVENT")
+            or ReplicatedStorage:FindFirstChild("MainEvent")
+            or MainEvent
+        if not GunsFolder then
+            -- some versions nest guns under Assets or other folders
+            for _, child in ipairs(ReplicatedStorage:GetChildren()) do
+                local cn = string.lower(child.Name)
+                if cn == "guns" or cn == "gun" or cn == "weapons" then
+                    GunsFolder = child
+                    break
+                end
+            end
+        end
         MouseRemote = "MOUSE"
     elseif IsDaHoodStyle then
         MouseRemote = "UpdateMousePosI"
@@ -113,48 +132,77 @@ print("[Stand] Place", PlaceId, placeLabel, "| MouseRemote =", MouseRemote,
 
 -- Da Strike: map equipped tool name → guns/<folder>.rl remote
 local function getDaStrikeGunRemote(gun)
-    if not IsDaStrike or not GunsFolder or not gun then return nil end
+    if not IsDaStrike or not gun then return nil end
     local n = string.lower(tostring(gun.Name):gsub("[%[%]]", ""):gsub("%s+", " "))
     local aliases = {
         ["doublebarrel"] = "db",
         ["double-barrel sg"] = "db",
         ["double barrel"] = "db",
+        ["doublebarrelsg"] = "db",
         ["db"] = "db",
         ["revolver"] = "rev",
         ["rev"] = "rev",
         ["tactical sg"] = "tactical sg",
+        ["tacticalsg"] = "tactical sg",
         ["sawed off"] = "sawed off",
+        ["sawedoff"] = "sawed off",
         ["silencer"] = "silencer",
         ["sg"] = "sg",
         ["sglock"] = "sglock",
         ["usp"] = "usp",
         ["type 17"] = "type 17",
+        ["type17"] = "type 17",
         ["aimlock db"] = "aimlock db",
         ["aimlock rev"] = "aimlock rev",
         ["hitscan db"] = "Hitscan db",
         ["hitscan rev"] = "Hitscan rev",
         ["hitscantac"] = "hitscanTac",
     }
-    local folderName = aliases[n]
-    if not folderName then
-        -- fuzzy: match any guns child whose name appears in tool name
+    local function findRl(folder)
+        if not folder then return nil end
+        return folder:FindFirstChild("rl")
+            or folder:FindFirstChild("Rl")
+            or folder:FindFirstChild("RL")
+            or folder:FindFirstChildWhichIsA("RemoteEvent")
+    end
+    -- 1) guns folder by alias / fuzzy name
+    if GunsFolder then
+        local folderName = aliases[n]
+        if folderName then
+            local folder = GunsFolder:FindFirstChild(folderName)
+                or GunsFolder:FindFirstChild(string.lower(folderName))
+            local rl = findRl(folder)
+            if rl then return rl end
+        end
         for _, child in ipairs(GunsFolder:GetChildren()) do
             local cn = string.lower(child.Name)
-            if string.find(n, cn, 1, true) or string.find(cn, n, 1, true) then
-                folderName = child.Name
-                break
+            if string.find(n, cn, 1, true) or string.find(cn, n, 1, true)
+                or (aliases[n] and string.lower(aliases[n]) == cn) then
+                local rl = findRl(child)
+                if rl then return rl end
             end
         end
     end
-    if not folderName then return nil end
-    local folder = GunsFolder:FindFirstChild(folderName)
-    if not folder then return nil end
-    return folder:FindFirstChild("rl")
+    -- 2) remotes parented under the tool itself
+    local rl = gun:FindFirstChild("rl", true)
+        or gun:FindFirstChild("Rl", true)
+        or gun:FindFirstChild("RL", true)
+    if rl and rl:IsA("RemoteEvent") then return rl end
+    for _, d in ipairs(gun:GetDescendants()) do
+        if d:IsA("RemoteEvent") then
+            local dn = string.lower(d.Name)
+            if dn == "rl" or dn == "shoot" or dn == "fire" or dn == "gun" then
+                return d
+            end
+        end
+    end
+    return nil
 end
 
 local function fireDaStrikeGun(gun, aim)
     local rl = getDaStrikeGunRemote(gun)
     if not rl then return end
+    -- Try common argument patterns used across Da Strike variants
     pcall(function()
         if aim then
             rl:FireServer(aim)
@@ -167,6 +215,21 @@ local function fireDaStrikeGun(gun, aim)
             rl:FireServer(aim, gun)
         end
     end)
+    pcall(function()
+        if aim then
+            rl:FireServer(aim.X, aim.Y, aim.Z)
+        end
+    end)
+    pcall(function()
+        if aim then
+            rl:FireServer("Shoot", aim)
+        end
+    end)
+    if MainEvent and aim then
+        pcall(function() MainEvent:FireServer("MOUSE", aim.X, aim.Y, aim.Z) end)
+        pcall(function() MainEvent:FireServer("Shoot", aim.X, aim.Y, aim.Z) end)
+        pcall(function() MainEvent:FireServer("Fire", aim) end)
+    end
 end
 
 ----------------------------------------------------------------------
@@ -231,7 +294,7 @@ local State = {
     AssistName    = nil,   -- .assist user — apply sentry modes for that user too
     SentryBusy    = false,
     CombatActive  = false, -- true during knock/stomp/loop/etc
-    HoverHeight   = 4,     -- studs above target while attacking (lower = more reliable hits)
+    HoverHeight   = 3.2,   -- studs above target while attacking (lower = more reliable hits)
     VoidEat       = false, -- void + eat while combat to avoid dying
 }
 
@@ -504,6 +567,10 @@ end
 ----------------------------------------------------------------------
 local function fireMouse(pos)
     if not pos then return end
+    -- reject NaN / inf — HC gun clients throw red errors on bad Vector3
+    if pos.X ~= pos.X or pos.Y ~= pos.Y or pos.Z ~= pos.Z then return end
+    if math.abs(pos.X) > 1e6 or math.abs(pos.Y) > 1e6 or math.abs(pos.Z) > 1e6 then return end
+
     if MainEvent then
         if IsDaStrike then
             -- Spy: MAINEVENT FireServer MOUSE, x, y, z  (NOT a Vector3)
@@ -512,7 +579,8 @@ local function fireMouse(pos)
             pcall(function() MainEvent:FireServer(MouseRemote, pos) end)
         end
     end
-    if UnreliableMainEvent then
+    -- Hood Customs: UnreliableMainEvent + MousePosUpdate spam is a common red-error source
+    if UnreliableMainEvent and not IsHoodCustoms then
         pcall(function() UnreliableMainEvent:FireServer(MouseRemote, pos) end)
     end
     pcall(function()
@@ -529,21 +597,32 @@ local function getAimPos(plr)
     local c = getChar(plr)
     if not c then return nil end
     local head = c:FindFirstChild("Head")
+    local torso = c:FindFirstChild("UpperTorso") or c:FindFirstChild("Torso")
     local hrp  = getHRP(plr)
     local base = nil
+    -- Prefer head (slight up bias for pellet spread), then upper torso, then HRP
     if head then
-        base = head.Position + Vector3.new(0, 0.1, 0)
+        base = head.Position + Vector3.new(0, 0.15, 0)
+    elseif torso then
+        base = torso.Position + Vector3.new(0, 0.35, 0)
     elseif hrp then
-        base = hrp.Position + Vector3.new(0, 1.4, 0)
+        base = hrp.Position + Vector3.new(0, 1.45, 0)
     end
     if not base then return nil end
-    -- simple lead for moving / airborne targets so rays stay valid
+    -- Velocity lead: stronger on Hood Customs / Da Strike (faster strafes, longer bullet travel feel)
     if hrp then
         local vel = hrp.AssemblyLinearVelocity
-        if vel and vel.Magnitude > 8 then
-            -- lead ~0.08–0.12s of travel (enough for hood guns, not so much it overshoots)
-            local leadT = IsHoodCustoms and 0.10 or 0.08
-            base = base + Vector3.new(vel.X, vel.Y * 0.35, vel.Z) * leadT
+        if vel and vel.Magnitude > 4 then
+            local leadT = 0.08
+            if IsHoodCustoms then
+                leadT = 0.14
+            elseif IsDaStrike then
+                leadT = 0.12
+            end
+            -- scale lead with speed so slow walkers aren't overshot
+            local speedFactor = math.clamp(vel.Magnitude / 28, 0.35, 1.25)
+            leadT = leadT * speedFactor
+            base = base + Vector3.new(vel.X, vel.Y * 0.4, vel.Z) * leadT
         end
     end
     return base
@@ -602,6 +681,7 @@ local function ensureSilentAim()
     -- keep mouse remotes on target while locked (no HRP twist — fights hover/stomp and errors gun clients)
     -- throttle fireMouse on Hood Customs to avoid client red errors from remote spam
     local lastMouseFire = 0
+    local lastCamSoft = 0
     RunService.RenderStepped:Connect(function()
         local plr = AimLockPlayer
         if not plr then return end
@@ -609,16 +689,30 @@ local function ensureSilentAim()
         local aim = getAimPos(plr)
         if not aim then return end
         local now = tick()
-        local interval = IsHoodCustoms and 0.08 or 0.0
+        -- HC: ~12–15 Hz is enough; every-frame remote + camera spam = red gun client errors
+        local interval = IsHoodCustoms and 0.06 or (IsDaStrike and 0.02 or 0.0)
         if now - lastMouseFire >= interval then
             lastMouseFire = now
             pcall(function() fireMouse(aim) end)
         end
-        pcall(function()
-            if Camera and Camera.CameraType ~= Enum.CameraType.Scriptable then
-                Camera.CFrame = CFrame.new(Camera.CFrame.Position, aim)
-            end
-        end)
+        -- soft camera look: every frame on other places; throttled on HC so CameraModule/gun rays don't NaN
+        local camInterval = IsHoodCustoms and 0.05 or 0.0
+        if now - lastCamSoft >= camInterval then
+            lastCamSoft = now
+            pcall(function()
+                if not Camera or Camera.CameraType == Enum.CameraType.Scriptable then return end
+                local origin = Camera.CFrame.Position
+                local dir = aim - origin
+                -- skip zero-length / pure vertical rays that break HC gun clients
+                if dir.Magnitude < 1.5 then return end
+                local flat = Vector3.new(dir.X, 0, dir.Z)
+                if flat.Magnitude < 0.35 then
+                    -- nudge sideways so ray is never straight up/down
+                    aim = aim + Vector3.new(0.4, 0, 0.4)
+                end
+                Camera.CFrame = CFrame.new(origin, aim)
+            end)
+        end
         -- do NOT rotate local HRP here — hoverOverTarget / stomp already set full CFrame
     end)
 end
@@ -805,16 +899,22 @@ local function camlockStep()
     local aim = getAimPos(plr)
     if not aim then return end
     local now = tick()
-    local interval = IsHoodCustoms and 0.08 or 0.0
+    local interval = IsHoodCustoms and 0.06 or 0.0
     if now - lastCamMouseFire >= interval then
         lastCamMouseFire = now
         pcall(function() fireMouse(aim) end)
     end
-    -- soft look without breaking CameraModule
+    -- soft look without breaking CameraModule / HC gun rays
     pcall(function()
-        if Camera and Camera.CameraType ~= Enum.CameraType.Scriptable then
-            Camera.CFrame = CFrame.new(Camera.CFrame.Position, aim)
+        if not Camera or Camera.CameraType == Enum.CameraType.Scriptable then return end
+        local origin = Camera.CFrame.Position
+        local dir = aim - origin
+        if dir.Magnitude < 1.5 then return end
+        local flat = Vector3.new(dir.X, 0, dir.Z)
+        if flat.Magnitude < 0.35 then
+            aim = aim + Vector3.new(0.4, 0, 0.4)
         end
+        Camera.CFrame = CFrame.new(origin, aim)
     end)
 end
 
@@ -1465,6 +1565,7 @@ local function exitCombatVoid()
 end
 
 -- Hover near target. Pure top-down + zeroing velocity on airborne movers causes red client ray errors on Hood Customs.
+-- Hood Customs: wider strafe + randomized side so the stand is harder to track/kill mid-fight.
 local function hoverOverTarget(plr, height)
     if State.VoidEat or State.InVoid then return end
     height = height or State.HoverHeight or 4
@@ -1480,14 +1581,22 @@ local function hoverOverTarget(plr, height)
     -- When target is airborne / fast-moving, stand beside them (not pure above) and match velocity
     -- so gun rays stay angled and client scripts don't NaN out.
     local ox, oz
-    if airborne or IsHoodCustoms then
-        -- larger lateral offset; prefer opposite of travel direction so we stay "behind" the movement a bit
-        local side = 1.4
+    local side = IsHoodCustoms and 2.6 or 1.4
+    if IsHoodCustoms then
+        -- orbit-ish: alternate sides over time so we don't sit still for free shots
+        local phase = (tick() * 2.4) % (math.pi * 2)
+        local orbitR = 2.2 + (math.sin(tick() * 1.7) * 0.55)
+        ox = math.cos(phase) * orbitR
+        oz = math.sin(phase) * orbitR
+        height = math.max(2.4, math.min(height, 3.6))
+        if airborne then
+            height = math.min(height, 2.6)
+        end
+    elseif airborne then
         if speed > 2 then
             local flat = Vector3.new(vel.X, 0, vel.Z)
             if flat.Magnitude > 0.1 then
                 flat = flat.Unit
-                -- offset perpendicular-ish + slight back
                 ox = -flat.X * 0.6 + flat.Z * side * 0.35
                 oz = -flat.Z * 0.6 - flat.X * side * 0.35
             else
@@ -1496,18 +1605,26 @@ local function hoverOverTarget(plr, height)
         else
             ox, oz = 0.9, 0.9
         end
-        -- slightly lower hover when they are high so we don't stack on top of sky
-        if airborne then
-            height = math.min(height, 2.8)
-        end
+        height = math.min(height, 2.8)
     else
-        ox = IsHoodCustoms and 0.65 or 0.35
+        ox = 0.35
         oz = ox
     end
 
     local targetPos = their.Position + Vector3.new(ox, height, oz)
     pcall(function()
-        local look = Vector3.new(aim.X, their.Position.Y + 1.2, aim.Z)
+        -- Look at head height, but keep enough horizontal offset so ray isn't vertical
+        -- (pure top-down rays = red client errors on Hood Customs gun scripts)
+        local lookY = (aim and aim.Y) or (their.Position.Y + 1.2)
+        local look = Vector3.new(aim.X, lookY, aim.Z)
+        local toLook = look - targetPos
+        local flat = Vector3.new(toLook.X, 0, toLook.Z)
+        if flat.Magnitude < 0.8 then
+            -- push look target outward from our position
+            local push = Vector3.new(ox, 0, oz)
+            if push.Magnitude < 0.1 then push = Vector3.new(1, 0, 0) end
+            look = look + push.Unit * 1.2
+        end
         local cf = CFrame.new(targetPos, look)
         local ch = getChar()
         if ch and ch.PivotTo then
@@ -1605,8 +1722,7 @@ local function combatSurviveTick()
         return
     end
 
-    -- Auto void-heal on shot DISABLED — stand no longer TPs to void when damaged
-    -- (manual .heal still works via cmdHeal)
+    -- Auto void-heal on shot DISABLED — does not work reliably (manual .heal still works via cmdHeal)
     -- if not State.CombatActive then return end
     -- if getLocalHurt() and not _voidEnterBusy and tick() >= _voidCooldownUntil then
     --     ...
@@ -1646,7 +1762,8 @@ local function shootTarget(plr)
     reloadGun(gun)
     task.wait(0.1)
 
-    for shot = 1, 14 do
+    local maxShots = IsHoodCustoms and 18 or (IsDaStrike and 16 or 14)
+    for shot = 1, maxShots do
         if not isAlive(plr) or isKO(plr) then break end
         -- if we got voided mid-fight, wait and resume
         if State.VoidEat or State.InVoid then
@@ -1672,50 +1789,59 @@ local function shootTarget(plr)
         if not aim then break end
 
         -- mouse pos only (legitimate path) — no fake "Shoot"/"Hit" remotes (cause red client errors on Hood Customs)
-        pcall(function() fireMouse(aim) end)
-        pcall(function()
-            local be = getChar() and getChar():FindFirstChild("BodyEffects")
-            local mp = be and be:FindFirstChild("MousePos")
-            if mp and mp:IsA("Vector3Value") then mp.Value = aim end
-        end)
-
-        pcall(function()
-            if Camera and Camera.CameraType ~= Enum.CameraType.Scriptable then
-                Camera.CFrame = CFrame.new(Camera.CFrame.Position, aim)
-            end
-        end)
+        -- On HC, silent-aim RenderStepped already fires mouse at ~15Hz; only poke once per shot to avoid double spam
+        if IsHoodCustoms then
+            pcall(function()
+                local be = getChar() and getChar():FindFirstChild("BodyEffects")
+                local mp = be and be:FindFirstChild("MousePos")
+                if mp and mp:IsA("Vector3Value") then mp.Value = aim end
+            end)
+            pcall(function() fireMouse(aim) end)
+        else
+            pcall(function() fireMouse(aim) end)
+            pcall(function()
+                local be = getChar() and getChar():FindFirstChild("BodyEffects")
+                local mp = be and be:FindFirstChild("MousePos")
+                if mp and mp:IsA("Vector3Value") then mp.Value = aim end
+            end)
+            pcall(function()
+                if Camera and Camera.CameraType ~= Enum.CameraType.Scriptable then
+                    local origin = Camera.CFrame.Position
+                    if (aim - origin).Magnitude >= 1.5 then
+                        Camera.CFrame = CFrame.new(origin, aim)
+                    end
+                end
+            end)
+        end
 
         activateTool(gun)
         -- Da Strike: fire per-gun .rl remote with aim pos + MOUSE x,y,z
         if IsDaStrike then
             fireDaStrikeGun(gun, aim)
-            if MainEvent then
-                pcall(function() MainEvent:FireServer("MOUSE", aim.X, aim.Y, aim.Z) end)
-                pcall(function() MainEvent:FireServer("Shoot", aim.X, aim.Y, aim.Z) end)
-            end
         end
 
-        pcall(function()
-            local vim = game:GetService("VirtualInputManager")
-            if vim then
-                vim:SendMouseButtonEvent(0, 0, 0, true, game, 0)
-                task.wait(0.025)
-                vim:SendMouseButtonEvent(0, 0, 0, false, game, 0)
-            end
-        end)
-        -- VirtualUser ClickButton1 can trigger extra client errors on Hood Customs; skip there
+        -- Prefer tool:Activate only on HC (VIM mouse click can still red-error some gun clients)
         if not IsHoodCustoms then
+            pcall(function()
+                local vim = game:GetService("VirtualInputManager")
+                if vim then
+                    vim:SendMouseButtonEvent(0, 0, 0, true, game, 0)
+                    task.wait(0.02)
+                    vim:SendMouseButtonEvent(0, 0, 0, false, game, 0)
+                end
+            end)
             pcall(function()
                 local vu = game:GetService("VirtualUser")
                 if vu then vu:ClickButton1(Vector2.new(0, 0)) end
             end)
         end
 
-        if shot % 5 == 0 then
+        if shot % 4 == 0 then
             reloadGun(gun)
-            task.wait(0.1)
+            task.wait(0.08)
         end
-        task.wait(IsHoodCustoms and 0.14 or 0.11)
+        -- HC: slightly longer gap so gun client state machine stays stable
+        task.wait(IsHoodCustoms and 0.13 or (IsDaStrike and 0.09 or 0.10))
     end
 
     reloadGun(gun)
@@ -2027,7 +2153,7 @@ end
 local lastArmorBuyAt = 0
 local function armorMaintainTick()
     if IsOwner then return end
-    -- Always on for Da Strike; otherwise only if AutoArmor/Inf config
+    -- Always on for Da Strike; otherwise only if AutoArmor/Inf config (not forced for Hood Customs)
     local enabled = IsDaStrike or Config.AutoArmor or Config.Inf or Config.ArmorMax
     if not enabled then return end
     local pct = getArmorPercent()
@@ -2776,22 +2902,128 @@ local function refreshSentryWatches()
     end
 end
 
--- One full attack cycle for loopkill (gun or knife). Called once at a time.
+-- MoonStand-style kill cycle:
+-- close-range pressure → shoot until KO → hard stomp until dead → re-engage on get-up/respawn
+local function moonCloseHover(plr)
+    -- stay tight behind / beside target (Moon-style), not high float
+    if State.VoidEat or State.InVoid then return end
+    local my = getHRP()
+    local their = getHRP(plr)
+    if not my or not their then return end
+    local aim = getAimPos(plr) or (their.Position + Vector3.new(0, 1.4, 0))
+    local look = their.CFrame.LookVector
+    -- behind them a bit + slight side so ray isn't pure vertical
+    local behind = their.Position - look * 2.4 + Vector3.new(0, 1.6, 0)
+    local side = their.CFrame.RightVector * (0.7 + math.sin(tick() * 3.2) * 0.5)
+    local pos = behind + side
+    pcall(function()
+        local cf = CFrame.new(pos, aim)
+        local ch = getChar()
+        if ch and ch.PivotTo then ch:PivotTo(cf) end
+        my.CFrame = cf
+        my.AssemblyLinearVelocity = Vector3.zero
+        my.AssemblyAngularVelocity = Vector3.zero
+    end)
+end
+
+local function moonShootBurst(plr, maxShots)
+    if not plr or not isAlive(plr) then return end
+    local gun = findGun()
+    if not gun then return end
+    gun = equipTool(gun, 0.5)
+    if not gun then return end
+    State.Armed = true
+    setAimLock(plr)
+    pcall(ensureSilentAim)
+    setCamlock(plr, 3)
+    maxShots = maxShots or (IsHoodCustoms and 12 or 10)
+
+    for shot = 1, maxShots do
+        if not State.LoopKill and not State.LoopKnock then break end
+        if not isAlive(plr) or isKO(plr) then break end
+        if State.VoidEat or State.InVoid then break end
+
+        moonCloseHover(plr)
+        local aim = getAimPos(plr)
+        if not aim then break end
+
+        pcall(function() fireMouse(aim) end)
+        pcall(function()
+            local be = getChar() and getChar():FindFirstChild("BodyEffects")
+            local mp = be and be:FindFirstChild("MousePos")
+            if mp and mp:IsA("Vector3Value") then mp.Value = aim end
+        end)
+
+        if gun.Parent ~= getChar() then
+            gun = equipTool(findGun(), 0.35)
+            if not gun then break end
+        end
+        activateTool(gun)
+        if IsDaStrike then
+            fireDaStrikeGun(gun, aim)
+        end
+
+        if not IsHoodCustoms then
+            pcall(function()
+                local vim = game:GetService("VirtualInputManager")
+                if vim then
+                    vim:SendMouseButtonEvent(0, 0, 0, true, game, 0)
+                    task.wait(0.015)
+                    vim:SendMouseButtonEvent(0, 0, 0, false, game, 0)
+                end
+            end)
+        end
+
+        if shot % 4 == 0 then
+            reloadGun(gun)
+        end
+        task.wait(IsHoodCustoms and 0.10 or 0.07)
+    end
+end
+
+local function moonStompHard(plr)
+    -- aggressive multi-pass stomp while they stay down (Moon-style finish)
+    if not plr then return end
+    for pass = 1, 3 do
+        if not State.LoopKill then break end
+        if not getChar(plr) then break end
+        if isAlive(plr) and not isKO(plr) then break end
+        stompTarget(plr, IsHoodCustoms and 10 or 12)
+        task.wait(0.08)
+        if isAlive(plr) and not isKO(plr) then break end
+    end
+end
+
+-- One full attack cycle for loopkill (gun or knife). Moon-style pressure.
 local function loopKillCycle(plr)
     if not plr then return end
     if State.LoopKillKnife then
-        -- knifeTarget is async and sets KnifeBusy; wait until done
         if State.KnifeBusy then return end
         knifeTarget(plr)
         local t0 = tick()
         while State.KnifeBusy and tick() - t0 < 12 and State.LoopKill do
-            task.wait(0.2)
+            task.wait(0.15)
+        end
+        if isKO(plr) then
+            moonStompHard(plr)
         end
     else
-        shootTarget(plr)
-        task.wait(0.25)
-        if isKO(plr) then
-            stompTarget(plr, 6)
+        -- shoot tight bursts until KO, then hard stomp
+        local t0 = tick()
+        while State.LoopKill and tick() - t0 < 6 do
+            if not getChar(plr) then break end
+            if isKO(plr) then break end
+            if not isAlive(plr) then break end
+            moonShootBurst(plr, IsHoodCustoms and 8 or 7)
+            if isKO(plr) then break end
+            task.wait(0.05)
+        end
+        if isKO(plr) or (getHum(plr) and getHum(plr).Health <= 0) then
+            moonStompHard(plr)
+        elseif isAlive(plr) then
+            -- fallback full shootTarget if bursts didn't drop them
+            shootTarget(plr)
+            if isKO(plr) then moonStompHard(plr) end
         end
     end
 end
@@ -3232,7 +3464,8 @@ Connections.Main = RunService.Heartbeat:Connect(function()
         end)
     end
 
-    -- LoopKill: single-flight worker (never stack shootTarget every frame)
+    -- LoopKill: MoonStand-style single-flight worker
+    -- KO → hard stomp spam | alive → close burst + stomp | dead → wait respawn then re-engage
     if State.LoopKill and not State.LoopKillBusy and not State.KnifeBusy then
         local hum = getHum()
         if hum and hum.Health <= 0 then return end
@@ -3253,21 +3486,42 @@ Connections.Main = RunService.Heartbeat:Connect(function()
         State.LoopKillBusy = true
         task.spawn(function()
             local ok, err = pcall(function()
+                beginCombat()
                 if isKO(lk) then
-                    stompTarget(lk, 5)
+                    -- already down: finish them
+                    moonStompHard(lk)
+                    -- hold pressure briefly in case they try to get up mid-stomp
                     local t0 = tick()
-                    while tick() - t0 < 4 and State.LoopKill do
+                    while tick() - t0 < 2.5 and State.LoopKill do
                         if not getChar(lk) then break end
-                        if isAlive(lk) then break end
+                        if isAlive(lk) and not isKO(lk) then
+                            -- got up — shoot again immediately
+                            setCamlock(lk, 2)
+                            loopKillCycle(lk)
+                            break
+                        end
+                        if isKO(lk) then
+                            stompTarget(lk, 4)
+                        end
+                        task.wait(0.2)
+                    end
+                    task.wait(0.15)
+                elseif isAlive(lk) then
+                    setCamlock(lk, 3)
+                    loopKillCycle(lk)
+                    -- if still alive after cycle, tiny gap then next worker pass
+                    task.wait(0.12)
+                else
+                    -- dead / no char — wait for respawn, then snap back on
+                    local t0 = tick()
+                    while tick() - t0 < 8 and State.LoopKill do
+                        local p = findPlayer(name)
+                        if p and getChar(p) and (isAlive(p) or isKO(p)) then
+                            break
+                        end
                         task.wait(0.25)
                     end
-                    task.wait(0.4)
-                elseif isAlive(lk) then
-                    setCamlock(lk, 2)
-                    loopKillCycle(lk)
-                    task.wait(0.35)
-                else
-                    task.wait(0.5)
+                    task.wait(0.2)
                 end
             end)
             if not ok then
