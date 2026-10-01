@@ -438,9 +438,23 @@ local function getAimPos(plr)
     if not c then return nil end
     local head = c:FindFirstChild("Head")
     local hrp  = getHRP(plr)
-    if head then return head.Position + Vector3.new(0, 0.1, 0) end
-    if hrp  then return hrp.Position + Vector3.new(0, 1.4, 0) end
-    return nil
+    local base = nil
+    if head then
+        base = head.Position + Vector3.new(0, 0.1, 0)
+    elseif hrp then
+        base = hrp.Position + Vector3.new(0, 1.4, 0)
+    end
+    if not base then return nil end
+    -- simple lead for moving / airborne targets so rays stay valid
+    if hrp then
+        local vel = hrp.AssemblyLinearVelocity
+        if vel and vel.Magnitude > 8 then
+            -- lead ~0.08–0.12s of travel (enough for hood guns, not so much it overshoots)
+            local leadT = IsHoodCustoms and 0.10 or 0.08
+            base = base + Vector3.new(vel.X, vel.Y * 0.35, vel.Z) * leadT
+        end
+    end
+    return base
 end
 
 -- Silent aim: force Mouse.Hit / Target onto locked player so guns actually hit
@@ -1329,7 +1343,7 @@ local function exitCombatVoid()
     end
 end
 
--- Hover above target (slight offset so gun rays aren't pure vertical — pure top-down breaks many hood gun clients)
+-- Hover near target. Pure top-down + zeroing velocity on airborne movers causes red client ray errors on Hood Customs.
 local function hoverOverTarget(plr, height)
     if State.VoidEat or State.InVoid then return end
     height = height or State.HoverHeight or 4
@@ -1337,10 +1351,40 @@ local function hoverOverTarget(plr, height)
     local their = getHRP(plr)
     if not my or not their then return end
     local aim = getAimPos(plr) or their.Position
-    -- small horizontal offset so camera/gun ray has a clean angle (avoids client ray errors)
-    -- Hood Customs is stricter about pure vertical rays — use a bit more offset
-    local ox = IsHoodCustoms and 0.65 or 0.35
-    local targetPos = their.Position + Vector3.new(ox, height, ox)
+    local vel = their.AssemblyLinearVelocity or Vector3.zero
+    local speed = vel.Magnitude
+    local airborne = speed > 12 or (their.Position.Y - (Workspace.FallenPartsDestroyHeight or -500) > 40
+        and math.abs(vel.Y) > 4)
+
+    -- When target is airborne / fast-moving, stand beside them (not pure above) and match velocity
+    -- so gun rays stay angled and client scripts don't NaN out.
+    local ox, oz
+    if airborne or IsHoodCustoms then
+        -- larger lateral offset; prefer opposite of travel direction so we stay "behind" the movement a bit
+        local side = 1.4
+        if speed > 2 then
+            local flat = Vector3.new(vel.X, 0, vel.Z)
+            if flat.Magnitude > 0.1 then
+                flat = flat.Unit
+                -- offset perpendicular-ish + slight back
+                ox = -flat.X * 0.6 + flat.Z * side * 0.35
+                oz = -flat.Z * 0.6 - flat.X * side * 0.35
+            else
+                ox, oz = side * 0.5, side * 0.5
+            end
+        else
+            ox, oz = 0.9, 0.9
+        end
+        -- slightly lower hover when they are high so we don't stack on top of sky
+        if airborne then
+            height = math.min(height, 2.8)
+        end
+    else
+        ox = IsHoodCustoms and 0.65 or 0.35
+        oz = ox
+    end
+
+    local targetPos = their.Position + Vector3.new(ox, height, oz)
     pcall(function()
         local look = Vector3.new(aim.X, their.Position.Y + 1.2, aim.Z)
         local cf = CFrame.new(targetPos, look)
@@ -1349,7 +1393,12 @@ local function hoverOverTarget(plr, height)
             ch:PivotTo(cf)
         end
         my.CFrame = cf
-        my.AssemblyLinearVelocity = Vector3.zero
+        -- Match horizontal velocity when chasing air targets; only kill vertical snap so we don't fall through
+        if airborne and speed > 8 then
+            my.AssemblyLinearVelocity = Vector3.new(vel.X, math.min(vel.Y, 0), vel.Z)
+        else
+            my.AssemblyLinearVelocity = Vector3.zero
+        end
         my.AssemblyAngularVelocity = Vector3.zero
     end)
 end
