@@ -421,7 +421,7 @@ TICKET_CATEGORIES = {
     },
     "partnership": {
         "label": "Partnership",
-        "description": "Apply to become an affiliate of NodeRoblox",
+        "description": "Apply to become an affiliate of Executive Stand",
         "emoji": "🔧",
         "color": 0x2ECC71,
     },
@@ -788,7 +788,7 @@ class VerifyView(discord.ui.View):
             return
 
         await interaction.response.send_message(
-            "✅ You have been **verified**! Welcome to the server.",
+            "You have been **verified**! Welcome to the server.",
             ephemeral=True,
         )
 
@@ -993,7 +993,7 @@ async def addstock(
     }.get(prod, prod)
 
     await interaction.followup.send(
-        f"✅ Stocked **{added}** `{label}` key(s) from License Hub"
+        f"Stocked **{added}** `{label}` key(s) from License Hub"
         + (f" ({skipped} skipped)" if skipped else "")
         + ".\nPlayers who buy the GamePass will receive these automatically.\n"
         + "In-game shop shows counts only — keys appear after purchase.",
@@ -1396,7 +1396,7 @@ async def ticketpanel_cmd(interaction: discord.Interaction):
             "**Categories**\n"
             "❓ **Development** — Report a bug\n"
             "💰 **Billing** — Report a billing issue, not receiving perks\n"
-            "🔧 **Partnership** — Apply to become an affiliate of NodeRoblox\n\n"
+            "🔧 **Partnership** — Apply to become an affiliate of Executive Stand\n\n"
             "A staff member will respond as soon as possible."
         ),
         color=0x2B2D31,
@@ -1490,7 +1490,7 @@ async def verifypanel_cmd(interaction: discord.Interaction):
     if not await staff_check(interaction):
         return
     embed = discord.Embed(
-        title="✅ Verification",
+        title="Verification",
         description=(
             "Welcome to **Executive Stand**!\n\n"
             "Click the **Verify** button below to unlock the server.\n"
