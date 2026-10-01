@@ -1859,63 +1859,52 @@ local function knifeTarget(plr)
         setCamlock(plr, 10)
         notify("Charge -> " .. plr.Name)
 
-        -- Instant hard TP onto target (multiple frames so anti-tp can't fully reject)
-        for _ = 1, 8 do
-            if not getChar(plr) then break end
-            forceTPTo(plr, Vector3.new(0, 0.25, 0))
-            local aim = getAimPos(plr)
-            if aim then fireMouse(aim) end
-            setAttacking(true)
-            if knife and knife.Parent == getChar() then activateTool(knife) end
-            fireHitRemotes(plr)
-            pcall(function()
-                local vim = game:GetService("VirtualInputManager")
-                if vim then
-                    vim:SendMouseButtonEvent(0, 0, 0, true, game, 0)
-                    task.wait(0.01)
-                    vim:SendMouseButtonEvent(0, 0, 0, false, game, 0)
-                end
-            end)
-            task.wait(0.025)
-        end
-
-        -- Stick lock: every Heartbeat force CFrame on target
+        -- Stick lock for entire attack (TP every frame so we never drift off)
         local under = false
         local lockConn
         lockConn = RunService.Heartbeat:Connect(function()
             if not plr or not getChar(plr) then return end
-            local off = under and Vector3.new(0, -1.5, 0) or Vector3.new(0, 0.2, 0)
+            local off = under and Vector3.new(0, -1.5, 0) or Vector3.new(0, 0.25, 0)
             forceTPTo(plr, off)
             local aim = getAimPos(plr)
             if aim then pcall(function() fireMouse(aim) end) end
         end)
 
+        -- Keep swinging for full window — do NOT stop after first hit / false KO
+        -- Only stop if target character is gone or truly dead (Health <= 0)
         local t0 = tick()
         local swing = 0
-        while tick() - t0 < 3.5 do
-            if not getChar(plr) then break end
-            if isKO(plr) then break end
-            swing = swing + 1
-            under = (swing % 4) >= 2
+        while tick() - t0 < 4.5 do
+            local theirChar = getChar(plr)
+            if not theirChar then break end
+            local theirHum = getHum(plr)
+            if theirHum and theirHum.Health <= 0 then break end
 
-            if not knife or knife.Parent ~= getChar() then
-                knife = equipTool(findKnife(), 0.3)
+            swing = swing + 1
+            under = (swing % 5) >= 3
+
+            -- Re-equip every few swings (tool often unequips after one Activate on these games)
+            if not knife or knife.Parent ~= getChar() or swing % 3 == 0 then
+                local h = getHum()
+                if h then pcall(function() h:UnequipTools() end) end
+                task.wait(0.02)
+                knife = equipTool(findKnife(), 0.35)
                 if knife then expandKnifeParts(knife) end
             end
 
-            forceTPTo(plr, under and Vector3.new(0, -1.5, 0) or Vector3.new(0, 0.2, 0))
+            forceTPTo(plr, under and Vector3.new(0, -1.5, 0) or Vector3.new(0, 0.25, 0))
 
             local aim = getAimPos(plr)
             if aim then
-                for _ = 1, 4 do fireMouse(aim) end
+                for _ = 1, 3 do fireMouse(aim) end
             end
 
             setAttacking(true)
-            if knife then
-                activateTool(knife)
-                task.defer(function()
-                    if knife and knife.Parent == getChar() then activateTool(knife) end
-                end)
+            if knife and knife.Parent == getChar() then
+                -- spam Activate — some tools ignore the first click after equip
+                for _ = 1, 3 do
+                    activateTool(knife)
+                end
             end
             fireHitRemotes(plr)
 
@@ -1923,22 +1912,29 @@ local function knifeTarget(plr)
                 local vim = game:GetService("VirtualInputManager")
                 if vim then
                     vim:SendMouseButtonEvent(0, 0, 0, true, game, 0)
-                    task.wait(0.01)
+                    task.wait(0.015)
                     vim:SendMouseButtonEvent(0, 0, 0, false, game, 0)
                 end
             end)
+            pcall(function()
+                local vu = game:GetService("VirtualUser")
+                if vu then vu:ClickButton1(Vector2.new(0, 0)) end
+            end)
 
-            task.wait(0.04)
+            task.wait(0.05)
         end
 
         if lockConn then pcall(function() lockConn:Disconnect() end) end
         setAttacking(false)
 
-        -- Always attempt stomp after charge (isKO can lag a frame on Da Strike)
-        task.wait(0.08)
+        -- Always stomp after the swing window
+        task.wait(0.1)
         if getChar(plr) then
-            notify("Stomping " .. plr.Name)
-            stompTarget(plr, 12)
+            local h = getHum(plr)
+            if not h or h.Health > 0 then
+                notify("Stomping " .. plr.Name)
+                stompTarget(plr, 14)
+            end
         end
 
         clearCamlock()
@@ -1976,8 +1972,14 @@ end
 
 local function buyArmor()
     if MainEvent then
+        -- Da Strike spy: BuyArmor + Armor (both used)
         pcall(function() MainEvent:FireServer("BuyArmor") end)
         pcall(function() MainEvent:FireServer("Armor") end)
+        pcall(function() MainEvent:FireServer("Buy", "Armor") end)
+    end
+    if UnreliableMainEvent then
+        pcall(function() UnreliableMainEvent:FireServer("BuyArmor") end)
+        pcall(function() UnreliableMainEvent:FireServer("Armor") end)
     end
     pcall(function()
         local shop = Workspace:FindFirstChild("Ignored")
@@ -1993,6 +1995,47 @@ local function buyArmor()
         end
     end)
     applyArmorMax()
+end
+
+-- Auto-buy armor when current armor drops below threshold (default 80%)
+local function getArmorPercent()
+    local c = getChar()
+    if not c then return 100 end
+    local be = c:FindFirstChild("BodyEffects")
+    if not be then return 100 end
+    local cur, mx = nil, nil
+    for _, name in ipairs({"Armor", "CurrentArmor", "Defence", "Defense"}) do
+        local v = be:FindFirstChild(name)
+        if v and typeof(v.Value) == "number" then
+            cur = (cur or 0) + v.Value
+        end
+    end
+    for _, name in ipairs({"MaxArmor", "ArmorMax", "MaxDefence", "MaxDefense"}) do
+        local v = be:FindFirstChild(name)
+        if v and typeof(v.Value) == "number" and v.Value > 0 then
+            mx = v.Value
+            break
+        end
+    end
+    if not cur then return 100 end
+    -- Da Hood / Da Strike style: armor is often 0–100 already
+    if not mx or mx <= 0 then mx = 100 end
+    if cur > mx then mx = cur end
+    return (cur / mx) * 100
+end
+
+local lastArmorBuyAt = 0
+local function armorMaintainTick()
+    if IsOwner then return end
+    -- Always on for Da Strike; otherwise only if AutoArmor/Inf config
+    local enabled = IsDaStrike or Config.AutoArmor or Config.Inf or Config.ArmorMax
+    if not enabled then return end
+    local pct = getArmorPercent()
+    local threshold = IsDaStrike and 80 or 50
+    if pct <= threshold and (tick() - lastArmorBuyAt) > 1.2 then
+        lastArmorBuyAt = tick()
+        buyArmor()
+    end
 end
 
 local function buyMask()
@@ -2039,9 +2082,12 @@ pcall(ensureSilentAim)
             while true do
                 if Config.Inf or Config.ArmorMax then
                     applyArmorMax()
-                    if Config.Inf then buyArmor() end
+                    -- only buy when below threshold (armorMaintainTick also handles this)
+                    if Config.Inf and getArmorPercent() <= 80 then
+                        buyArmor()
+                    end
                 end
-                task.wait(Config.Inf and 1.5 or 4)
+                task.wait(Config.Inf and 2.5 or 4)
             end
         end
     end)
@@ -3152,6 +3198,7 @@ Connections.Main = RunService.Heartbeat:Connect(function()
     autoReloadTick()
     pcall(sentryTick)
     pcall(combatSurviveTick)
+    pcall(armorMaintainTick)
 
     -- LoopKnock: shoot only, no stomp
     if State.LoopKnock and not State.LoopKillBusy and not State.KnifeBusy then
