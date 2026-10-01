@@ -87,9 +87,9 @@ pcall(function()
     local assets = ReplicatedStorage:FindFirstChild("Assets")
     AssetsInvoke = assets and assets:FindFirstChild("Invoke")
     if IsDaStrike then
-        -- Da Strike uses MAINEVENT + per-gun .rl remotes under guns/
+        -- Da Strike: MAINEVENT + "MOUSE", x, y, z (spy confirmed) + per-gun .rl
         MainEvent = ReplicatedStorage:FindFirstChild("MAINEVENT") or MainEvent
-        MouseRemote = "UpdateMousePosI"
+        MouseRemote = "MOUSE"
     elseif IsDaHoodStyle then
         MouseRemote = "UpdateMousePosI"
     elseif IsHoodCustoms then
@@ -377,17 +377,31 @@ local function isKO(p)
     if not c then return false end
     local be = c:FindFirstChild("BodyEffects")
     if be then
-        for _, name in ipairs({"K.O", "KO", "Knocked", "IsKnocked", "Downed"}) do
+        for _, name in ipairs({"K.O", "KO", "Knocked", "IsKnocked", "Downed", "Dead", "SDeath", "Death"}) do
             local v = be:FindFirstChild(name)
             if v then
                 if typeof(v.Value) == "boolean" and v.Value then return true end
                 if typeof(v.Value) == "number" and v.Value ~= 0 then return true end
             end
         end
+        -- some games nest KO under BodyEffects children
+        for _, d in ipairs(be:GetDescendants()) do
+            local n = string.lower(d.Name)
+            if (n == "k.o" or n == "ko" or n == "knocked") and typeof(d.Value) == "boolean" and d.Value then
+                return true
+            end
+        end
     end
     local h = getHum(p)
-    if h and h.PlatformStand and h.Health > 0 and h.Health < h.MaxHealth * 0.2 then
-        return true
+    if h then
+        if h.PlatformStand and h.Health > 0 and h.Health < h.MaxHealth * 0.35 then
+            return true
+        end
+        local st = h:GetState()
+        if (st == Enum.HumanoidStateType.Physics or st == Enum.HumanoidStateType.Ragdoll)
+            and h.Health > 0 and h.Health < h.MaxHealth * 0.25 then
+            return true
+        end
     end
     return false
 end
@@ -491,7 +505,12 @@ end
 local function fireMouse(pos)
     if not pos then return end
     if MainEvent then
-        pcall(function() MainEvent:FireServer(MouseRemote, pos) end)
+        if IsDaStrike then
+            -- Spy: MAINEVENT FireServer MOUSE, x, y, z  (NOT a Vector3)
+            pcall(function() MainEvent:FireServer("MOUSE", pos.X, pos.Y, pos.Z) end)
+        else
+            pcall(function() MainEvent:FireServer(MouseRemote, pos) end)
+        end
     end
     if UnreliableMainEvent then
         pcall(function() UnreliableMainEvent:FireServer(MouseRemote, pos) end)
@@ -646,7 +665,7 @@ local function fireHitRemotes(plr)
     go(MainEvent, false)
     go(UnreliableMainEvent, false)
     go(MainFunction, true)
-    -- Da Strike: also try Assets.Invoke + MAINEVENT slash variants
+    -- Da Strike: Assets.Invoke + MAINEVENT with MOUSE x,y,z format
     if IsDaStrike then
         if AssetsInvoke then
             pcall(function() AssetsInvoke:InvokeServer("Hit", char) end)
@@ -655,9 +674,10 @@ local function fireHitRemotes(plr)
             pcall(function() AssetsInvoke:InvokeServer("Combat", char) end)
         end
         if MainEvent and aim then
-            pcall(function() MainEvent:FireServer("Slash", aim) end)
-            pcall(function() MainEvent:FireServer("Hit", aim) end)
-            pcall(function() MainEvent:FireServer("Combat", aim) end)
+            pcall(function() MainEvent:FireServer("MOUSE", aim.X, aim.Y, aim.Z) end)
+            pcall(function() MainEvent:FireServer("Slash", aim.X, aim.Y, aim.Z) end)
+            pcall(function() MainEvent:FireServer("Hit", aim.X, aim.Y, aim.Z) end)
+            pcall(function() MainEvent:FireServer("Combat", aim.X, aim.Y, aim.Z) end)
         end
     end
 end
@@ -1666,12 +1686,12 @@ local function shootTarget(plr)
         end)
 
         activateTool(gun)
-        -- Da Strike: fire per-gun .rl remote with aim pos
+        -- Da Strike: fire per-gun .rl remote with aim pos + MOUSE x,y,z
         if IsDaStrike then
             fireDaStrikeGun(gun, aim)
             if MainEvent then
-                pcall(function() MainEvent:FireServer(MouseRemote, aim) end)
-                pcall(function() MainEvent:FireServer("Shoot", aim) end)
+                pcall(function() MainEvent:FireServer("MOUSE", aim.X, aim.Y, aim.Z) end)
+                pcall(function() MainEvent:FireServer("Shoot", aim.X, aim.Y, aim.Z) end)
             end
         end
 
@@ -1797,8 +1817,26 @@ local function stompTarget(plr, times)
     end
 end
 
--- COMBAT: KNIFE / KATANA — charge dash into target for fast KO
+-- COMBAT: KNIFE / KATANA — force TP on target + charge swings + stomp
 ----------------------------------------------------------------------
+local function forceTPTo(plr, offset)
+    offset = offset or Vector3.new(0, 0.2, 0)
+    local my = getHRP()
+    local their = getHRP(plr)
+    if not my or not their then return false end
+    local pos = their.Position + offset
+    local look = their.Position + Vector3.new(0, 1.0, 0)
+    local cf = CFrame.new(pos, look)
+    pcall(function()
+        local ch = getChar()
+        if ch and ch.PivotTo then ch:PivotTo(cf) end
+        my.CFrame = cf
+        my.AssemblyLinearVelocity = Vector3.zero
+        my.AssemblyAngularVelocity = Vector3.zero
+    end)
+    return true
+end
+
 local function knifeTarget(plr)
     if not plr or isProtected(plr) then return end
     if State.KnifeBusy then return end
@@ -1818,98 +1856,63 @@ local function knifeTarget(plr)
         expandKnifeParts(knife)
         setAimLock(plr)
         pcall(ensureSilentAim)
-        setCamlock(plr, 8)
+        setCamlock(plr, 10)
         notify("Charge -> " .. plr.Name)
 
-        -- CHARGE: hard dash into target (not a slow lerp)
-        do
-            local my = getHRP()
-            local their = getHRP(plr)
-            if my and their then
-                -- burst of teleports + velocity toward chest for hit registration
-                for step = 1, 6 do
-                    their = getHRP(plr)
-                    my = getHRP()
-                    if not my or not their or isKO(plr) then break end
-                    local goal = their.Position + Vector3.new(0, 0.15, 0)
-                    local dir = (goal - my.Position)
-                    local dist = dir.Magnitude
-                    local nextPos = dist > 4 and (my.Position + dir.Unit * math.min(dist, 18)) or goal
-                    local look = their.Position + Vector3.new(0, 1.0, 0)
-                    local cf = CFrame.new(nextPos, look)
-                    pcall(function()
-                        local ch = getChar()
-                        if ch and ch.PivotTo then ch:PivotTo(cf) end
-                        my.CFrame = cf
-                        if dist > 2 then
-                            my.AssemblyLinearVelocity = dir.Unit * 90
-                        else
-                            my.AssemblyLinearVelocity = Vector3.zero
-                        end
-                        my.AssemblyAngularVelocity = Vector3.zero
-                    end)
-                    -- swing during charge
-                    setAttacking(true)
-                    if knife and knife.Parent == getChar() then activateTool(knife) end
-                    fireHitRemotes(plr)
-                    local aim = getAimPos(plr)
-                    if aim then
-                        pcall(function() fireMouse(aim) end)
-                    end
-                    pcall(function()
-                        local vim = game:GetService("VirtualInputManager")
-                        if vim then
-                            vim:SendMouseButtonEvent(0, 0, 0, true, game, 0)
-                            task.wait(0.012)
-                            vim:SendMouseButtonEvent(0, 0, 0, false, game, 0)
-                        end
-                    end)
-                    task.wait(0.03)
+        -- Instant hard TP onto target (multiple frames so anti-tp can't fully reject)
+        for _ = 1, 8 do
+            if not getChar(plr) then break end
+            forceTPTo(plr, Vector3.new(0, 0.25, 0))
+            local aim = getAimPos(plr)
+            if aim then fireMouse(aim) end
+            setAttacking(true)
+            if knife and knife.Parent == getChar() then activateTool(knife) end
+            fireHitRemotes(plr)
+            pcall(function()
+                local vim = game:GetService("VirtualInputManager")
+                if vim then
+                    vim:SendMouseButtonEvent(0, 0, 0, true, game, 0)
+                    task.wait(0.01)
+                    vim:SendMouseButtonEvent(0, 0, 0, false, game, 0)
                 end
-            end
+            end)
+            task.wait(0.025)
         end
 
-        -- Stick on target and multi-hit until KO (fast)
+        -- Stick lock: every Heartbeat force CFrame on target
         local under = false
         local lockConn
         lockConn = RunService.Heartbeat:Connect(function()
-            if not plr or isKO(plr) or not getChar(plr) then return end
-            local my = getHRP()
-            local their = getHRP(plr)
-            if not my or not their then return end
-            local off = under and Vector3.new(0, -1.6, 0) or Vector3.new(0, 0.2, 0)
-            local pos = their.Position + off
-            local cf = CFrame.new(pos, their.Position + Vector3.new(0, 1.0, 0))
-            pcall(function()
-                local ch = getChar()
-                if ch and ch.PivotTo then ch:PivotTo(cf) end
-                my.CFrame = cf
-                my.AssemblyLinearVelocity = Vector3.zero
-                my.AssemblyAngularVelocity = Vector3.zero
-            end)
+            if not plr or not getChar(plr) then return end
+            local off = under and Vector3.new(0, -1.5, 0) or Vector3.new(0, 0.2, 0)
+            forceTPTo(plr, off)
+            local aim = getAimPos(plr)
+            if aim then pcall(function() fireMouse(aim) end) end
         end)
 
         local t0 = tick()
         local swing = 0
-        while tick() - t0 < 3.2 do
-            if isKO(plr) or not getChar(plr) then break end
+        while tick() - t0 < 3.5 do
+            if not getChar(plr) then break end
+            if isKO(plr) then break end
             swing = swing + 1
             under = (swing % 4) >= 2
 
             if not knife or knife.Parent ~= getChar() then
-                knife = equipTool(findKnife(), 0.35)
+                knife = equipTool(findKnife(), 0.3)
                 if knife then expandKnifeParts(knife) end
             end
 
+            forceTPTo(plr, under and Vector3.new(0, -1.5, 0) or Vector3.new(0, 0.2, 0))
+
             local aim = getAimPos(plr)
             if aim then
-                for _ = 1, 3 do fireMouse(aim) end
+                for _ = 1, 4 do fireMouse(aim) end
             end
 
             setAttacking(true)
             if knife then
                 activateTool(knife)
-                -- double-activate for faster hit reg on katana
                 task.defer(function()
                     if knife and knife.Parent == getChar() then activateTool(knife) end
                 end)
@@ -1920,22 +1923,22 @@ local function knifeTarget(plr)
                 local vim = game:GetService("VirtualInputManager")
                 if vim then
                     vim:SendMouseButtonEvent(0, 0, 0, true, game, 0)
-                    task.wait(0.012)
+                    task.wait(0.01)
                     vim:SendMouseButtonEvent(0, 0, 0, false, game, 0)
                 end
             end)
 
-            task.wait(0.045)
+            task.wait(0.04)
         end
 
         if lockConn then pcall(function() lockConn:Disconnect() end) end
         setAttacking(false)
 
-        if isKO(plr) then
-            notify("KO - stomping " .. plr.Name)
-            stompTarget(plr, 10)
-        else
-            notify("Charge done (no KO) - try .stomp " .. plr.Name)
+        -- Always attempt stomp after charge (isKO can lag a frame on Da Strike)
+        task.wait(0.08)
+        if getChar(plr) then
+            notify("Stomping " .. plr.Name)
+            stompTarget(plr, 12)
         end
 
         clearCamlock()
