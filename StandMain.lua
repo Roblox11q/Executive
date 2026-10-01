@@ -56,6 +56,9 @@ do
     local pid = game.PlaceId
     local daHoodStyle = (pid == 2788229376 or pid == 16033173781
         or pid == 96247461091106 or pid == 128413479081937
+        or pid == 105240105208766 or pid == 77582891937348
+        or pid == 76755883806632 or pid == 98074214215906
+        or pid == 17895262040
         or pid == 134531910435633 or pid == 134196333708867
         or pid == 127490856529061 or pid == 83185437445240) -- Da Strike
     local low = string.lower(PreferredGun:gsub("[%[%]]", ""):gsub("%s+", ""))
@@ -69,7 +72,14 @@ end
 ----------------------------------------------------------------------
 local PlaceId = game.PlaceId
 local IsDaHood      = (PlaceId == 2788229376 or PlaceId == 16033173781)
-local IsDersHood    = (PlaceId == 96247461091106 or PlaceId == 128413479081937)
+-- Der / Des Hood family (multiple clones share similar AC + gun systems)
+local IsDersHood    = (PlaceId == 96247461091106   -- DERS HOOD
+    or PlaceId == 128413479081937                  -- Des Hood
+    or PlaceId == 105240105208766                  -- DERS H00D
+    or PlaceId == 77582891937348                   -- DERS H00D UPD
+    or PlaceId == 76755883806632                   -- [LOL] DER H00D
+    or PlaceId == 98074214215906                   -- TELEPORT HUB DER H00D
+    or PlaceId == 17895262040)                     -- Der Hood Flame
 local IsHoodCustoms = (PlaceId == 9825515356)
 -- Da Strike has multiple place versions; include current + legacy IDs
 local IsDaStrike    = (PlaceId == 134531910435633
@@ -77,6 +87,8 @@ local IsDaStrike    = (PlaceId == 134531910435633
     or PlaceId == 127490856529061
     or PlaceId == 83185437445240)
 local IsDaHoodStyle = IsDaHood or IsDersHood or IsDaStrike
+-- These places kick on hookmetamethod(game, "__index") → "indexInstance detector"
+local NoIndexHook = IsDersHood or IsHoodCustoms
 
 local MainEvent, UnreliableMainEvent, MainFunction
 local StompEffectEvent, GunsFolder, AssetsInvoke
@@ -120,7 +132,7 @@ end)
 
 local placeLabel =
     (PlaceId == 128413479081937 and "Des Hood")
-    or (PlaceId == 96247461091106 and "DERS HOOD")
+    or (IsDersHood and "Der/Des Hood")
     or (IsDaHood and "Da Hood")
     or (IsHoodCustoms and "Hood Customs")
     or (IsDaStrike and "Da Strike")
@@ -647,39 +659,44 @@ local function ensureSilentAim()
     local mouse = nil
     pcall(function() mouse = LocalPlayer:GetMouse() end)
 
-    -- hookmetamethod silent aim (works on most executors)
-    pcall(function()
-        if not (hookmetamethod and newcclosure) then return end
-        if not mouse then return end
-        local oldIndex
-        oldIndex = hookmetamethod(game, "__index", newcclosure(function(self, key)
-            if AimLockPlayer ~= nil and self == mouse then
-                local k = key
-                if k == "Hit" or k == "hit" then
-                    local aim = getAimPos(AimLockPlayer)
-                    if aim then return CFrame.new(aim) end
-                elseif k == "Target" or k == "target" then
-                    local ch = getChar(AimLockPlayer)
-                    if ch then
-                        return ch:FindFirstChild("Head") or getHRP(AimLockPlayer) or ch
-                    end
-                elseif k == "UnitRay" then
-                    local aim = getAimPos(AimLockPlayer)
-                    if aim and Camera then
-                        local origin = Camera.CFrame.Position
-                        local dir = (aim - origin)
-                        if dir.Magnitude > 0 then
-                            return Ray.new(origin, dir.Unit * 999)
+    -- NEVER hook __index on Der/Des Hood / Hood Customs — kicks with:
+    -- "indexInstance detector detected (Error Code: 267)"
+    -- Use remote + BodyEffects.MousePos + soft camera only on those places.
+    if not NoIndexHook then
+        pcall(function()
+            if not (hookmetamethod and newcclosure) then return end
+            if not mouse then return end
+            local oldIndex
+            oldIndex = hookmetamethod(game, "__index", newcclosure(function(self, key)
+                if AimLockPlayer ~= nil and self == mouse then
+                    local k = key
+                    if k == "Hit" or k == "hit" then
+                        local aim = getAimPos(AimLockPlayer)
+                        if aim then return CFrame.new(aim) end
+                    elseif k == "Target" or k == "target" then
+                        local ch = getChar(AimLockPlayer)
+                        if ch then
+                            return ch:FindFirstChild("Head") or getHRP(AimLockPlayer) or ch
+                        end
+                    elseif k == "UnitRay" then
+                        local aim = getAimPos(AimLockPlayer)
+                        if aim and Camera then
+                            local origin = Camera.CFrame.Position
+                            local dir = (aim - origin)
+                            if dir.Magnitude > 0 then
+                                return Ray.new(origin, dir.Unit * 999)
+                            end
                         end
                     end
                 end
-            end
-            return oldIndex(self, key)
-        end))
-    end)
+                return oldIndex(self, key)
+            end))
+        end)
+    else
+        print("[Stand] Silent aim: remote-only mode (no __index hook) on", placeLabel)
+    end
 
-    -- keep mouse remotes on target while locked (no HRP twist — fights hover/stomp and errors gun clients)
-    -- throttle fireMouse on Hood Customs to avoid client red errors from remote spam
+    -- keep mouse remotes on target while locked (no HRP twist)
     local lastMouseFire = 0
     local lastCamSoft = 0
     RunService.RenderStepped:Connect(function()
@@ -689,31 +706,40 @@ local function ensureSilentAim()
         local aim = getAimPos(plr)
         if not aim then return end
         local now = tick()
-        -- HC: ~12–15 Hz is enough; every-frame remote + camera spam = red gun client errors
-        local interval = IsHoodCustoms and 0.06 or (IsDaStrike and 0.02 or 0.0)
+        -- Safer intervals on AC-heavy places
+        local interval = 0.0
+        if IsHoodCustoms then
+            interval = 0.06
+        elseif IsDersHood then
+            interval = 0.04
+        elseif IsDaStrike then
+            interval = 0.02
+        end
         if now - lastMouseFire >= interval then
             lastMouseFire = now
             pcall(function() fireMouse(aim) end)
+            -- always keep BodyEffects.MousePos synced (critical when no __index hook)
+            pcall(function()
+                local be = getChar() and getChar():FindFirstChild("BodyEffects")
+                local mp = be and be:FindFirstChild("MousePos")
+                if mp and mp:IsA("Vector3Value") then mp.Value = aim end
+            end)
         end
-        -- soft camera look: every frame on other places; throttled on HC so CameraModule/gun rays don't NaN
-        local camInterval = IsHoodCustoms and 0.05 or 0.0
+        local camInterval = (IsHoodCustoms or IsDersHood) and 0.05 or 0.0
         if now - lastCamSoft >= camInterval then
             lastCamSoft = now
             pcall(function()
                 if not Camera or Camera.CameraType == Enum.CameraType.Scriptable then return end
                 local origin = Camera.CFrame.Position
                 local dir = aim - origin
-                -- skip zero-length / pure vertical rays that break HC gun clients
                 if dir.Magnitude < 1.5 then return end
                 local flat = Vector3.new(dir.X, 0, dir.Z)
                 if flat.Magnitude < 0.35 then
-                    -- nudge sideways so ray is never straight up/down
                     aim = aim + Vector3.new(0.4, 0, 0.4)
                 end
                 Camera.CFrame = CFrame.new(origin, aim)
             end)
         end
-        -- do NOT rotate local HRP here — hoverOverTarget / stomp already set full CFrame
     end)
 end
 
@@ -1626,13 +1652,20 @@ local function hoverOverTarget(plr, height)
             look = look + push.Unit * 1.2
         end
         local cf = CFrame.new(targetPos, look)
-        local ch = getChar()
-        if ch and ch.PivotTo then
-            ch:PivotTo(cf)
+        -- HC: no PivotTo — hard character snaps trigger ERROR_CLIENT_UNSYNCED_SERVER
+        if not IsHoodCustoms then
+            local ch = getChar()
+            if ch and ch.PivotTo then
+                ch:PivotTo(cf)
+            end
         end
         my.CFrame = cf
         -- Match horizontal velocity when chasing air targets; only kill vertical snap so we don't fall through
-        if airborne and speed > 8 then
+        -- HC: leave a bit of horizontal vel so server doesn't flag freeze-teleport
+        if IsHoodCustoms then
+            local d = targetPos - my.Position
+            my.AssemblyLinearVelocity = Vector3.new(d.X * 1.5, 0, d.Z * 1.5)
+        elseif airborne and speed > 8 then
             my.AssemblyLinearVelocity = Vector3.new(vel.X, math.min(vel.Y, 0), vel.Z)
         else
             my.AssemblyLinearVelocity = Vector3.zero
@@ -1878,11 +1911,14 @@ local function stompTarget(plr, times)
         local standOn = theirChar and (theirChar:FindFirstChild("UpperTorso") or theirChar:FindFirstChild("Torso") or their)
         if my and standOn then
             -- plant feet on chest — classic hood stomp distance
+            -- HC: CFrame only (no PivotTo) + throttle to avoid ERROR_CLIENT_UNSYNCED_SERVER
             local pos = standOn.Position + Vector3.new(0, 2.15, 0)
             pcall(function()
-                local ch = getChar()
                 local cf = CFrame.new(pos)
-                if ch and ch.PivotTo then ch:PivotTo(cf) end
+                if not IsHoodCustoms then
+                    local ch = getChar()
+                    if ch and ch.PivotTo then ch:PivotTo(cf) end
+                end
                 my.CFrame = cf
                 my.AssemblyLinearVelocity = Vector3.zero
                 my.AssemblyAngularVelocity = Vector3.zero
@@ -1939,7 +1975,7 @@ local function stompTarget(plr, times)
             end
         end
 
-        task.wait(0.12)
+        task.wait(IsHoodCustoms and 0.18 or 0.12)
     end
 end
 
@@ -2904,15 +2940,45 @@ end
 
 -- MoonStand-style kill cycle:
 -- close-range pressure → shoot until KO → hard stomp until dead → re-engage on get-up/respawn
+-- Hood Customs: soft position (no PivotTo spam) — hard CFrame snaps trigger ERROR_CLIENT_UNSYNCED_SERVER
+local _lastMoonPosAt = 0
 local function moonCloseHover(plr)
-    -- stay tight behind / beside target (Moon-style), not high float
     if State.VoidEat or State.InVoid then return end
     local my = getHRP()
     local their = getHRP(plr)
     if not my or not their then return end
     local aim = getAimPos(plr) or (their.Position + Vector3.new(0, 1.4, 0))
+
+    -- HC: throttle position updates + never PivotTo (desyncs gun client ↔ server)
+    if IsHoodCustoms then
+        local now = tick()
+        if now - _lastMoonPosAt < 0.18 then return end
+        _lastMoonPosAt = now
+        -- orbit-ish soft offset (same idea as hoverOverTarget) so ray stays angled
+        local phase = (now * 1.8) % (math.pi * 2)
+        local r = 2.8
+        local pos = their.Position + Vector3.new(math.cos(phase) * r, 2.5, math.sin(phase) * r)
+        local look = Vector3.new(aim.X, their.Position.Y + 1.1, aim.Z)
+        local toLook = look - pos
+        local flat = Vector3.new(toLook.X, 0, toLook.Z)
+        if flat.Magnitude < 0.8 then
+            look = look + Vector3.new(0.6, 0, 0.6)
+        end
+        pcall(function()
+            my.CFrame = CFrame.new(pos, look)
+            -- keep a little horizontal velocity so server doesn't flag hard stop-teleport
+            my.AssemblyLinearVelocity = Vector3.new(
+                (pos.X - my.Position.X) * 2,
+                0,
+                (pos.Z - my.Position.Z) * 2
+            )
+            my.AssemblyAngularVelocity = Vector3.zero
+        end)
+        return
+    end
+
+    -- other places: tight behind (classic Moon)
     local look = their.CFrame.LookVector
-    -- behind them a bit + slight side so ray isn't pure vertical
     local behind = their.Position - look * 2.4 + Vector3.new(0, 1.6, 0)
     local side = their.CFrame.RightVector * (0.7 + math.sin(tick() * 3.2) * 0.5)
     local pos = behind + side
@@ -2936,7 +3002,8 @@ local function moonShootBurst(plr, maxShots)
     setAimLock(plr)
     pcall(ensureSilentAim)
     setCamlock(plr, 3)
-    maxShots = maxShots or (IsHoodCustoms and 12 or 10)
+    -- fewer shots + slower cadence on HC to avoid CLIENT_UNSYNCED_SERVER
+    maxShots = maxShots or (IsHoodCustoms and 6 or 10)
 
     for shot = 1, maxShots do
         if not State.LoopKill and not State.LoopKnock then break end
@@ -2947,12 +3014,24 @@ local function moonShootBurst(plr, maxShots)
         local aim = getAimPos(plr)
         if not aim then break end
 
-        pcall(function() fireMouse(aim) end)
-        pcall(function()
-            local be = getChar() and getChar():FindFirstChild("BodyEffects")
-            local mp = be and be:FindFirstChild("MousePos")
-            if mp and mp:IsA("Vector3Value") then mp.Value = aim end
-        end)
+        -- HC: BodyEffects.MousePos only most of the time; MainEvent less often
+        if IsHoodCustoms then
+            pcall(function()
+                local be = getChar() and getChar():FindFirstChild("BodyEffects")
+                local mp = be and be:FindFirstChild("MousePos")
+                if mp and mp:IsA("Vector3Value") then mp.Value = aim end
+            end)
+            if shot % 2 == 1 then
+                pcall(function() fireMouse(aim) end)
+            end
+        else
+            pcall(function() fireMouse(aim) end)
+            pcall(function()
+                local be = getChar() and getChar():FindFirstChild("BodyEffects")
+                local mp = be and be:FindFirstChild("MousePos")
+                if mp and mp:IsA("Vector3Value") then mp.Value = aim end
+            end)
+        end
 
         if gun.Parent ~= getChar() then
             gun = equipTool(findGun(), 0.35)
@@ -2974,21 +3053,26 @@ local function moonShootBurst(plr, maxShots)
             end)
         end
 
-        if shot % 4 == 0 then
+        if shot % 3 == 0 then
             reloadGun(gun)
         end
-        task.wait(IsHoodCustoms and 0.10 or 0.07)
+        task.wait(IsHoodCustoms and 0.16 or 0.07)
     end
 end
 
 local function moonStompHard(plr)
-    -- aggressive multi-pass stomp while they stay down (Moon-style finish)
     if not plr then return end
+    -- HC: one lighter stomp pass (hard multi-TP stomp = CLIENT_UNSYNCED_SERVER)
+    if IsHoodCustoms then
+        if not getChar(plr) then return end
+        stompTarget(plr, 6)
+        return
+    end
     for pass = 1, 3 do
         if not State.LoopKill then break end
         if not getChar(plr) then break end
         if isAlive(plr) and not isKO(plr) then break end
-        stompTarget(plr, IsHoodCustoms and 10 or 12)
+        stompTarget(plr, 12)
         task.wait(0.08)
         if isAlive(plr) and not isKO(plr) then break end
     end
@@ -3008,22 +3092,29 @@ local function loopKillCycle(plr)
             moonStompHard(plr)
         end
     else
-        -- shoot tight bursts until KO, then hard stomp
-        local t0 = tick()
-        while State.LoopKill and tick() - t0 < 6 do
-            if not getChar(plr) then break end
-            if isKO(plr) then break end
-            if not isAlive(plr) then break end
-            moonShootBurst(plr, IsHoodCustoms and 8 or 7)
-            if isKO(plr) then break end
-            task.wait(0.05)
-        end
-        if isKO(plr) or (getHum(plr) and getHum(plr).Health <= 0) then
-            moonStompHard(plr)
-        elseif isAlive(plr) then
-            -- fallback full shootTarget if bursts didn't drop them
+        if IsHoodCustoms then
+            -- HC-safe path: use normal shootTarget (already hardened) then one stomp pass
+            -- avoids PivotTo spam that triggers ERROR_CLIENT_UNSYNCED_SERVER
             shootTarget(plr)
-            if isKO(plr) then moonStompHard(plr) end
+            if isKO(plr) then
+                moonStompHard(plr)
+            end
+        else
+            local t0 = tick()
+            while State.LoopKill and tick() - t0 < 6 do
+                if not getChar(plr) then break end
+                if isKO(plr) then break end
+                if not isAlive(plr) then break end
+                moonShootBurst(plr, 7)
+                if isKO(plr) then break end
+                task.wait(0.05)
+            end
+            if isKO(plr) or (getHum(plr) and getHum(plr).Health <= 0) then
+                moonStompHard(plr)
+            elseif isAlive(plr) then
+                shootTarget(plr)
+                if isKO(plr) then moonStompHard(plr) end
+            end
         end
     end
 end
