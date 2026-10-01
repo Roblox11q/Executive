@@ -494,13 +494,20 @@ local function ensureSilentAim()
     end)
 
     -- keep mouse remotes on target while locked (no HRP twist — fights hover/stomp and errors gun clients)
+    -- throttle fireMouse on Hood Customs to avoid client red errors from remote spam
+    local lastMouseFire = 0
     RunService.RenderStepped:Connect(function()
         local plr = AimLockPlayer
         if not plr then return end
         if not getChar(plr) then return end
         local aim = getAimPos(plr)
         if not aim then return end
-        pcall(function() fireMouse(aim) end)
+        local now = tick()
+        local interval = IsHoodCustoms and 0.08 or 0.0
+        if now - lastMouseFire >= interval then
+            lastMouseFire = now
+            pcall(function() fireMouse(aim) end)
+        end
         pcall(function()
             if Camera and Camera.CameraType ~= Enum.CameraType.Scriptable then
                 Camera.CFrame = CFrame.new(Camera.CFrame.Position, aim)
@@ -523,6 +530,8 @@ local function setAttacking(on)
 end
 
 local function fireHitRemotes(plr)
+    -- Hood Customs client scripts error (red text) on fake Hit/Knife/Punch remotes
+    if IsHoodCustoms then return end
     local char = getChar(plr)
     local hum  = getHum(plr)
     local aim  = getAimPos(plr)
@@ -656,6 +665,7 @@ local function clearCamlock()
     pcall(function() RunService:UnbindFromRenderStep(CAM_BIND) end)
 end
 
+local lastCamMouseFire = 0
 local function camlockStep()
     if not State.Camlock then return end
     if CamlockUntil > 0 and tick() > CamlockUntil then
@@ -666,7 +676,12 @@ local function camlockStep()
     if not plr then return end
     local aim = getAimPos(plr)
     if not aim then return end
-    fireMouse(aim)
+    local now = tick()
+    local interval = IsHoodCustoms and 0.08 or 0.0
+    if now - lastCamMouseFire >= interval then
+        lastCamMouseFire = now
+        pcall(function() fireMouse(aim) end)
+    end
     -- soft look without breaking CameraModule
     pcall(function()
         if Camera and Camera.CameraType ~= Enum.CameraType.Scriptable then
@@ -1323,7 +1338,9 @@ local function hoverOverTarget(plr, height)
     if not my or not their then return end
     local aim = getAimPos(plr) or their.Position
     -- small horizontal offset so camera/gun ray has a clean angle (avoids client ray errors)
-    local targetPos = their.Position + Vector3.new(0.35, height, 0.35)
+    -- Hood Customs is stricter about pure vertical rays — use a bit more offset
+    local ox = IsHoodCustoms and 0.65 or 0.35
+    local targetPos = their.Position + Vector3.new(ox, height, ox)
     pcall(function()
         local look = Vector3.new(aim.X, their.Position.Y + 1.2, aim.Z)
         local cf = CFrame.new(targetPos, look)
@@ -1508,16 +1525,19 @@ local function shootTarget(plr)
                 vim:SendMouseButtonEvent(0, 0, 0, false, game, 0)
             end
         end)
-        pcall(function()
-            local vu = game:GetService("VirtualUser")
-            if vu then vu:ClickButton1(Vector2.new(0, 0)) end
-        end)
+        -- VirtualUser ClickButton1 can trigger extra client errors on Hood Customs; skip there
+        if not IsHoodCustoms then
+            pcall(function()
+                local vu = game:GetService("VirtualUser")
+                if vu then vu:ClickButton1(Vector2.new(0, 0)) end
+            end)
+        end
 
         if shot % 5 == 0 then
             reloadGun(gun)
             task.wait(0.1)
         end
-        task.wait(0.11)
+        task.wait(IsHoodCustoms and 0.14 or 0.11)
     end
 
     reloadGun(gun)
