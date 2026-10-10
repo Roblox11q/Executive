@@ -1735,6 +1735,49 @@ local function combatSurviveTick()
     -- end
 end
 
+----------------------------------------------------------------------
+-- HOOD CUSTOMS helpers (defined early so shootTarget / loopkill can use them)
+----------------------------------------------------------------------
+local HC_UNDER_Y = -18
+local function hcSetCF(cf, vel)
+    local my = getHRP()
+    if not my then return end
+    pcall(function()
+        my.CFrame = cf
+        my.AssemblyLinearVelocity = vel or Vector3.zero
+        my.AssemblyAngularVelocity = Vector3.zero
+    end)
+end
+
+local function hcGoUnderground(plr)
+    local their = plr and getHRP(plr)
+    local my = getHRP()
+    if not my then return end
+    local base = their and their.Position or my.Position
+    local under = Vector3.new(base.X + 0.35, base.Y + HC_UNDER_Y, base.Z - 0.25)
+    hcSetCF(CFrame.new(under), Vector3.zero)
+    task.wait(0.02)
+    hcSetCF(CFrame.new(under), Vector3.zero)
+end
+
+local function hcSurfaceAbove(plr)
+    local their = getHRP(plr)
+    local my = getHRP()
+    if not my or not their then return end
+    local aim = getAimPos(plr) or (their.Position + Vector3.new(0, 1.35, 0))
+    local phase = (tick() * 2.4) % (math.pi * 2)
+    local r = 1.8
+    local pos = their.Position + Vector3.new(math.cos(phase) * r, 2.2, math.sin(phase) * r)
+    local look = Vector3.new(aim.X, their.Position.Y + 1.2, aim.Z)
+    local flat = Vector3.new(look.X - pos.X, 0, look.Z - pos.Z)
+    if flat.Magnitude < 0.6 then
+        look = look + Vector3.new(0.9, 0, 0.6)
+    end
+    hcSetCF(CFrame.new(pos, look), Vector3.zero)
+    task.wait(0.02)
+    hcSetCF(CFrame.new(pos, look), Vector3.zero)
+end
+
 -- COMBAT: SHOOT
 ----------------------------------------------------------------------
 local function shootTarget(plr)
@@ -1749,15 +1792,15 @@ local function shootTarget(plr)
         end
     end
 
-    -- Hood Customs: under → surface → shoot → under (single pass for .d / one-shot kill)
-    -- Full multi-pass loop lives in hcKillCycle (used by loopkill)
+    -- Hood Customs: under → surface → shoot → under (shared fast path)
+    -- .d / one-shot uses one pass; loopkill uses hcKillCycle multi-pass
     if IsHoodCustoms then
         local gun = findGun()
         if not gun then
             notify("No gun: " .. PreferredGun)
             return
         end
-        gun = equipTool(gun, 0.8)
+        gun = equipTool(gun, 0.5)
         if not gun then
             notify("Could not equip gun")
             return
@@ -1765,57 +1808,23 @@ local function shootTarget(plr)
         State.Armed = true
         setAimLock(plr)
         pcall(ensureSilentAim)
-        setCamlock(plr, 4)
+        setCamlock(plr, 3)
 
-        local my = getHRP()
-        local their = getHRP(plr)
-        local function hcSet(cf, vel)
-            local hrp = getHRP()
-            if not hrp then return end
-            pcall(function()
-                hrp.CFrame = cf
-                hrp.AssemblyLinearVelocity = vel or Vector3.zero
-                hrp.AssemblyAngularVelocity = Vector3.zero
-            end)
-        end
-        -- under
-        if their then
-            local under = Vector3.new(their.Position.X + 0.4, their.Position.Y - 12, their.Position.Z - 0.3)
-            for _ = 1, 3 do hcSet(CFrame.new(under), Vector3.zero) task.wait(0.04) end
-        end
-        task.wait(0.06)
-        -- surface above
-        if their then
-            local aim = getAimPos(plr) or (their.Position + Vector3.new(0, 1.3, 0))
-            local phase = (tick() * 1.2) % (math.pi * 2)
-            local pos = their.Position + Vector3.new(math.cos(phase) * 2.4, 2.6, math.sin(phase) * 2.4)
-            local look = Vector3.new(aim.X, their.Position.Y + 1.15, aim.Z)
-            local start = getHRP() and getHRP().Position or pos
-            for t = 1, 3 do
-                local mid = start:Lerp(pos, t / 3)
-                hcSet(CFrame.new(mid, look), Vector3.zero)
-                task.wait(0.03)
-            end
-            hcSet(CFrame.new(pos, look), Vector3.zero)
-        end
+        -- under → up → shoot → under (single aggressive pass)
+        hcGoUnderground(plr)
+        task.wait(0.03)
+        hcSurfaceAbove(plr)
         reloadGun(gun)
-        task.wait(0.08)
+        task.wait(0.03)
 
-        for shot = 1, 10 do
+        for shot = 1, 8 do
             if not isAlive(plr) or isKO(plr) then break end
             if State.VoidEat or State.InVoid then break end
             if gun.Parent ~= getChar() then
-                gun = equipTool(findGun(), 0.5)
+                gun = equipTool(findGun(), 0.35)
                 if not gun then break end
             end
-            -- re-surface every few shots
-            if shot % 3 == 1 and their then
-                local aim = getAimPos(plr) or (their.Position + Vector3.new(0, 1.3, 0))
-                local phase = (tick() * 1.2) % (math.pi * 2)
-                local pos = their.Position + Vector3.new(math.cos(phase) * 2.4, 2.6, math.sin(phase) * 2.4)
-                local look = Vector3.new(aim.X, their.Position.Y + 1.15, aim.Z)
-                hcSet(CFrame.new(pos, look), Vector3.zero)
-            end
+            hcSurfaceAbove(plr)
             local aim = getAimPos(plr)
             if not aim then break end
             pcall(function()
@@ -1825,14 +1834,10 @@ local function shootTarget(plr)
             end)
             pcall(function() fireMouse(aim) end)
             activateTool(gun)
-            if shot % 3 == 0 then reloadGun(gun) end
-            task.wait(0.15)
+            if shot % 4 == 0 then reloadGun(gun) end
+            task.wait(0.09)
         end
-        -- dive under after
-        if their then
-            local under = Vector3.new(their.Position.X + 0.4, their.Position.Y - 12, their.Position.Z - 0.3)
-            for _ = 1, 2 do hcSet(CFrame.new(under), Vector3.zero) task.wait(0.04) end
-        end
+        hcGoUnderground(plr)
         reloadGun(gun)
         return
     end
@@ -1856,7 +1861,7 @@ local function shootTarget(plr)
     reloadGun(gun)
     task.wait(0.1)
 
-    local maxShots = IsDersHood and 16 or 14
+    local maxShots = IsDersHood and 18 or 16
     for shot = 1, maxShots do
         if not isAlive(plr) or isKO(plr) then break end
         -- if we got voided mid-fight, wait and resume
@@ -1934,11 +1939,11 @@ local function shootTarget(plr)
             if vu then vu:ClickButton1(Vector2.new(0, 0)) end
         end)
 
-        if shot % 4 == 0 then
+        if shot % 5 == 0 then
             reloadGun(gun)
-            task.wait(0.08)
+            task.wait(0.05)
         end
-        task.wait(0.10)
+        task.wait(0.07)
     end
 
     reloadGun(gun)
@@ -3060,8 +3065,7 @@ local function moonShootBurst(plr, maxShots)
     setAimLock(plr)
     pcall(ensureSilentAim)
     setCamlock(plr, 3)
-    -- fewer shots + slower cadence on HC to avoid CLIENT_UNSYNCED_SERVER
-    maxShots = maxShots or (IsHoodCustoms and 6 or 10)
+    maxShots = maxShots or (IsHoodCustoms and 6 or 12)
 
     for shot = 1, maxShots do
         if not State.LoopKill and not State.LoopKnock then break end
@@ -3072,7 +3076,6 @@ local function moonShootBurst(plr, maxShots)
         local aim = getAimPos(plr)
         if not aim then break end
 
-        -- HC: BodyEffects.MousePos only most of the time; MainEvent less often
         if IsHoodCustoms then
             pcall(function()
                 local be = getChar() and getChar():FindFirstChild("BodyEffects")
@@ -3092,7 +3095,7 @@ local function moonShootBurst(plr, maxShots)
         end
 
         if gun.Parent ~= getChar() then
-            gun = equipTool(findGun(), 0.35)
+            gun = equipTool(findGun(), 0.3)
             if not gun then break end
         end
         activateTool(gun)
@@ -3102,16 +3105,16 @@ local function moonShootBurst(plr, maxShots)
                 local vim = game:GetService("VirtualInputManager")
                 if vim then
                     vim:SendMouseButtonEvent(0, 0, 0, true, game, 0)
-                    task.wait(0.015)
+                    task.wait(0.012)
                     vim:SendMouseButtonEvent(0, 0, 0, false, game, 0)
                 end
             end)
         end
 
-        if shot % 3 == 0 then
+        if shot % 4 == 0 then
             reloadGun(gun)
         end
-        task.wait(IsHoodCustoms and 0.16 or 0.07)
+        task.wait(IsHoodCustoms and 0.09 or 0.055)
     end
 end
 
@@ -3134,80 +3137,28 @@ local function moonStompHard(plr)
 end
 
 ----------------------------------------------------------------------
--- HOOD CUSTOMS: under → surface → shoot → under (loopkill-safe)
--- Soft CFrame only (no PivotTo) to avoid ERROR_CLIENT_UNSYNCED_SERVER
+-- HOOD CUSTOMS: under → surface → shoot → under (fast + reliable)
+-- Helpers (hcGoUnderground / hcSurfaceAbove) defined above shootTarget.
 ----------------------------------------------------------------------
-local HC_UNDER_Y = -12  -- studs below target feet (under ground, still near)
-local function hcSetCF(cf, vel)
-    local my = getHRP()
-    if not my then return end
-    pcall(function()
-        -- never PivotTo on HC
-        my.CFrame = cf
-        my.AssemblyLinearVelocity = vel or Vector3.zero
-        my.AssemblyAngularVelocity = Vector3.zero
-    end)
-end
-
-local function hcGoUnderground(plr)
-    local their = plr and getHRP(plr)
-    local my = getHRP()
-    if not my then return end
-    local base = their and their.Position or my.Position
-    -- under map under their XZ; slight offset so we're not perfectly stacked
-    local under = Vector3.new(base.X + 0.4, base.Y + HC_UNDER_Y, base.Z - 0.3)
-    for i = 1, 3 do
-        hcSetCF(CFrame.new(under), Vector3.zero)
-        task.wait(0.04)
-    end
-end
-
-local function hcSurfaceAbove(plr)
-    local their = getHRP(plr)
-    local my = getHRP()
-    if not my or not their then return end
-    local aim = getAimPos(plr) or (their.Position + Vector3.new(0, 1.3, 0))
-    -- stand slightly to the side + above so gun ray isn't pure vertical
-    local phase = (tick() * 1.2) % (math.pi * 2)
-    local r = 2.4
-    local pos = their.Position + Vector3.new(math.cos(phase) * r, 2.6, math.sin(phase) * r)
-    local look = Vector3.new(aim.X, their.Position.Y + 1.15, aim.Z)
-    local flat = Vector3.new(look.X - pos.X, 0, look.Z - pos.Z)
-    if flat.Magnitude < 0.7 then
-        look = look + Vector3.new(0.8, 0, 0.5)
-    end
-    -- soft step up from underground (lerp-ish via a couple writes)
-    local start = my.Position
-    for t = 1, 3 do
-        local a = t / 3
-        local mid = start:Lerp(pos, a)
-        hcSetCF(CFrame.new(mid, look), Vector3.new((pos.X - mid.X) * 2, 0, (pos.Z - mid.Z) * 2))
-        task.wait(0.03)
-    end
-    hcSetCF(CFrame.new(pos, look), Vector3.zero)
-end
-
 local function hcShootBurst(plr, maxShots)
     if not plr or not isAlive(plr) then return end
     local gun = findGun()
     if not gun then return end
-    gun = equipTool(gun, 0.55)
+    gun = equipTool(gun, 0.4)
     if not gun then return end
     State.Armed = true
     setAimLock(plr)
     pcall(ensureSilentAim)
-    setCamlock(plr, 3)
-    maxShots = maxShots or 8
+    setCamlock(plr, 2)
+    maxShots = maxShots or 6
 
     for shot = 1, maxShots do
         if not State.LoopKill and not State.LoopKnock and not State.CombatActive then break end
         if not isAlive(plr) or isKO(plr) then break end
         if State.VoidEat or State.InVoid then break end
 
-        -- re-surface every few shots so we stay on them without CFrame spam
-        if shot == 1 or shot % 3 == 1 then
-            hcSurfaceAbove(plr)
-        end
+        -- stay glued above them each shot
+        hcSurfaceAbove(plr)
 
         local aim = getAimPos(plr)
         if not aim then break end
@@ -3220,15 +3171,15 @@ local function hcShootBurst(plr, maxShots)
         pcall(function() fireMouse(aim) end)
 
         if gun.Parent ~= getChar() then
-            gun = equipTool(findGun(), 0.4)
+            gun = equipTool(findGun(), 0.3)
             if not gun then break end
         end
         activateTool(gun)
 
-        if shot % 3 == 0 then
+        if shot % 4 == 0 then
             reloadGun(gun)
         end
-        task.wait(0.15)
+        task.wait(0.09)
     end
 end
 
@@ -3239,39 +3190,46 @@ local function hcKillCycle(plr)
     setAimLock(plr)
     pcall(ensureSilentAim)
 
+    local gun = findGun()
+    if gun then
+        equipTool(gun, 0.4)
+        State.Armed = true
+        reloadGun(gun)
+    end
+
     local t0 = tick()
-    while tick() - t0 < 14 do
+    while tick() - t0 < 12 do
         if not State.LoopKill and not State.LoopKnock and not State.CombatActive then break end
         if not getChar(plr) then break end
         if isKO(plr) or not isAlive(plr) then break end
         if State.VoidEat or State.InVoid then
             local w = tick()
-            while (State.VoidEat or State.InVoid) and tick() - w < 4 do task.wait(0.1) end
+            while (State.VoidEat or State.InVoid) and tick() - w < 3 do task.wait(0.08) end
             if State.VoidEat or State.InVoid then exitCombatVoid() end
         end
 
-        -- 1) under ground (safe / hard to hit)
+        -- 1) under ground (safe)
         hcGoUnderground(plr)
-        task.wait(0.08)
+        task.wait(0.03)
 
         -- 2) pop above target
         hcSurfaceAbove(plr)
-        task.wait(0.05)
+        task.wait(0.02)
 
         -- 3) short shoot burst while above
-        hcShootBurst(plr, 7)
+        hcShootBurst(plr, 6)
 
         if isKO(plr) or not isAlive(plr) then break end
 
         -- 4) dive under again before next pass
         hcGoUnderground(plr)
-        task.wait(0.12)
+        task.wait(0.04)
     end
 
     if isKO(plr) then
-        -- surface briefly for stomp then done
+        -- surface briefly for stomp then hide
         hcSurfaceAbove(plr)
-        task.wait(0.05)
+        task.wait(0.03)
         moonStompHard(plr)
         hcGoUnderground(plr)
     end
