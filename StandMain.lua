@@ -2757,65 +2757,149 @@ local function cmdKat(user)
     notify("Kat loopkill ON " .. plr.Name .. " (katana/knife + stomp)")
 end
 
--- .b — bring target near owner
+-- .b — bring target near owner (improved)
 local function cmdBring(user)
     local plr = findPlayer(user)
-    if not plr then notify("Bring: not found (" .. tostring(user) .. ")") return end
+    if not plr then
+        notify("Bring: not found (" .. tostring(user) .. ")")
+        return
+    end
     local prot, why = isProtected(plr)
     if prot then
         notify("Bring: protected (" .. tostring(why) .. ")")
         return
     end
+
     State.Tracking = false
+    beginCombat()
+
     task.spawn(function()
         local owner = getOwner()
-        local oHRP = owner and getHRP(owner)
-        local their = getHRP(plr)
-        local my = getHRP()
-        if not their or not my then
+        if not owner then
+            notify("Bring: no owner")
+            endCombat()
             State.Tracking = true
             returnToOwner()
             return
         end
-        -- go to target
-        for _ = 1, 8 do
-            their = getHRP(plr)
-            my = getHRP()
-            if not their or not my then break end
-            pcall(function()
-                my.CFrame = their.CFrame * CFrame.new(0, 0, 2)
-                my.AssemblyLinearVelocity = Vector3.zero
-            end)
-            -- common grab/carry remotes
-            if MainEvent then
-                pcall(function() MainEvent:FireServer("Grabbing", true) end)
-                pcall(function() MainEvent:FireServer("Grab") end)
-                pcall(function() MainEvent:FireServer("Carry") end)
+
+        local function fireGrab(on)
+            if not MainEvent then return end
+            -- Hood Customs / most clones use plain "Grabbing"
+            pcall(function() MainEvent:FireServer("Grabbing") end)
+            pcall(function() MainEvent:FireServer("Grabbing", on == true) end)
+            pcall(function() MainEvent:FireServer("Grabbing", on) end)
+            pcall(function() MainEvent:FireServer("Grab") end)
+            pcall(function() MainEvent:FireServer("Carry") end)
+            if UnreliableMainEvent then
+                pcall(function() UnreliableMainEvent:FireServer("Grabbing") end)
+                pcall(function() UnreliableMainEvent:FireServer("Grabbing", on == true) end)
             end
-            task.wait(0.08)
         end
-        -- haul toward owner
-        oHRP = owner and getHRP(owner)
-        for _ = 1, 12 do
-            oHRP = owner and getHRP(owner)
-            my = getHRP()
-            their = getHRP(plr)
+
+        local function getClose(targetPlr, tries)
+            tries = tries or 10
+            for i = 1, tries do
+                local their = getHRP(targetPlr)
+                local my = getHRP()
+                if not their or not my then break end
+
+                -- Sit right on / slightly above the body (best for grab registration)
+                local offset = CFrame.new(0, 1.4 + (i % 3) * 0.15, 0.35)
+                pcall(function()
+                    if not IsHoodCustoms then
+                        local ch = getChar()
+                        if ch and ch.PivotTo then
+                            ch:PivotTo(their.CFrame * offset)
+                        end
+                    end
+                    my.CFrame = their.CFrame * offset
+                    my.AssemblyLinearVelocity = Vector3.zero
+                    my.AssemblyAngularVelocity = Vector3.zero
+                end)
+
+                fireGrab(true)
+                task.wait(IsHoodCustoms and 0.07 or 0.05)
+            end
+        end
+
+        -- 1) Prefer knocking first (grab is much more reliable on KO'd players)
+        if isAlive(plr) and not isKO(plr) then
+            notify("Bring: knocking first...")
+            setAimLock(plr)
+            pcall(ensureSilentAim)
+            setCamlock(plr, 3)
+            shootTarget(plr)
+
+            local t0 = tick()
+            while tick() - t0 < 2.8 do
+                if isKO(plr) or not getChar(plr) then break end
+                task.wait(0.12)
+            end
+            clearCamlock()
+            clearAimLock()
+        end
+
+        if not getChar(plr) then
+            notify("Bring: target gone")
+            endCombat()
+            State.Tracking = true
+            returnToOwner()
+            return
+        end
+
+        -- 2) Get on them + start grab
+        notify("Bring: grabbing " .. plr.Name)
+        getClose(plr, 14)
+
+        -- 3) Haul toward owner while keeping grab active
+        local haulUntil = tick() + 4.5
+        while tick() < haulUntil do
+            local oHRP = getHRP(owner)
+            local their = getHRP(plr)
+            local my = getHRP()
             if not oHRP or not my then break end
+
+            -- Keep re-attaching if they slip
+            if their then
+                pcall(function()
+                    local cf = their.CFrame * CFrame.new(0, 1.35, 0.3)
+                    if not IsHoodCustoms then
+                        local ch = getChar()
+                        if ch and ch.PivotTo then ch:PivotTo(cf) end
+                    end
+                    my.CFrame = cf
+                    my.AssemblyLinearVelocity = Vector3.zero
+                end)
+            end
+
+            -- Move stand (and hopefully the grabbed player) toward owner
             pcall(function()
-                my.CFrame = oHRP.CFrame * CFrame.new(0, 0, 3)
+                local dest = oHRP.CFrame * CFrame.new(0, 0, 3.5)
+                if not IsHoodCustoms then
+                    local ch = getChar()
+                    if ch and ch.PivotTo then ch:PivotTo(dest) end
+                end
+                my.CFrame = dest
                 my.AssemblyLinearVelocity = Vector3.zero
             end)
-            if MainEvent then
-                pcall(function() MainEvent:FireServer("Grabbing", true) end)
-            end
-            task.wait(0.07)
+
+            fireGrab(true)
+            task.wait(IsHoodCustoms and 0.09 or 0.06)
         end
+
+        -- 4) Release near owner
+        fireGrab(false)
+        task.wait(0.15)
         if MainEvent then
             pcall(function() MainEvent:FireServer("Grabbing", false) end)
+            pcall(function() MainEvent:FireServer("Grabbing") end)
         end
+
+        endCombat()
         State.Tracking = true
         returnToOwner()
-        notify("Bring done " .. plr.Name)
+        notify("Bring done → " .. plr.Name)
     end)
 end
 
