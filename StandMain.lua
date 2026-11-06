@@ -52,6 +52,48 @@ do
     end
 end
 
+-- All stands / alts / owner / controllers — never target each other
+local StandTeam = {}
+do
+    local function addName(n)
+        if type(n) ~= "string" then return end
+        n = string.lower(n:gsub("%s+", ""))
+        if n ~= "" then StandTeam[n] = true end
+    end
+    addName(OwnerName)
+    addName(LocalPlayer.Name)
+    for name in pairs(Controllers) do
+        addName(name)
+    end
+    local alts = Config.Alts or {}
+    if type(alts) == "table" then
+        for k, v in pairs(alts) do
+            -- Alts = { ["User1"] = 1, ["User2"] = 2 } or { "User1", "User2" }
+            if type(k) == "string" then addName(k) end
+            if type(v) == "string" then addName(v) end
+        end
+    end
+    -- optional explicit list
+    local team = Config.StandTeam or Config.Team or Config.Stands
+    if type(team) == "table" then
+        for k, v in pairs(team) do
+            if type(k) == "string" then addName(k) end
+            if type(v) == "string" then addName(v) end
+            if type(k) == "number" and type(v) == "string" then addName(v) end
+        end
+    end
+end
+
+local function isStandTeam(plr)
+    if not plr then return false end
+    local n = string.lower(plr.Name)
+    if StandTeam[n] then return true end
+    -- also match display name if username was listed under a display-style key
+    local d = string.lower(plr.DisplayName or "")
+    if d ~= "" and StandTeam[d] then return true end
+    return false
+end
+
 do
     local pid = game.PlaceId
     local daHoodStyle = (pid == 2788229376 or pid == 16033173781
@@ -172,8 +214,10 @@ local State = {
     KnifeBusy     = false,
     LoopKillBusy  = false,
     AutoReload    = true,
+    AutoHeal      = true,  -- auto buy food + eat when hurt (HC: EatFood / BuyItem)
     Sweep         = false,
     Air           = true,  -- floating summon formation (toggle with .air)
+    FakePos       = false, -- stay in formation; gun kills still work via silent aim + mouse remotes
     Sentry        = false, -- .sentry — knock whoever shoots the OWNER
     Sentry2       = false, -- .sentry2 — knock+stomp whoever shoots the OWNER
     BSentry       = false, -- .bsentry — knock+stomp whoever shoots THIS stand
@@ -422,6 +466,8 @@ local function isProtected(plr)
     if plr == LocalPlayer then return true, "self" end
     if string.lower(plr.Name) == string.lower(OwnerName) then return true, "owner" end
     if Controllers[string.lower(plr.Name)] then return true, "controller" end
+    -- Never kill other stands / alts from the same config
+    if isStandTeam(plr) then return true, "stand" end
     if Whitelist[plr.UserId] then return true, "whitelist" end
     if State.ProtectName and string.lower(plr.Name) == string.lower(State.ProtectName) then
         return true, "protect"
@@ -734,12 +780,14 @@ local function fireHitRemotes(plr)
     local aim  = getAimPos(plr)
     local function go(remote, isFn)
         if not remote then return end
-        local function send(a, b)
+        local function send(a, b, c)
             if isFn then
-                if b ~= nil then pcall(function() remote:InvokeServer(a, b) end)
+                if c ~= nil then pcall(function() remote:InvokeServer(a, b, c) end)
+                elseif b ~= nil then pcall(function() remote:InvokeServer(a, b) end)
                 else pcall(function() remote:InvokeServer(a) end) end
             else
-                if b ~= nil then pcall(function() remote:FireServer(a, b) end)
+                if c ~= nil then pcall(function() remote:FireServer(a, b, c) end)
+                elseif b ~= nil then pcall(function() remote:FireServer(a, b) end)
                 else pcall(function() remote:FireServer(a) end) end
             end
         end
@@ -748,14 +796,90 @@ local function fireHitRemotes(plr)
         send("Hit", hum)
         send("Hit", plr)
         send("Knife")
+        send("Knife", char)
         send("Punch")
         send("Slash")
         send("Combat")
+        send("Damage", char)
+        send("Damage", hum)
         if aim then send(MouseRemote, aim) end
     end
     go(MainEvent, false)
     go(UnreliableMainEvent, false)
     go(MainFunction, true)
+end
+
+-- Force-hit for gun shots: push aim + common damage/hit remotes so shots register more reliably
+local function forceGunHit(plr, gun)
+    if not plr then return end
+    local char = getChar(plr)
+    local hum  = getHum(plr)
+    local aim  = getAimPos(plr)
+    if not aim then return end
+
+    -- Always refresh mouse / aim (safe on all places including HC)
+    pcall(function() fireMouse(aim) end)
+    pcall(function()
+        local be = getChar() and getChar():FindFirstChild("BodyEffects")
+        if not be then return end
+        for _, n in ipairs({"MousePos", "MousePosition", "AimPos", "Mouse"}) do
+            local mp = be:FindFirstChild(n)
+            if mp and mp:IsA("Vector3Value") then mp.Value = aim end
+            if mp and mp:IsA("CFrameValue") then mp.Value = CFrame.new(aim) end
+        end
+    end)
+    setAttacking(true)
+
+    -- HC: only mouse / BodyEffects — fake Hit strings cause red client errors
+    if IsHoodCustoms then return end
+
+    local function blast(remote, isFn)
+        if not remote then return end
+        local function send(...)
+            local args = {...}
+            if isFn then
+                pcall(function() remote:InvokeServer(table.unpack(args)) end)
+            else
+                pcall(function() remote:FireServer(table.unpack(args)) end)
+            end
+        end
+        send("Hit")
+        send("Hit", char)
+        send("Hit", hum)
+        send("Hit", plr)
+        send("Shoot")
+        send("Shoot", char)
+        send("GunHit", char)
+        send("GunHit", hum)
+        send("Damage", char)
+        send("Damage", hum)
+        if gun then
+            send("Hit", gun)
+            send("Shoot", gun)
+            send("Fire", gun)
+        end
+        send(MouseRemote, aim)
+    end
+    blast(MainEvent, false)
+    blast(UnreliableMainEvent, false)
+    blast(MainFunction, true)
+
+    -- Tool-local remotes (some guns fire damage from inside the tool)
+    if gun then
+        pcall(function()
+            for _, d in ipairs(gun:GetDescendants()) do
+                if d:IsA("RemoteEvent") then
+                    pcall(function() d:FireServer() end)
+                    pcall(function() d:FireServer(char) end)
+                    pcall(function() d:FireServer(hum) end)
+                    pcall(function() d:FireServer("Hit", char) end)
+                elseif d:IsA("RemoteFunction") then
+                    pcall(function() d:InvokeServer() end)
+                    pcall(function() d:InvokeServer(char) end)
+                end
+            end
+        end)
+    end
 end
 
 ----------------------------------------------------------------------
@@ -807,6 +931,23 @@ local function activateTool(tool)
     end
     if not tool or tool.Parent ~= c then return false end
     pcall(function() tool:Activate() end)
+    -- Hood Customs: real activation is Tool.ACTION:FireServer("ACTIVATE")
+    if IsHoodCustoms then
+        pcall(function()
+            local action = tool:FindFirstChild("ACTION")
+            if action and action:IsA("RemoteEvent") then
+                action:FireServer("ACTIVATE")
+            end
+        end)
+        pcall(function()
+            for _, d in ipairs(tool:GetDescendants()) do
+                if d:IsA("RemoteEvent") and string.lower(d.Name):find("action") then
+                    pcall(function() d:FireServer("ACTIVATE") end)
+                    pcall(function() d:FireServer() end)
+                end
+            end
+        end)
+    end
     return true
 end
 
@@ -842,16 +983,39 @@ local function expandKnifeParts(knife)
                 end
                 local orig = part:GetAttribute("StandOrig")
                 if typeof(orig) == "Vector3" then
+                    -- Large hitbox so swings connect reliably (still massless / no collide)
                     part.Size = Vector3.new(
-                        math.max(orig.X * 4, 6),
-                        math.max(orig.Y * 4, 8),
-                        math.max(orig.Z * 4, 6)
+                        math.max(orig.X * 12, 14),
+                        math.max(orig.Y * 12, 16),
+                        math.max(orig.Z * 12, 14)
                     )
+                else
+                    part.Size = Vector3.new(14, 16, 14)
                 end
                 part.Massless = true
                 part.CanCollide = false
+                part.Transparency = math.max(part.Transparency, 0.35)
                 pcall(function() part.CanTouch = true end)
+                pcall(function() part.CanQuery = true end)
             end
+        end
+        -- Also expand Handle if present as direct child
+        local handle = knife:FindFirstChild("Handle")
+        if handle and handle:IsA("BasePart") then
+            if not handle:GetAttribute("StandOrig") then
+                handle:SetAttribute("StandOrig", handle.Size)
+            end
+            local orig = handle:GetAttribute("StandOrig")
+            if typeof(orig) == "Vector3" then
+                handle.Size = Vector3.new(
+                    math.max(orig.X * 12, 14),
+                    math.max(orig.Y * 12, 16),
+                    math.max(orig.Z * 12, 14)
+                )
+            end
+            handle.Massless = true
+            handle.CanCollide = false
+            pcall(function() handle.CanTouch = true end)
         end
     end)
 end
@@ -1160,25 +1324,44 @@ local function findFood()
     return nil
 end
 
--- Auto-buy food from shop if none in inventory (Da Hood / hood-style places)
+-- HC food item names from dump: [Chicken] [Pizza] [Taco] [Burger]
+local HC_FOOD_ITEMS = { "[Chicken]", "[Pizza]", "[Taco]", "[Burger]" }
+
+-- Auto-buy food from shop if none in inventory
 local function buyFood()
-    -- 1) remote spam (works on some places without needing shop)
-    if MainEvent then
+    -- Hood Customs: BuyItem remote + FFA_MAP.Shop Grab pads
+    if IsHoodCustoms and MainEvent then
+        for _, item in ipairs(HC_FOOD_ITEMS) do
+            pcall(function() MainEvent:FireServer("BuyItem", item) end)
+            pcall(function() MainEvent:FireServer("BuyItem", item:gsub("[%[%]]", "")) end)
+        end
+        pcall(function() MainEvent:FireServer("BuyItem", "Chicken") end)
+        pcall(function() MainEvent:FireServer("BuyItem", "Pizza") end)
+        pcall(function() MainEvent:FireServer("BuyItem", "Taco") end)
+        pcall(function() MainEvent:FireServer("BuyItem", "Burger") end)
+    elseif MainEvent then
         for _, n in ipairs({
             "BuyChicken", "BuyPizza", "BuyTaco", "BuyHotdog", "BuyBurger",
             "Chicken", "Pizza", "Taco", "Food", "BuyFood",
         }) do
             pcall(function() MainEvent:FireServer(n) end)
             pcall(function() MainEvent:FireServer("Buy", n) end)
+            pcall(function() MainEvent:FireServer("BuyItem", n) end)
         end
     end
 
-    -- 2) click shop food pads under Workspace.Ignored.Shop (classic Da Hood)
+    -- Shop pads: HC = Workspace.FFA_MAP.Shop | classic = Workspace.Ignored.Shop
     pcall(function()
-        local shop = Workspace:FindFirstChild("Ignored")
-        shop = shop and shop:FindFirstChild("Shop")
+        local shop = nil
+        if IsHoodCustoms then
+            local map = Workspace:FindFirstChild("FFA_MAP")
+            shop = map and map:FindFirstChild("Shop")
+        end
         if not shop then
-            -- other hood games
+            local ignored = Workspace:FindFirstChild("Ignored")
+            shop = ignored and ignored:FindFirstChild("Shop")
+        end
+        if not shop then
             shop = Workspace:FindFirstChild("Shop")
                 or (Workspace:FindFirstChild("MAP") and Workspace.MAP:FindFirstChild("Shop"))
         end
@@ -1188,11 +1371,20 @@ local function buyFood()
         local savedCF = my and my.CFrame
 
         for _, m in ipairs(shop:GetDescendants()) do
-            if not isFoodName(m.Name) then continue end
+            local nameOk = isFoodName(m.Name)
+            -- HC pads named "Grab - [Chicken]" etc; also check PromptItem attribute
+            if not nameOk and m:IsA("ClickDetector") then
+                local item = m:GetAttribute("PromptItem")
+                if item and isFoodName(tostring(item)) then nameOk = true end
+                if m:GetAttribute("PromptKind") == "food" then nameOk = true end
+            end
+            if not nameOk then continue end
+
             local cd = m:IsA("ClickDetector") and m or m:FindFirstChildWhichIsA("ClickDetector", true)
-            local part = m:IsA("BasePart") and m or m:FindFirstChildWhichIsA("BasePart", true)
+            local part = m:IsA("BasePart") and m
+                or (m.Parent and m.Parent:IsA("BasePart") and m.Parent)
+                or m:FindFirstChildWhichIsA("BasePart", true)
             if cd then
-                -- teleport next to pad so server accepts click
                 if part and my then
                     pcall(function()
                         my.CFrame = part.CFrame * CFrame.new(0, 3, 0)
@@ -1216,7 +1408,6 @@ local function buyFood()
             end
         end
 
-        -- return to void / previous pos
         if my then
             pcall(function()
                 if State.InVoid or State.VoidEat then
@@ -1235,18 +1426,35 @@ end
 
 local function fireEatRemotes(food)
     if not MainEvent then return end
+
+    -- Hood Customs (from dump): MainEvent:FireServer("EatFood", p167, v213)
+    if IsHoodCustoms then
+        if food then
+            pcall(function() MainEvent:FireServer("EatFood", food, food) end)
+            pcall(function() MainEvent:FireServer("EatFood", food.Name, food) end)
+            pcall(function() MainEvent:FireServer("EatFood", food, food.Name) end)
+            pcall(function() MainEvent:FireServer("EatFood", food) end)
+            pcall(function() MainEvent:FireServer("EatFood", food.Name) end)
+        else
+            pcall(function() MainEvent:FireServer("EatFood") end)
+        end
+        return
+    end
+
     pcall(function() MainEvent:FireServer("Eat", food) end)
     pcall(function() MainEvent:FireServer("Eat") end)
     pcall(function() MainEvent:FireServer("Eating") end)
     pcall(function() MainEvent:FireServer("Eating", food) end)
+    pcall(function() MainEvent:FireServer("EatFood", food) end)
     if food then
         pcall(function() MainEvent:FireServer("Eat", food.Name) end)
-        -- Da Hood sometimes wants the tool as 2nd arg with string first
         pcall(function() MainEvent:FireServer("Eat", food, food) end)
+        pcall(function() MainEvent:FireServer("EatFood", food, food) end)
     end
     if UnreliableMainEvent then
         pcall(function() UnreliableMainEvent:FireServer("Eat", food) end)
         pcall(function() UnreliableMainEvent:FireServer("Eat") end)
+        pcall(function() UnreliableMainEvent:FireServer("EatFood", food) end)
     end
 end
 
@@ -1258,19 +1466,24 @@ local function eatFood()
         food = findFood()
     end
     if food then
-        -- longer equip timeout in void (character state can be weird)
         food = equipTool(food, State.VoidEat and 0.9 or 0.45)
         if food then
             for _ = 1, 12 do
                 if State.VoidEat then
                     pinToVoid()
                 end
-                pcall(function()
-                    food:Activate()
-                end)
+                pcall(function() food:Activate() end)
                 activateTool(food)
                 fireEatRemotes(food)
-                -- click simulation helps some places
+                -- HC: also fire ACTION on the food tool
+                if IsHoodCustoms then
+                    pcall(function()
+                        local action = food:FindFirstChild("ACTION")
+                        if action and action:IsA("RemoteEvent") then
+                            action:FireServer("ACTIVATE")
+                        end
+                    end)
+                end
                 pcall(function()
                     local vim = game:GetService("VirtualInputManager")
                     if vim then
@@ -1281,24 +1494,27 @@ local function eatFood()
                 end)
                 pcall(function()
                     local vu = game:GetService("VirtualUser")
-                    if vu then
-                        vu:ClickButton1(Vector2.new(0, 0))
-                    end
+                    if vu then vu:ClickButton1(Vector2.new(0, 0)) end
                 end)
                 task.wait(0.08)
             end
             return true
         end
     end
-    -- no tool — still spam eat/buy remotes
     fireEatRemotes(nil)
     if MainEvent then
-        for _, n in ipairs({
-            "BuyChicken", "BuyPizza", "BuyTaco", "BuyHamburger", "BuyDonut",
-            "Chicken", "Pizza", "Taco", "Hamburger", "Donut",
-        }) do
-            pcall(function() MainEvent:FireServer(n) end)
-            pcall(function() MainEvent:FireServer("Buy", n) end)
+        if IsHoodCustoms then
+            for _, item in ipairs(HC_FOOD_ITEMS) do
+                pcall(function() MainEvent:FireServer("BuyItem", item) end)
+            end
+        else
+            for _, n in ipairs({
+                "BuyChicken", "BuyPizza", "BuyTaco", "BuyHamburger", "BuyDonut",
+                "Chicken", "Pizza", "Taco", "Hamburger", "Donut",
+            }) do
+                pcall(function() MainEvent:FireServer(n) end)
+                pcall(function() MainEvent:FireServer("Buy", n) end)
+            end
         end
     end
     return false
@@ -1545,6 +1761,8 @@ end
 local _lastHoverAt = 0
 local function hoverOverTarget(plr, height)
     if State.VoidEat or State.InVoid then return end
+    -- FakePos: stay in formation; only aim remotes move, character does not
+    if State.FakePos then return end
     height = height or State.HoverHeight or 4
     local my = getHRP()
     local their = getHRP(plr)
@@ -1750,6 +1968,7 @@ local function hcSetCF(cf, vel)
 end
 
 local function hcGoUnderground(plr)
+    if State.FakePos then return end -- stay in formation
     local their = plr and getHRP(plr)
     local my = getHRP()
     if not my then return end
@@ -1761,6 +1980,7 @@ local function hcGoUnderground(plr)
 end
 
 local function hcSurfaceAbove(plr)
+    if State.FakePos then return end -- stay in formation; aim still locked
     local their = getHRP(plr)
     local my = getHRP()
     if not my or not their then return end
@@ -1834,6 +2054,7 @@ local function shootTarget(plr)
             end)
             pcall(function() fireMouse(aim) end)
             activateTool(gun)
+            pcall(function() forceGunHit(plr, gun) end)
             if shot % 4 == 0 then reloadGun(gun) end
             task.wait(0.09)
         end
@@ -1925,6 +2146,7 @@ local function shootTarget(plr)
         end
 
         activateTool(gun)
+        pcall(function() forceGunHit(plr, gun) end)
 
         pcall(function()
             local vim = game:GetService("VirtualInputManager")
@@ -2042,7 +2264,7 @@ local function stompTarget(plr, times)
     end
 end
 
--- COMBAT: KNIFE / KATANA — force TP on target + charge swings + stomp
+-- COMBAT: KNIFE / KATANA — controlled strafe + big hitbox + charge swings + stomp
 ----------------------------------------------------------------------
 local function forceTPTo(plr, offset)
     offset = offset or Vector3.new(0, 0.2, 0)
@@ -2060,6 +2282,18 @@ local function forceTPTo(plr, offset)
         my.AssemblyAngularVelocity = Vector3.zero
     end)
     return true
+end
+
+-- Soft strafe around target: orbit at human-ish speed so hits land without hard TP spam flags
+local function knifeStrafeOffset(under)
+    -- ~2.1 rad/s orbit, radius 1.5–2.2 (fast enough to stay on target, not teleport-spam)
+    local t = tick()
+    local phase = t * 2.1
+    local radius = 1.65 + math.sin(t * 0.95) * 0.45
+    local height = under and -1.15 or (0.25 + math.sin(t * 1.4) * 0.2)
+    local ox = math.cos(phase) * radius
+    local oz = math.sin(phase) * radius
+    return Vector3.new(ox, height, oz)
 end
 
 local function knifeTarget(plr)
@@ -2082,14 +2316,24 @@ local function knifeTarget(plr)
         setAimLock(plr)
         pcall(ensureSilentAim)
         setCamlock(plr, 10)
-        notify("Charge -> " .. plr.Name)
+        notify("Strafe -> " .. plr.Name)
 
-        -- Stick lock for entire attack (TP every frame so we never drift off)
+        -- Throttled strafe lock (not every Heartbeat frame — reduces flag risk)
         local under = false
+        local lastStrafeAt = 0
+        local STRAFE_INTERVAL = 0.09 -- ~11 Hz position updates
         local lockConn
         lockConn = RunService.Heartbeat:Connect(function()
             if not plr or not getChar(plr) then return end
-            local off = under and Vector3.new(0, -1.5, 0) or Vector3.new(0, 0.25, 0)
+            local now = tick()
+            if now - lastStrafeAt < STRAFE_INTERVAL then
+                -- still refresh aim every frame for hit registration
+                local aim = getAimPos(plr)
+                if aim then pcall(function() fireMouse(aim) end) end
+                return
+            end
+            lastStrafeAt = now
+            local off = knifeStrafeOffset(under)
             forceTPTo(plr, off)
             local aim = getAimPos(plr)
             if aim then pcall(function() fireMouse(aim) end) end
@@ -2099,14 +2343,15 @@ local function knifeTarget(plr)
         -- Only stop if target character is gone or truly dead (Health <= 0)
         local t0 = tick()
         local swing = 0
-        while tick() - t0 < 4.5 do
+        while tick() - t0 < 5.0 do
             local theirChar = getChar(plr)
             if not theirChar then break end
             local theirHum = getHum(plr)
             if theirHum and theirHum.Health <= 0 then break end
 
             swing = swing + 1
-            under = (swing % 5) >= 3
+            -- alternate high / low every few swings (helps connect + looks less robotic)
+            under = (swing % 6) >= 4
 
             -- Re-equip every few swings (tool often unequips after one Activate on these games)
             if not knife or knife.Parent ~= getChar() or swing % 3 == 0 then
@@ -2117,7 +2362,7 @@ local function knifeTarget(plr)
                 if knife then expandKnifeParts(knife) end
             end
 
-            forceTPTo(plr, under and Vector3.new(0, -1.5, 0) or Vector3.new(0, 0.25, 0))
+            forceTPTo(plr, knifeStrafeOffset(under))
 
             local aim = getAimPos(plr)
             if aim then
@@ -2146,7 +2391,8 @@ local function knifeTarget(plr)
                 if vu then vu:ClickButton1(Vector2.new(0, 0)) end
             end)
 
-            task.wait(0.05)
+            -- slightly slower swing cadence than pure spam (still aggressive, less flaggy)
+            task.wait(0.07)
         end
 
         if lockConn then pcall(function() lockConn:Disconnect() end) end
@@ -2263,6 +2509,34 @@ local function armorMaintainTick()
     end
 end
 
+-- Auto heal: when hurt, buy food (BuyItem / shop) + EatFood without full void unless already voiding
+local lastAutoHealAt = 0
+local function autoHealTick()
+    if IsOwner then return end
+    if not State.AutoHeal then return end
+    if State.VoidEat then return end -- void heal path already handles eating
+    if State.KnifeBusy then return end
+    if tick() - lastAutoHealAt < 2.0 then return end
+    if not getLocalHurt() then return end
+    lastAutoHealAt = tick()
+    task.spawn(function()
+        pcall(function()
+            if not findFood() then
+                buyFood()
+            end
+            if findFood() then
+                eatFood()
+            elseif MainEvent and IsHoodCustoms then
+                -- remote-only attempt if shop TP failed
+                for _, item in ipairs(HC_FOOD_ITEMS) do
+                    pcall(function() MainEvent:FireServer("BuyItem", item) end)
+                end
+                fireEatRemotes(findFood())
+            end
+        end)
+    end)
+end
+
 local function buyMask()
     if MainEvent then
         pcall(function() MainEvent:FireServer("Mask") end)
@@ -2356,6 +2630,28 @@ local function cmdAir(arg)
         returnToOwner()
     end
     notify("Air " .. (State.Air and "ON (floating)" or "OFF (ground)"))
+end
+
+-- .fake / .fp — stay in formation (fake position). Gun kills still work via silent aim + mouse remotes.
+-- Character does not hover/TP onto targets. Knife/stomp still need proximity (brief leave).
+local function cmdFake(arg)
+    if arg == "on" or arg == "1" or arg == "true" then
+        State.FakePos = true
+    elseif arg == "off" or arg == "0" or arg == "false" then
+        State.FakePos = false
+    else
+        State.FakePos = not State.FakePos
+    end
+    if State.FakePos then
+        -- snap back to slot so we start from formation
+        if not IsOwner and not State.InVoid then
+            State.Tracking = true
+            returnToOwner()
+        end
+        notify("FakePos ON — stay in formation, gun kills still work")
+    else
+        notify("FakePos OFF — normal hover/TP combat")
+    end
 end
 
 local function cmdPos(slot)
@@ -3007,6 +3303,7 @@ end
 local _lastMoonPosAt = 0
 local function moonCloseHover(plr)
     if State.VoidEat or State.InVoid then return end
+    if State.FakePos then return end -- stay in formation; silent aim still hits
     local my = getHRP()
     local their = getHRP(plr)
     if not my or not their then return end
@@ -3099,6 +3396,7 @@ local function moonShootBurst(plr, maxShots)
             if not gun then break end
         end
         activateTool(gun)
+        pcall(function() forceGunHit(plr, gun) end)
 
         if not IsHoodCustoms then
             pcall(function()
@@ -3175,6 +3473,7 @@ local function hcShootBurst(plr, maxShots)
             if not gun then break end
         end
         activateTool(gun)
+        pcall(function() forceGunHit(plr, gun) end)
 
         if shot % 4 == 0 then
             reloadGun(gun)
@@ -3389,8 +3688,13 @@ local function cmdMask()
 end
 
 local function cmdFix()
-    -- Full reset: stop all modes, clear tools, respawn character, return to formation
+    -- Full reset + real respawn (HC uses MainEvent RespawnCharacter / ResetCharacter)
+    notify("Fix — respawning...")
     clearCamlock()
+    clearAimLock()
+    pcall(function() RunService:UnbindFromRenderStep("StandVoidPin") end)
+    pcall(function() RunService:UnbindFromRenderStep(CAM_BIND) end)
+
     State.LoopKill = nil
     State.LoopKillKnife = false
     State.LoopKnock = nil
@@ -3400,44 +3704,120 @@ local function cmdFix()
     State.KnifeBusy = false
     State.SentryBusy = false
     State.InVoid = false
-    State.Tracking = false  -- pause formation until respawn finishes
+    State.VoidEat = false
+    State.CombatActive = false
+    State.Tracking = false
     State.Armed = false
+    VoidRecoverUntil = 0
+    VoidMinUntil = 0
+    VoidBloodAtEnter = nil
+    _voidEnterBusy = false
     setAttacking(false)
 
+    local oldChar = getChar()
+    local oldHum = getHum()
+
     pcall(function()
-        local h = getHum()
-        if h then
-            h.PlatformStand = false
-            h.Sit = false
-            h.WalkSpeed = 16
-            h.JumpPower = 50
-            h.JumpHeight = 7.2
-            h:ChangeState(Enum.HumanoidStateType.GettingUp)
-            h:UnequipTools()
+        if oldHum then
+            oldHum.PlatformStand = false
+            oldHum.Sit = false
+            pcall(function() oldHum:UnequipTools() end)
         end
     end)
 
-    -- hard respawn
+    -- 1) Game-native respawn remotes (Hood Customs + most hood clones)
+    if MainEvent then
+        pcall(function() MainEvent:FireServer("RespawnCharacter") end)
+        pcall(function() MainEvent:FireServer("ResetCharacter") end)
+        pcall(function() MainEvent:FireServer("GiveUp") end)
+        pcall(function() MainEvent:FireServer("RequestKOUpdate") end)
+    end
+    if UnreliableMainEvent then
+        pcall(function() UnreliableMainEvent:FireServer("RespawnCharacter") end)
+        pcall(function() UnreliableMainEvent:FireServer("ResetCharacter") end)
+    end
+    if MainFunction then
+        pcall(function() MainFunction:InvokeServer("RespawnCharacter") end)
+        pcall(function() MainFunction:InvokeServer("ResetCharacter") end)
+    end
+
+    -- 2) Fallback: kill humanoid so server respawns
     pcall(function()
-        LocalPlayer:LoadCharacter()
+        if oldHum and oldHum.Health > 0 then
+            oldHum.Health = 0
+        end
+    end)
+
+    -- 3) Last resort LoadCharacter (often blocked on custom char systems)
+    task.delay(0.35, function()
+        if getChar() == oldChar then
+            pcall(function() LocalPlayer:LoadCharacter() end)
+        end
     end)
 
     task.spawn(function()
+        -- wait until character actually changes / is alive
         local t0 = tick()
-        while tick() - t0 < 8 do
-            if getHRP() and getHum() and getHum().Health > 0 then break end
+        local newChar = nil
+        while tick() - t0 < 10 do
+            local c = getChar()
+            local h = getHum()
+            if c and c ~= oldChar and h and h.Health > 0 then
+                newChar = c
+                break
+            end
+            -- if same char recovered somehow, still accept if alive + HRP
+            if c and h and h.Health > 0 and getHRP() and (tick() - t0) > 1.5 then
+                newChar = c
+                break
+            end
+            -- keep pressing respawn if stuck
+            if MainEvent and (tick() - t0) > 2 and (math.floor((tick() - t0) * 2) % 3 == 0) then
+                pcall(function() MainEvent:FireServer("RespawnCharacter") end)
+                pcall(function() MainEvent:FireServer("ResetCharacter") end)
+            end
             task.wait(0.15)
         end
-        task.wait(0.35)
+
+        task.wait(0.4)
+
+        -- clean humanoid state
+        pcall(function()
+            local h = getHum()
+            if h then
+                h.PlatformStand = false
+                h.Sit = false
+                h.WalkSpeed = 16
+                h.JumpPower = 50
+                pcall(function() h.JumpHeight = 7.2 end)
+                h:ChangeState(Enum.HumanoidStateType.GettingUp)
+                h:ChangeState(Enum.HumanoidStateType.Running)
+                h:UnequipTools()
+            end
+        end)
+
         -- re-apply perks after respawn
         if Config.AutoArmor then pcall(buyArmor) end
         if Config.ArmorMax or Config.Inf then pcall(applyArmorMax) end
         if Config.AutoMask then pcall(buyMask) end
+        if Config.Muscle then pcall(applyMuscle) end
+
         State.Tracking = true
+        State.InVoid = false
+        State.VoidEat = false
+        State.CombatActive = false
+        State.KnifeBusy = false
+        State.LoopKillBusy = false
+        State.SentryBusy = false
+
         if not IsOwner then
-            returnToOwner()
+            for _ = 1, 6 do
+                pcall(returnToOwner)
+                task.wait(0.08)
+            end
         end
-        notify("Fix - respawned")
+
+        notify(newChar and "Fix — respawned" or "Fix — reset (respawn may be delayed)")
     end)
 end
 
@@ -3540,6 +3920,7 @@ local function cmdHelp()
     notify("See F9 for command list")
     print("[Stand] Commands:")
     print("  " .. Prefix .. "void / call / track / air [on|off] / pos <1-6>")
+    print("  " .. Prefix .. "fake [on|off] / fp  -- stay in formation; gun kills still work")
     print("  " .. Prefix .. "arm / unarm")
     print("  " .. Prefix .. "d <user>   -- knock")
     print("  " .. Prefix .. "b <user>   -- bring")
@@ -3557,6 +3938,7 @@ local function cmdHelp()
     print("  " .. Prefix .. "protect <user> / unprotect / wl / uwl")
     print("  " .. Prefix .. "target <user> / untarget")
     print("  " .. Prefix .. "armor / mask / buyfood / heal")
+    print("  " .. Prefix .. "autoheal [on|off]  -- auto buy+eat when hurt (HC: BuyItem/EatFood)")
     print("  " .. Prefix .. "reload / autoreload / fix / kick / help")
 end
 
@@ -3594,6 +3976,7 @@ local function onControlChat(msg, speaker)
     elseif cmd == "call" or cmd == "come" then cmdCall()
     elseif cmd == "track" or cmd == "follow" then cmdTrack()
     elseif cmd == "air" or cmd == "float" or cmd == "summon" then cmdAir(a1)
+    elseif cmd == "fake" or cmd == "fp" or cmd == "fakepos" then cmdFake(a1)
     elseif cmd == "pos" or cmd == "slot" then cmdPos(a1)
     elseif cmd == "arm" then cmdArm()
     elseif cmd == "unarm" then cmdUnarm()
@@ -3632,6 +4015,16 @@ local function onControlChat(msg, speaker)
     elseif cmd == "autoreload" then
         State.AutoReload = not State.AutoReload
         notify("AutoReload " .. (State.AutoReload and "ON" or "OFF"))
+    elseif cmd == "autoheal" or cmd == "ah" then
+        local a1 = parts[2]
+        if a1 == "on" or a1 == "1" or a1 == "true" then
+            State.AutoHeal = true
+        elseif a1 == "off" or a1 == "0" or a1 == "false" then
+            State.AutoHeal = false
+        else
+            State.AutoHeal = not State.AutoHeal
+        end
+        notify("AutoHeal " .. (State.AutoHeal and "ON" or "OFF"))
     elseif cmd == "fix" then cmdFix()
     elseif cmd == "kick" or cmd == "rejoin" then cmdKick()
     elseif cmd == "help" or cmd == "cmds" then cmdHelp()
@@ -3667,7 +4060,17 @@ end)
 ----------------------------------------------------------------------
 Connections.Main = RunService.Heartbeat:Connect(function()
     if IsOwner then return end
-    if not State.KnifeBusy and not State.LoopKillBusy and not State.Sweep
+    -- FakePos: keep formation even during gun combat (silent aim hits from slot)
+    -- Knife still leaves formation (needs proximity)
+    if State.FakePos then
+        if not State.KnifeBusy and not State.InVoid and not State.VoidEat then
+            -- force tracking so followOwner runs while shooting from fake pos
+            local prevTrack = State.Tracking
+            State.Tracking = true
+            followOwner()
+            State.Tracking = prevTrack
+        end
+    elseif not State.KnifeBusy and not State.LoopKillBusy and not State.Sweep
         and not State.LoopKill and not State.LoopKnock and not State.SentryBusy then
         followOwner()
     end
@@ -3675,6 +4078,7 @@ Connections.Main = RunService.Heartbeat:Connect(function()
     pcall(sentryTick)
     pcall(combatSurviveTick)
     pcall(armorMaintainTick)
+    pcall(autoHealTick)
 
     -- LoopKnock: shoot only, no stomp
     if State.LoopKnock and not State.LoopKillBusy and not State.KnifeBusy then
@@ -3823,8 +4227,23 @@ task.spawn(function()
     end
 end)
 
+-- Config override for auto heal (default ON)
+if Config.AutoHeal == false or Config.AutoHeal == "off" then
+    State.AutoHeal = false
+elseif Config.AutoHeal == true or Config.AutoHeal == "on" then
+    State.AutoHeal = true
+end
+
 startAutoPerks()
 pcall(ensureSilentAim)
+
+do
+    local n = 0
+    for _ in pairs(StandTeam) do n = n + 1 end
+    print("[Stand] Team protect:", n, "names (alts + owner + controllers) — stands will not kill each other")
+end
+print("[Stand] AutoHeal", State.AutoHeal and "ON" or "OFF",
+    "| HC remotes:", IsHoodCustoms and "EatFood/BuyItem/ACTION" or "classic")
 
 print("[Stand] Main v2 loaded |", IsOwner and "OWNER" or ("ALT slot " .. tostring(MySlot)),
     "| prefix", Prefix, "| owner", OwnerName, "| anim", tostring(Config.Anim or "none"))
