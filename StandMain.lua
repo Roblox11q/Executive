@@ -3018,10 +3018,9 @@ end
 -- .b — bring target near owner
 -- Steps:
 --   1) Knock the target if alive
---   2) Teleport our stand on top of the target
---   3) Press G to pick them up (game's native grab key)
---   4) Walk our stand incrementally to the owner — target is carried via the grab
---   5) Press G again to drop them next to owner
+--   2) Snap our stand onto the target, attach a local WeldConstraint (target's HRP → our HRP)
+--   3) Move our stand incrementally toward the owner — target is welded and rides with us
+--   4) Destroy the weld to drop them next to owner
 function F.cmdBring(user)
     local plr = F.findPlayer(user)
     if not plr then
@@ -3047,67 +3046,7 @@ function F.cmdBring(user)
             return
         end
 
-        -- Simulate a G keypress (hold = press+release after delay, tap = instant)
-        local function pressG(hold)
-            local vim = pcall(function() return game:GetService("VirtualInputManager") end)
-                and game:GetService("VirtualInputManager")
-            if vim then
-                pcall(function() vim:SendKeyEvent(true,  Enum.KeyCode.G, false, game) end)
-                task.wait(hold and 0.12 or 0.07)
-                pcall(function() vim:SendKeyEvent(false, Enum.KeyCode.G, false, game) end)
-            end
-            -- Fallback: VirtualUser
-            local vu = pcall(function() return game:GetService("VirtualUser") end)
-                and game:GetService("VirtualUser")
-            if vu then
-                pcall(function() vu:SetKeyDown("0x47") end)   -- G
-                task.wait(hold and 0.12 or 0.07)
-                pcall(function() vu:SetKeyUp("0x47") end)
-            end
-            -- Also fire the Grabbing remote so the server registers it
-            if MainEvent then
-                pcall(function() MainEvent:FireServer("Grabbing") end)
-            end
-            if UnreliableMainEvent then
-                pcall(function() UnreliableMainEvent:FireServer("Grabbing") end)
-            end
-        end
-
-        -- Snap our stand directly onto (just above) the target so G can reach them
-        local function snapOntoTarget()
-            local theirHRP = F.getHRP(plr)
-            local myHRP    = F.getHRP()
-            if not theirHRP or not myHRP then return false end
-            local grabPos = theirHRP.Position + Vector3.new(0, 1.2, 0)
-            pcall(function()
-                myHRP.CFrame = CFrame.new(grabPos)
-                myHRP.AssemblyLinearVelocity  = Vector3.zero
-                myHRP.AssemblyAngularVelocity = Vector3.zero
-            end)
-            return true
-        end
-
-        -- Move our stand one step toward a target position, returns remaining distance
-        local function stepToward(targetPos, stepSize)
-            local myHRP = F.getHRP()
-            if not myHRP then return 0 end
-            local myPos  = myHRP.Position
-            local dir    = targetPos - myPos
-            local dist   = dir.Magnitude
-            if dist < 1 then return dist end
-            local step   = math.min(stepSize, dist - 1)
-            local newPos = myPos + dir.Unit * step
-            local safeY  = math.max(newPos.Y, (Workspace.FallenPartsDestroyHeight or -500) + 32)
-            newPos = Vector3.new(newPos.X, safeY, newPos.Z)
-            pcall(function()
-                myHRP.CFrame = CFrame.new(newPos, Vector3.new(targetPos.X, newPos.Y, targetPos.Z))
-                myHRP.AssemblyLinearVelocity  = Vector3.zero
-                myHRP.AssemblyAngularVelocity = Vector3.zero
-            end)
-            return (targetPos - newPos).Magnitude
-        end
-
-        -- 1) Knock the target first if still alive
+        -- 1) Knock the target first if alive
         if F.isAlive(plr) and not F.isKO(plr) then
             F.notify("Bring: knocking " .. plr.Name .. "...")
             F.setAimLock(plr)
@@ -3131,57 +3070,100 @@ function F.cmdBring(user)
             return
         end
 
-        -- 2) Teleport our stand on top of the knocked target
-        F.notify("Bring: picking up " .. plr.Name)
-        snapOntoTarget()
-        task.wait(0.1)
+        -- 2) Snap our HRP on top of target's HRP, then weld them together
+        F.notify("Bring: attaching " .. plr.Name)
 
-        -- 3) Press G to grab — retry a few times if needed
-        for attempt = 1, 4 do
-            snapOntoTarget()         -- stay on top each attempt
-            pressG(true)
-            task.wait(0.15)
-            -- Check if grab registered: target's HRP should now be very close to ours
-            local myHRP    = F.getHRP()
-            local theirHRP = F.getHRP(plr)
-            if myHRP and theirHRP then
-                local grabDist = (myHRP.Position - theirHRP.Position).Magnitude
-                if grabDist < 4.5 then
-                    break   -- grab likely attached
-                end
-            end
-            if attempt < 4 then task.wait(0.1) end
+        local myHRP    = F.getHRP()
+        local theirHRP = F.getHRP(plr)
+        if not myHRP or not theirHRP then
+            F.notify("Bring: missing HRP")
+            F.endCombat()
+            State.Tracking = true
+            F.returnToOwner()
+            return
         end
 
-        -- 4) Walk our stand toward the owner in small steps.
-        --    Target is attached via the game's grab — they ride with us.
+        -- Snap our stand onto the target
+        pcall(function()
+            myHRP.CFrame = theirHRP.CFrame + Vector3.new(0, 1.0, 0)
+            myHRP.AssemblyLinearVelocity  = Vector3.zero
+            myHRP.AssemblyAngularVelocity = Vector3.zero
+        end)
+        task.wait(0.08)
+
+        -- Create a WeldConstraint parented to our HRP: target's HRP locked to ours
+        local weld = nil
+        pcall(function()
+            weld = Instance.new("WeldConstraint")
+            weld.Part0 = myHRP        -- our stand (we move this)
+            weld.Part1 = theirHRP     -- target follows
+            weld.Parent = myHRP       -- lives on our HRP so it moves with us
+        end)
+
+        if not weld then
+            F.notify("Bring: weld failed")
+            F.endCombat()
+            State.Tracking = true
+            F.returnToOwner()
+            return
+        end
+
+        task.wait(0.1) -- give physics a tick to register the weld
+
+        -- 3) Walk our stand toward the owner in small steps
+        --    WeldConstraint keeps target.HRP locked to our HRP, so they ride with us
         F.notify("Bring: hauling to owner...")
-        local stepSize  = IsHoodCustoms and 3.5 or 5.0
+        local stepSize  = IsHoodCustoms and 4.0 or 6.0
         local stopDist  = 5.0
         local haulUntil = tick() + 7.0
+        local stepDelay = IsHoodCustoms and 0.11 or 0.08
 
         while tick() < haulUntil do
             local oHRP = F.getHRP(owner)
-            if not oHRP then break end
+            myHRP      = F.getHRP()       -- re-fetch each step (respawn safety)
+            if not oHRP or not myHRP then break end
             if not F.getChar(plr) then break end
 
-            local remaining = stepToward(oHRP.Position, stepSize)
-            if remaining <= stopDist then break end
+            local ownerPos = oHRP.Position
+            local myPos    = myHRP.Position
+            local dist     = (ownerPos - myPos).Magnitude
+            if dist <= stopDist then break end
 
-            -- Keep re-pressing G every step so the server hold doesn't time out
-            pressG(false)
-            task.wait(IsHoodCustoms and 0.13 or 0.09)
+            local dir    = ownerPos - myPos
+            local step   = math.min(stepSize, dist - stopDist)
+            local newPos = myPos + dir.Unit * step
+            local safeY  = math.max(newPos.Y, (Workspace.FallenPartsDestroyHeight or -500) + 32)
+            newPos = Vector3.new(newPos.X, safeY, newPos.Z)
+
+            pcall(function()
+                myHRP.CFrame = CFrame.new(newPos, Vector3.new(ownerPos.X, newPos.Y, ownerPos.Z))
+                myHRP.AssemblyLinearVelocity  = Vector3.zero
+                myHRP.AssemblyAngularVelocity = Vector3.zero
+            end)
+
+            task.wait(stepDelay)
         end
 
-        -- 5) Press G once more to drop the target next to owner
-        task.wait(0.1)
-        pressG(true)
-        F.notify("Bring: dropped " .. plr.Name .. " at owner")
+        -- 4) Destroy weld to drop the target next to owner
+        pcall(function()
+            if weld and weld.Parent then
+                weld:Destroy()
+            end
+        end)
 
+        -- Zero out target velocity so they don't fly off on release
+        pcall(function()
+            local h = F.getHRP(plr)
+            if h then
+                h.AssemblyLinearVelocity  = Vector3.zero
+                h.AssemblyAngularVelocity = Vector3.zero
+            end
+        end)
+
+        F.notify("Bring done → " .. plr.Name)
         F.endCombat()
         State.Tracking = true
         F.returnToOwner()
-        F.notify("Bring done → " .. plr.Name)
     end)
 end
 
