@@ -2398,9 +2398,16 @@ end
 
 -- COMBAT: STOMP
 ----------------------------------------------------------------------
+-- HC stomp mechanic (from decompiled source):
+--   The client does a downward raycast from LowerTorso for (UpperTorso.Size.Y * 4.5) studs.
+--   The ray must hit a part that IsDescendantOf(workspace.Players).
+--   Then it plays a 0.55s animation, fires "Stomp", and waits 0.5s debounce = ~1.05s total.
+--   Guard conditions: K.O must be false (OUR stand), Attacking_CLIENT false, Reloading_CLIENT false,
+--   Grabbed nil, no GRABBING_CONSTRAINT.
+--   So we must: position LowerTorso JUST above the victim, clear our flags, then fire.
+----------------------------------------------------------------------
 function F.stompTarget(plr, times)
     if not plr then return end
-    -- HC: fewer stomps + slower cadence = no CLIENT_UNSYNCED_SERVER
     if IsHoodCustoms then
         times = math.min(times or 8, 6)
     else
@@ -2409,52 +2416,51 @@ function F.stompTarget(plr, times)
     State.Tracking = false
     F.clearAimLock()
 
-    -- unequip so stomp input isn't eaten by gun/tool
+    -- unequip so Attacking_CLIENT / tool-hold flags are cleared before stomping
     pcall(function()
         local h = F.getHum()
         if h then h:UnequipTools() end
     end)
     State.Armed = false
-    task.wait(0.05)
+    task.wait(0.1)  -- give server time to clear equip state
 
-    local lastStompMove = 0
     for i = 1, times do
         if not F.getChar(plr) then break end
-        -- if they got up and are no longer KO, stop stomping this cycle
-        if not F.isKO(plr) and i > 3 then
+        -- stop if target got back up with meaningful health
+        if not F.isKO(plr) and i > 2 then
             local h = F.getHum(plr)
             if h and h.Health > 20 then break end
         end
 
         local my = F.getHRP()
+        local myChar = F.getChar()
         local theirChar = F.getChar(plr)
-        local their = F.getHRP(plr)
-        -- prefer UpperTorso for standing on knocked body (HRP can float)
-        local standOn = theirChar and (theirChar:FindFirstChild("UpperTorso") or theirChar:FindFirstChild("Torso") or their)
+        -- Target the UpperTorso/Torso — that's what the raycast needs to hit
+        local standOn = theirChar and (
+            theirChar:FindFirstChild("UpperTorso")
+            or theirChar:FindFirstChild("Torso")
+            or F.getHRP(plr)
+        )
+
         if my and standOn then
-            local pos = standOn.Position + Vector3.new(0, 2.15, 0)
-            -- never under map
-            if pos.Y < standOn.Position.Y + 0.5 then
-                pos = Vector3.new(pos.X, standOn.Position.Y + 2.15, pos.Z)
-            end
+            -- HC: position our LowerTorso just above their UpperTorso so the downward
+            -- raycast hits them. LowerTorso is roughly 1.0 stud below HRP center,
+            -- so set HRP to standOn.Y + 1.5 (LowerTorso ends up at ~standOn.Y + 0.5).
+            -- Non-HC: snap directly on top.
+            local targetY = standOn.Position.Y + (IsHoodCustoms and 1.5 or 1.8)
+            local pos = Vector3.new(standOn.Position.X, targetY, standOn.Position.Z)
+            local mapFloor = (Workspace.FallenPartsDestroyHeight or -500) + 30
+            if pos.Y < mapFloor then pos = Vector3.new(pos.X, mapFloor, pos.Z) end
+
             pcall(function()
                 local cf = CFrame.new(pos)
                 if IsHoodCustoms then
-                    local now = tick()
-                    if now - lastStompMove >= 0.16 then
-                        lastStompMove = now
-                        local dist = (pos - my.Position).Magnitude
-                        if dist > 10 then
-                            my.CFrame = CFrame.new(my.Position:Lerp(pos, 0.5))
-                        else
-                            my.CFrame = cf
-                        end
-                        my.AssemblyLinearVelocity = Vector3.zero
-                        my.AssemblyAngularVelocity = Vector3.zero
-                    end
+                    -- Snap directly — we need to be ON them, not lerping toward them
+                    my.CFrame = cf
+                    my.AssemblyLinearVelocity = Vector3.zero
+                    my.AssemblyAngularVelocity = Vector3.zero
                 else
-                    local ch = F.getChar()
-                    if ch and ch.PivotTo then ch:PivotTo(cf) end
+                    if myChar and myChar.PivotTo then myChar:PivotTo(cf) end
                     my.CFrame = cf
                     my.AssemblyLinearVelocity = Vector3.zero
                     my.AssemblyAngularVelocity = Vector3.zero
@@ -2462,51 +2468,56 @@ function F.stompTarget(plr, times)
             end)
         end
 
-        -- ensure upright / not ragdolled ourselves
+        -- Clear our own BodyEffects flags so the stomp guard doesn't block us
+        pcall(function()
+            local be = myChar and myChar:FindFirstChild("BodyEffects")
+            if not be then return end
+            local ac = be:FindFirstChild("Attacking_CLIENT")
+            if ac and ac:IsA("BoolValue") then ac.Value = false end
+            local rc = be:FindFirstChild("Reloading_CLIENT")
+            if rc and rc:IsA("BoolValue") then rc.Value = false end
+            local at = be:FindFirstChild("Attacking")
+            if at and at:IsA("BoolValue") then at.Value = false end
+        end)
+
+        -- Ensure we're upright and not ragdolled (stomp guard checks K.O on our char)
         pcall(function()
             local h = F.getHum()
             if h then
                 h.PlatformStand = false
                 h.Sit = false
-                if h:GetState() == Enum.HumanoidStateType.Physics
-                    or h:GetState() == Enum.HumanoidStateType.Ragdoll then
+                local st = h:GetState()
+                if st == Enum.HumanoidStateType.Physics or st == Enum.HumanoidStateType.Ragdoll then
                     h:ChangeState(Enum.HumanoidStateType.GettingUp)
                 end
             end
         end)
 
-        -- E key (stomp) — hold a bit longer for server registration
+        -- Brief settle so CFrame registers server-side before the keypress
+        task.wait(0.06)
+
+        -- E key — the game's stomp function triggers on KeyCode.E InputBegan
         pcall(function()
             local vim = game:GetService("VirtualInputManager")
             if vim then
                 vim:SendKeyEvent(true, Enum.KeyCode.E, false, game)
-                task.wait(0.08)
+                task.wait(0.04)
                 vim:SendKeyEvent(false, Enum.KeyCode.E, false, game)
             end
         end)
-        pcall(function()
-            local vu = game:GetService("VirtualUser")
-            if vu then
-                vu:SetKeyDown("0x45")
-                task.wait(0.07)
-                vu:SetKeyUp("0x45")
-            end
-        end)
 
-        -- primary stomp remote only (spam invalid names can trip client/server)
+        -- Fire the remote directly as well (belt + suspenders)
         if MainEvent then
             pcall(function() MainEvent:FireServer("Stomp") end)
-            pcall(function() MainEvent:FireServer("Stomp", true) end)
-        end
-        if UnreliableMainEvent then
-            pcall(function() UnreliableMainEvent:FireServer("Stomp") end)
         end
         if StompEffectEvent then
             pcall(function() StompEffectEvent:FireServer() end)
-            pcall(function() StompEffectEvent:FireServer(true) end)
         end
 
-        task.wait(IsHoodCustoms and 0.18 or 0.12)
+        -- HC stomp has a hard 1.05s cycle (0.55s anim + 0.5s debounce).
+        -- Waiting less than this means the next attempt is blocked by v69=true.
+        -- Non-HC is faster.
+        task.wait(IsHoodCustoms and 1.1 or 0.14)
     end
 end
 
@@ -3004,7 +3015,12 @@ function F.cmdKat(user)
     F.notify("Kat loopkill ON " .. plr.Name .. " (katana/knife + stomp)")
 end
 
--- .b — bring target near owner (improved)
+-- .b — bring target near owner
+-- HC grab mechanic (from dump): FireServer("Grabbing") with no args.
+-- Server checks proximity and attaches GRABBING_CONSTRAINT weld to target.
+-- To haul: re-fire "Grabbing" to maintain weld, then move OUR stand incrementally
+-- toward owner each step — target follows via the weld constraint.
+-- Do NOT snap to owner position directly; small steps carry the target along.
 function F.cmdBring(user)
     local plr = F.findPlayer(user)
     if not plr then
@@ -3030,56 +3046,45 @@ function F.cmdBring(user)
             return
         end
 
-        local function fireGrab(on)
+        -- Fire the grab remote (HC: just "Grabbing" with no extra args per dump)
+        local function fireGrab()
             if not MainEvent then return end
-            -- Hood Customs / most clones use plain "Grabbing"
             pcall(function() MainEvent:FireServer("Grabbing") end)
-            pcall(function() MainEvent:FireServer("Grabbing", on == true) end)
-            pcall(function() MainEvent:FireServer("Grabbing", on) end)
-            pcall(function() MainEvent:FireServer("Grab") end)
-            pcall(function() MainEvent:FireServer("Carry") end)
             if UnreliableMainEvent then
                 pcall(function() UnreliableMainEvent:FireServer("Grabbing") end)
-                pcall(function() UnreliableMainEvent:FireServer("Grabbing", on == true) end)
             end
         end
 
-        local function getClose(targetPlr, tries)
-            tries = tries or 10
-            for i = 1, tries do
-                local their = F.getHRP(targetPlr)
-                local my = F.getHRP()
-                if not their or not my then break end
-
-                -- Sit right on / slightly above the body (best for grab registration)
-                local offset = CFrame.new(0, 1.4 + (i % 3) * 0.15, 0.35)
-                pcall(function()
-                    if not IsHoodCustoms then
-                        local ch = F.getChar()
-                        if ch and ch.PivotTo then
-                            ch:PivotTo(their.CFrame * offset)
-                        end
-                    end
-                    my.CFrame = their.CFrame * offset
-                    my.AssemblyLinearVelocity = Vector3.zero
-                    my.AssemblyAngularVelocity = Vector3.zero
-                end)
-
-                fireGrab(true)
-                task.wait(IsHoodCustoms and 0.07 or 0.05)
-            end
+        -- Snap our stand directly onto the target's torso to register the grab
+        local function snapOntoTarget()
+            local their = F.getHRP(plr)
+            local my = F.getHRP()
+            if not their or not my then return false end
+            local theirChar = F.getChar(plr)
+            local torso = theirChar and (
+                theirChar:FindFirstChild("UpperTorso")
+                or theirChar:FindFirstChild("Torso")
+                or their
+            )
+            -- Sit just above their torso center — server proximity check requires being close
+            local grabPos = torso.Position + Vector3.new(0, 1.0, 0)
+            pcall(function()
+                my.CFrame = CFrame.new(grabPos)
+                my.AssemblyLinearVelocity = Vector3.zero
+                my.AssemblyAngularVelocity = Vector3.zero
+            end)
+            return true
         end
 
-        -- 1) Prefer knocking first (grab is much more reliable on KO'd players)
+        -- 1) Knock first if alive — grab only works reliably on KO'd players
         if F.isAlive(plr) and not F.isKO(plr) then
-            F.notify("Bring: knocking first...")
+            F.notify("Bring: knocking " .. plr.Name .. "...")
             F.setAimLock(plr)
             pcall(F.ensureSilentAim)
             F.setCamlock(plr, 3)
             F.shootTarget(plr)
-
             local t0 = tick()
-            while tick() - t0 < 2.8 do
+            while tick() - t0 < 3.0 do
                 if F.isKO(plr) or not F.getChar(plr) then break end
                 task.wait(0.12)
             end
@@ -3095,52 +3100,59 @@ function F.cmdBring(user)
             return
         end
 
-        -- 2) Get on them + start grab
+        -- 2) Snap onto target and register grab
         F.notify("Bring: grabbing " .. plr.Name)
-        getClose(plr, 14)
-
-        -- 3) Haul toward owner while keeping grab active
-        local haulUntil = tick() + 4.5
-        while tick() < haulUntil do
-            local oHRP = F.getHRP(owner)
-            local their = F.getHRP(plr)
-            local my = F.getHRP()
-            if not oHRP or not my then break end
-
-            -- Keep re-attaching if they slip
-            if their then
-                pcall(function()
-                    local cf = their.CFrame * CFrame.new(0, 1.35, 0.3)
-                    if not IsHoodCustoms then
-                        local ch = F.getChar()
-                        if ch and ch.PivotTo then ch:PivotTo(cf) end
-                    end
-                    my.CFrame = cf
-                    my.AssemblyLinearVelocity = Vector3.zero
-                end)
-            end
-
-            -- Move stand (and hopefully the grabbed player) toward owner
-            pcall(function()
-                local dest = oHRP.CFrame * CFrame.new(0, 0, 3.5)
-                if not IsHoodCustoms then
-                    local ch = F.getChar()
-                    if ch and ch.PivotTo then ch:PivotTo(dest) end
-                end
-                my.CFrame = dest
-                my.AssemblyLinearVelocity = Vector3.zero
-            end)
-
-            fireGrab(true)
-            task.wait(IsHoodCustoms and 0.09 or 0.06)
+        -- Multiple attach attempts — server may need a few ticks to register
+        for _ = 1, 6 do
+            snapOntoTarget()
+            fireGrab()
+            task.wait(0.08)
         end
 
-        -- 4) Release near owner
-        fireGrab(false)
-        task.wait(0.15)
+        -- 3) Haul: move stand incrementally toward owner each step.
+        -- The GRABBING_CONSTRAINT weld carries the target with us.
+        -- Small steps (not full snap) so the physics constraint stays intact.
+        local haulUntil = tick() + 5.0
+        local stepSize = IsHoodCustoms and 4.0 or 6.0  -- studs per step toward owner
+        while tick() < haulUntil do
+            local oHRP = F.getHRP(owner)
+            local my = F.getHRP()
+            local theirHRP = F.getHRP(plr)
+            if not oHRP or not my then break end
+
+            local ownerPos = oHRP.Position
+            local myPos = my.Position
+            local distToOwner = (ownerPos - myPos).Magnitude
+
+            -- Done if we're within 5 studs of owner
+            if distToOwner < 5 then break end
+
+            -- Step toward owner (don't snap all the way — that breaks the weld)
+            local dir = (ownerPos - myPos)
+            local moveDir = dir.Magnitude > 0 and dir.Unit or Vector3.new(0, 0, -1)
+            local step = math.min(stepSize, distToOwner - 3)
+            local newPos = myPos + moveDir * step
+            -- Keep Y at a safe height (don't go underground)
+            local safeY = math.max(newPos.Y, (Workspace.FallenPartsDestroyHeight or -500) + 32)
+            newPos = Vector3.new(newPos.X, safeY, newPos.Z)
+
+            pcall(function()
+                my.CFrame = CFrame.new(newPos, Vector3.new(ownerPos.X, newPos.Y, ownerPos.Z))
+                my.AssemblyLinearVelocity = Vector3.zero
+                my.AssemblyAngularVelocity = Vector3.zero
+            end)
+
+            -- Re-fire grab every step to maintain the constraint
+            fireGrab()
+            task.wait(IsHoodCustoms and 0.12 or 0.08)
+        end
+
+        -- 4) Release
         if MainEvent then
-            pcall(function() MainEvent:FireServer("Grabbing", false) end)
+            -- Fire once more near owner to ensure the target lands close
             pcall(function() MainEvent:FireServer("Grabbing") end)
+            task.wait(0.1)
+            -- No explicit "release" remote exists in the dump; stopping firing is the release
         end
 
         F.endCombat()
