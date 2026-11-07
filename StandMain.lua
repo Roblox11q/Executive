@@ -682,9 +682,8 @@ local function ensureSilentAim()
     -- keep mouse remotes + screen aim on target while locked
     local lastMouseFire = 0
     local lastCamSoft = 0
-    local lastScreenAim = 0
     local function pushAim(aim)
-        pcall(function() fireMouse(aim) end)
+        -- Always update local BodyEffects MousePos (safe)
         pcall(function()
             local be = getChar() and getChar():FindFirstChild("BodyEffects")
             if not be then return end
@@ -693,7 +692,13 @@ local function ensureSilentAim()
                 if mp and mp:IsA("Vector3Value") then mp.Value = aim end
             end
         end)
-        -- move real cursor toward target (helps gun LocalScripts that read mouse pixel pos)
+        -- FakePos on HC: BodyEffects only — FireServer spam + static body = red errors
+        if State.FakePos and IsHoodCustoms then
+            return
+        end
+        pcall(function() fireMouse(aim) end)
+        -- never move real cursor / camera on FakePos
+        if State.FakePos then return end
         if IsDersHood or IsHoodCustoms then
             pcall(function()
                 if not Camera then return end
@@ -716,15 +721,18 @@ local function ensureSilentAim()
         local now = tick()
         local interval = 0.0
         if IsHoodCustoms then
-            interval = 0.055
+            -- FakePos: very slow BodyEffects-only updates
+            interval = State.FakePos and 0.18 or 0.08
         elseif IsDersHood then
-            interval = 0.02  -- fast remote spam — Der guns need fresh MousePos
+            interval = 0.02
         end
         if now - lastMouseFire >= interval then
             lastMouseFire = now
             pushAim(aim)
         end
-        local camInterval = IsHoodCustoms and 0.05 or (IsDersHood and 0.0 or 0.0)
+        -- FakePos / HC: do NOT force Camera.CFrame — major source of red client errors
+        if State.FakePos or IsHoodCustoms then return end
+        local camInterval = IsDersHood and 0.0 or 0.0
         if now - lastCamSoft >= camInterval then
             lastCamSoft = now
             pcall(function()
@@ -1045,12 +1053,19 @@ local function camlockStep()
     local aim = getAimPos(plr)
     if not aim then return end
     local now = tick()
-    local interval = IsHoodCustoms and 0.06 or 0.0
+    local interval = IsHoodCustoms and 0.08 or 0.0
+    if State.FakePos then interval = 0.12 end
     if now - lastCamMouseFire >= interval then
         lastCamMouseFire = now
         pcall(function() fireMouse(aim) end)
+        pcall(function()
+            local be = getChar() and getChar():FindFirstChild("BodyEffects")
+            local mp = be and be:FindFirstChild("MousePos")
+            if mp and mp:IsA("Vector3Value") then mp.Value = aim end
+        end)
     end
-    -- soft look without breaking CameraModule / HC gun rays
+    -- FakePos / HC: never force Camera.CFrame (red ERROR_CLIENT_UNSYNCED_SERVER / gun ray NaNs)
+    if State.FakePos or IsHoodCustoms then return end
     pcall(function()
         if not Camera or Camera.CameraType == Enum.CameraType.Scriptable then return end
         local origin = Camera.CFrame.Position
@@ -1071,6 +1086,11 @@ local function setCamlock(plr, seconds)
     setAimLock(plr)
     pcall(ensureSilentAim)
     CamlockUntil = (seconds and seconds > 0) and (tick() + seconds) or 0
+    -- FakePos: aim lock only — no RenderStep camera bind (avoids red errors)
+    if State.FakePos then
+        pcall(function() RunService:UnbindFromRenderStep(CAM_BIND) end)
+        return
+    end
     pcall(function()
         RunService:UnbindFromRenderStep(CAM_BIND)
         RunService:BindToRenderStep(CAM_BIND, Enum.RenderPriority.Last.Value, camlockStep)
@@ -1081,6 +1101,34 @@ end
 -- FORMATION
 ----------------------------------------------------------------------
 local _lastFormAt = 0
+local _fakeFreezeCF = nil -- when FakePos + shooting: pin here, zero CFrame writes
+
+local function clearFakeFreeze()
+    _fakeFreezeCF = nil
+end
+
+local function pinFakeFreeze()
+    if not State.FakePos then
+        _fakeFreezeCF = nil
+        return
+    end
+    local my = getHRP()
+    if not my then return end
+    -- prefer current slot relative to owner once; then freeze
+    local owner = getOwner()
+    local oHRP = owner and getHRP(owner)
+    if oHRP then
+        local offset = SLOT_CF[MySlot] or SLOT_CF[2]
+        _fakeFreezeCF = oHRP.CFrame * offset
+        pcall(function()
+            my.CFrame = _fakeFreezeCF
+            my.AssemblyLinearVelocity = Vector3.zero
+            my.AssemblyAngularVelocity = Vector3.zero
+        end)
+    else
+        _fakeFreezeCF = my.CFrame
+    end
+end
 
 -- Hold formation slot relative to owner. Soft on HC to avoid CLIENT_UNSYNCED_SERVER.
 -- force=true ignores Tracking (used by FakePos during combat).
@@ -1099,6 +1147,26 @@ local function holdFormation(force)
         return
     end
     if not force and not State.Tracking then return end
+
+    -- FakePos + gun combat: DO NOT write CFrame at all (only kill velocity).
+    -- Writing HRP while activating the gun = ERROR_CLIENT_UNSYNCED_SERVER on HC.
+    if State.FakePos and (State.CombatActive or AimLockPlayer ~= nil) and not State.KnifeBusy then
+        pcall(function()
+            local my = getHRP()
+            if not my then return end
+            if _fakeFreezeCF then
+                -- only re-pin if we drifted a lot (rare); otherwise velocity only
+                local dist = (my.Position - _fakeFreezeCF.Position).Magnitude
+                if dist > 8 then
+                    my.CFrame = _fakeFreezeCF
+                end
+            end
+            my.AssemblyLinearVelocity = Vector3.zero
+            my.AssemblyAngularVelocity = Vector3.zero
+        end)
+        return
+    end
+
     local owner = getOwner()
     if not owner then return end
     local oHRP = getHRP(owner)
@@ -1106,7 +1174,6 @@ local function holdFormation(force)
     if not oHRP or not my then return end
     local offset = SLOT_CF[MySlot] or SLOT_CF[2]
     local dest = oHRP.CFrame * offset
-    -- never allow formation Y to go under map
     if dest.Position.Y < (oHRP.Position.Y - 2) then
         dest = CFrame.new(dest.Position.X, oHRP.Position.Y + math.max(offset.Y, 0), dest.Position.Z)
             * (dest - dest.Position)
@@ -1114,24 +1181,23 @@ local function holdFormation(force)
     pcall(function()
         if IsHoodCustoms then
             local now = tick()
-            -- throttle hard snaps; FakePos still updates often enough to stick
-            local minGap = force and 0.05 or 0.12
+            local minGap = force and 0.10 or 0.16
             if now - _lastFormAt < minGap then
-                -- only kill residual velocity so we don't drift/fall
                 local v = my.AssemblyLinearVelocity
-                if v.Magnitude > 6 or v.Y < -2 then
-                    my.AssemblyLinearVelocity = Vector3.new(v.X * 0.3, math.max(v.Y, 0), v.Z * 0.3)
+                if v.Magnitude > 4 or v.Y < -1 then
+                    my.AssemblyLinearVelocity = Vector3.new(0, math.max(v.Y, 0), 0)
                 end
+                my.AssemblyAngularVelocity = Vector3.zero
                 return
             end
             _lastFormAt = now
             local dist = (dest.Position - my.Position).Magnitude
             if dist > 14 then
-                my.CFrame = dest
+                my.CFrame = my.CFrame:Lerp(dest, 0.35)
+            elseif dist > 4 then
+                my.CFrame = my.CFrame:Lerp(dest, 0.28)
             elseif dist > 1.5 then
-                my.CFrame = my.CFrame:Lerp(dest, 0.55)
-            else
-                my.CFrame = dest
+                my.CFrame = my.CFrame:Lerp(dest, 0.18)
             end
             my.AssemblyLinearVelocity = Vector3.zero
             my.AssemblyAngularVelocity = Vector3.zero
@@ -1801,14 +1867,13 @@ local function exitCombatVoid()
     end
 end
 
--- Hover near target. Pure top-down + zeroing velocity on airborne movers causes red client ray errors on Hood Customs.
--- Hood Customs: wider strafe + randomized side so the stand is harder to track/kill mid-fight.
--- HC throttle: hard CFrame every shot caused ERROR_CLIENT_UNSYNCED_SERVER (red client).
+-- Slow TP / hover near target. FakePos = no movement.
+-- HC: large throttle + small lerp steps so we still close distance WITHOUT
+-- ERROR_CLIENT_UNSYNCED_SERVER (hard/fast TP is what triggers the red error).
 local _lastHoverAt = 0
 local function hoverOverTarget(plr, height)
     if State.VoidEat or State.InVoid then return end
-    -- FakePos: stay in formation; only aim remotes move, character does not
-    if State.FakePos then return end
+    if State.FakePos then return end -- never move body in FakePos
     height = height or State.HoverHeight or 4
     local my = getHRP()
     local their = getHRP(plr)
@@ -1819,26 +1884,21 @@ local function hoverOverTarget(plr, height)
     local airborne = speed > 12 or (their.Position.Y - (Workspace.FallenPartsDestroyHeight or -500) > 40
         and math.abs(vel.Y) > 4)
 
-    -- When target is airborne / fast-moving, stand beside them (not pure above) and match velocity
-    -- so gun rays stay angled and client scripts don't NaN out.
     local ox, oz
-    local side = IsHoodCustoms and 2.6 or 1.4
+    local side = IsHoodCustoms and 2.8 or 1.4
     if IsHoodCustoms then
-        -- Throttle position writes: gun LocalScripts desync when HRP CFrame spam + Activate collide
+        -- SLOW approach: max ~4 writes/sec, small steps
         local now = tick()
-        if now - _lastHoverAt < 0.22 then
+        if now - _lastHoverAt < 0.28 then
             return
         end
         _lastHoverAt = now
-        -- slower orbit + larger radius = fewer large snaps per second
-        local phase = (now * 1.35) % (math.pi * 2)
-        local orbitR = 2.8 + (math.sin(now * 0.9) * 0.4)
+        local phase = (now * 0.85) % (math.pi * 2)
+        local orbitR = 3.0
         ox = math.cos(phase) * orbitR
         oz = math.sin(phase) * orbitR
-        height = math.max(2.2, math.min(height, 3.2))
-        if airborne then
-            height = math.min(height, 2.4)
-        end
+        height = math.max(2.0, math.min(height, 3.0))
+        if airborne then height = math.min(height, 2.3) end
     elseif airborne then
         if speed > 2 then
             local flat = Vector3.new(vel.X, 0, vel.Z)
@@ -1859,7 +1919,6 @@ local function hoverOverTarget(plr, height)
     end
 
     local targetPos = their.Position + Vector3.new(ox, height, oz)
-    -- hard floor: never write a CFrame under the target / under the map
     local floorY = their.Position.Y + 1.2
     if targetPos.Y < floorY then
         targetPos = Vector3.new(targetPos.X, floorY, targetPos.Z)
@@ -1868,9 +1927,8 @@ local function hoverOverTarget(plr, height)
     if targetPos.Y < mapFloor then
         targetPos = Vector3.new(targetPos.X, mapFloor, targetPos.Z)
     end
+
     pcall(function()
-        -- Look at head height, but keep enough horizontal offset so ray isn't vertical
-        -- (pure top-down rays = red client errors on Hood Customs gun scripts)
         local lookY = (aim and aim.Y) or (their.Position.Y + 1.2)
         local look = Vector3.new(aim.X, lookY, aim.Z)
         local toLook = look - targetPos
@@ -1880,13 +1938,11 @@ local function hoverOverTarget(plr, height)
             if push.Magnitude < 0.1 then push = Vector3.new(1, 0, 0) end
             look = look + push.Unit * 1.2
         end
-        local cf = CFrame.new(targetPos, look)
-        -- HC: never PivotTo; soft-step CFrame only when far (hard snaps = ERROR_CLIENT_UNSYNCED_SERVER)
+
         if not IsHoodCustoms then
+            local cf = CFrame.new(targetPos, look)
             local ch = getChar()
-            if ch and ch.PivotTo then
-                ch:PivotTo(cf)
-            end
+            if ch and ch.PivotTo then ch:PivotTo(cf) end
             my.CFrame = cf
             if airborne and speed > 8 then
                 my.AssemblyLinearVelocity = Vector3.new(vel.X, math.min(vel.Y, 0), vel.Z)
@@ -1894,35 +1950,61 @@ local function hoverOverTarget(plr, height)
                 my.AssemblyLinearVelocity = Vector3.zero
             end
         else
+            -- SLOW TP: tiny lerp alphas, never full snap (even when far)
             local dist = (targetPos - my.Position).Magnitude
-            if dist > 9 then
-                local mid = my.Position:Lerp(targetPos, 0.40)
-                if mid.Y < floorY then mid = Vector3.new(mid.X, floorY, mid.Z) end
-                my.CFrame = CFrame.new(mid, look)
-            elseif dist > 2.2 then
-                local mid = my.Position:Lerp(targetPos, 0.30)
+            local alpha
+            if dist > 40 then
+                alpha = 0.18 -- far: still slow crawl toward target
+            elseif dist > 18 then
+                alpha = 0.22
+            elseif dist > 8 then
+                alpha = 0.26
+            elseif dist > 3 then
+                alpha = 0.30
+            else
+                alpha = 0 -- close enough: rotate only
+            end
+            local mid
+            if alpha > 0 then
+                mid = my.Position:Lerp(targetPos, alpha)
                 if mid.Y < floorY then mid = Vector3.new(mid.X, floorY, mid.Z) end
                 my.CFrame = CFrame.new(mid, look)
             else
                 my.CFrame = CFrame.new(my.Position, look)
             end
-            -- gentle horizontal drift only — zero vertical so we never fall through
+            -- tiny horizontal velocity only (helps server accept move); never negative Y
             local d = targetPos - my.Position
-            local hx, hz = d.X * 0.7, d.Z * 0.7
-            local hm = math.sqrt(hx * hx + hz * hz)
-            if hm > 10 then
-                local s = 10 / hm
-                hx, hz = hx * s, hz * s
-            end
+            local hx = math.clamp(d.X * 0.35, -6, 6)
+            local hz = math.clamp(d.Z * 0.35, -6, 6)
             my.AssemblyLinearVelocity = Vector3.new(hx, 0, hz)
         end
         my.AssemblyAngularVelocity = Vector3.zero
     end)
 end
 
+-- Multi-step slow approach before shooting (HC, FakePos OFF).
+-- Takes ~0.8–1.5s to close distance safely instead of one hard TP.
+local function softApproachTarget(plr, seconds)
+    if State.FakePos or not plr then return end
+    if not IsHoodCustoms then
+        hoverOverTarget(plr)
+        return
+    end
+    seconds = seconds or 1.0
+    local t0 = tick()
+    while tick() - t0 < seconds do
+        if not getChar(plr) then break end
+        if State.VoidEat or State.InVoid then break end
+        hoverOverTarget(plr)
+        task.wait(0.28)
+    end
+end
+
 local function beginCombat()
     State.CombatActive = true
-    -- do NOT clear VoidEat — if already recovering from a shot, keep healing
+    if State.FakePos then
+        pinFakeFreeze()
+    end
 end
 
 local function endCombat()
@@ -1933,6 +2015,7 @@ local function endCombat()
     VoidMinUntil = 0
     VoidBloodAtEnter = nil
     _voidEnterBusy = false
+    clearFakeFreeze()
     pcall(function()
         RunService:UnbindFromRenderStep("StandVoidPin")
     end)
@@ -2094,8 +2177,9 @@ local function shootTarget(plr)
         end
     end
 
-    -- Hood Customs: soft surface hover + shoot only (NO underground — falls + red errors)
-    -- FakePos: stay in formation; silent aim still hits from slot
+    -- Hood Customs:
+    --   FakePos ON  → freeze in slot, aim-only (no CFrame / camera / VIM mid-shot)
+    --   FakePos OFF → SLOW TP toward target, then shoot (no hard snaps)
     if IsHoodCustoms then
         local gun = findGun()
         if not gun then
@@ -2110,9 +2194,15 @@ local function shootTarget(plr)
         State.Armed = true
         setAimLock(plr)
         pcall(ensureSilentAim)
-        setCamlock(plr, 3)
+
+        if State.FakePos then
+            pinFakeFreeze() -- one pin, then zero CFrame writes during shots
+        else
+            softApproachTarget(plr, 1.1) -- slow crawl into range
+            setCamlock(plr, 3)
+        end
         reloadGun(gun)
-        task.wait(0.04)
+        task.wait(0.06)
 
         for shot = 1, 8 do
             if not isAlive(plr) or isKO(plr) then break end
@@ -2122,25 +2212,47 @@ local function shootTarget(plr)
                 if not gun then break end
             end
             if State.FakePos then
-                holdFormation(true)
+                -- velocity only — never CFrame while gun is firing
+                pcall(function()
+                    local my = getHRP()
+                    if not my then return end
+                    my.AssemblyLinearVelocity = Vector3.zero
+                    my.AssemblyAngularVelocity = Vector3.zero
+                end)
             else
+                -- slow step closer between shots (throttled inside hoverOverTarget)
                 hoverOverTarget(plr)
             end
             local aim = getAimPos(plr)
             if not aim then break end
+            -- BodyEffects MousePos only (HC-safe). Skip extra MainEvent spam on FakePos.
             pcall(function()
                 local be = getChar() and getChar():FindFirstChild("BodyEffects")
-                local mp = be and be:FindFirstChild("MousePos")
+                if not be then return end
+                local mp = be:FindFirstChild("MousePos")
                 if mp and mp:IsA("Vector3Value") then mp.Value = aim end
             end)
-            pcall(function() fireMouse(aim) end)
+            if not State.FakePos then
+                pcall(function() fireMouse(aim) end)
+            else
+                -- FakePos: one light mouse remote max every other shot
+                if shot % 2 == 1 then
+                    pcall(function() fireMouse(aim) end)
+                end
+            end
             activateTool(gun)
-            pcall(function() forceGunHit(plr, gun) end)
+            if not State.FakePos then
+                pcall(function() forceGunHit(plr, gun) end)
+            end
             if shot % 4 == 0 then reloadGun(gun) end
-            task.wait(0.11)
+            task.wait(0.12)
         end
         reloadGun(gun)
-        if State.FakePos then holdFormation(true) end
+        clearAimLock()
+        if State.FakePos then
+            clearFakeFreeze()
+            holdFormation(true)
+        end
         return
     end
 
@@ -2157,9 +2269,12 @@ local function shootTarget(plr)
     State.Armed = true
     setAimLock(plr)
     pcall(ensureSilentAim)
-    setCamlock(plr, 4)
-
-    hoverOverTarget(plr)
+    if State.FakePos then
+        holdFormation(true)
+    else
+        setCamlock(plr, 4)
+        hoverOverTarget(plr)
+    end
     reloadGun(gun)
     task.wait(0.1)
 
@@ -2178,69 +2293,73 @@ local function shootTarget(plr)
             gun = equipTool(findGun(), 0.5)
             if not gun then break end
             setAimLock(plr)
-            setCamlock(plr, 3)
+            if not State.FakePos then setCamlock(plr, 3) end
         end
         if gun.Parent ~= getChar() then
             gun = equipTool(findGun(), 0.5)
             if not gun then break end
         end
 
-        hoverOverTarget(plr)
+        if not State.FakePos then
+            hoverOverTarget(plr)
+        end
         local aim = getAimPos(plr)
         if not aim then break end
 
-        if IsDersHood then
-            -- Der Hood: multi-push aim right before shot so gun LocalScript reads locked pos
-            for _ = 1, 3 do
-                pcall(function() fireMouse(aim) end)
+        pcall(function() fireMouse(aim) end)
+        pcall(function()
+            local be = getChar() and getChar():FindFirstChild("BodyEffects")
+            local mp = be and be:FindFirstChild("MousePos")
+            if mp and mp:IsA("Vector3Value") then mp.Value = aim end
+        end)
+        -- FakePos: no camera / VIM — only remotes + Activate
+        if not State.FakePos then
+            if IsDersHood then
+                for _ = 1, 2 do pcall(function() fireMouse(aim) end) end
+                pcall(function()
+                    if Camera and Camera.CameraType ~= Enum.CameraType.Scriptable then
+                        local origin = Camera.CFrame.Position
+                        if (aim - origin).Magnitude >= 1.5 then
+                            Camera.CFrame = CFrame.new(origin, aim)
+                        end
+                    end
+                end)
+                pcall(function()
+                    local sp, onScreen = Camera:WorldToViewportPoint(aim)
+                    if onScreen and sp.Z > 0 then
+                        local vim = game:GetService("VirtualInputManager")
+                        if vim then vim:SendMouseMoveEvent(sp.X, sp.Y, game) end
+                    end
+                end)
+            else
+                pcall(function()
+                    if Camera and Camera.CameraType ~= Enum.CameraType.Scriptable then
+                        local origin = Camera.CFrame.Position
+                        if (aim - origin).Magnitude >= 1.5 then
+                            Camera.CFrame = CFrame.new(origin, aim)
+                        end
+                    end
+                end)
             end
-            pcall(function()
-                if Camera and Camera.CameraType ~= Enum.CameraType.Scriptable then
-                    local origin = Camera.CFrame.Position
-                    if (aim - origin).Magnitude >= 1.5 then
-                        Camera.CFrame = CFrame.new(origin, aim)
-                    end
-                end
-            end)
-            pcall(function()
-                local sp, onScreen = Camera:WorldToViewportPoint(aim)
-                if onScreen and sp.Z > 0 then
-                    local vim = game:GetService("VirtualInputManager")
-                    if vim then vim:SendMouseMoveEvent(sp.X, sp.Y, game) end
-                end
-            end)
-        else
-            pcall(function() fireMouse(aim) end)
-            pcall(function()
-                local be = getChar() and getChar():FindFirstChild("BodyEffects")
-                local mp = be and be:FindFirstChild("MousePos")
-                if mp and mp:IsA("Vector3Value") then mp.Value = aim end
-            end)
-            pcall(function()
-                if Camera and Camera.CameraType ~= Enum.CameraType.Scriptable then
-                    local origin = Camera.CFrame.Position
-                    if (aim - origin).Magnitude >= 1.5 then
-                        Camera.CFrame = CFrame.new(origin, aim)
-                    end
-                end
-            end)
         end
 
         activateTool(gun)
         pcall(function() forceGunHit(plr, gun) end)
 
-        pcall(function()
-            local vim = game:GetService("VirtualInputManager")
-            if vim then
-                vim:SendMouseButtonEvent(0, 0, 0, true, game, 0)
-                task.wait(0.02)
-                vim:SendMouseButtonEvent(0, 0, 0, false, game, 0)
-            end
-        end)
-        pcall(function()
-            local vu = game:GetService("VirtualUser")
-            if vu then vu:ClickButton1(Vector2.new(0, 0)) end
-        end)
+        if not State.FakePos then
+            pcall(function()
+                local vim = game:GetService("VirtualInputManager")
+                if vim then
+                    vim:SendMouseButtonEvent(0, 0, 0, true, game, 0)
+                    task.wait(0.02)
+                    vim:SendMouseButtonEvent(0, 0, 0, false, game, 0)
+                end
+            end)
+            pcall(function()
+                local vu = game:GetService("VirtualUser")
+                if vu then vu:ClickButton1(Vector2.new(0, 0)) end
+            end)
+        end
 
         if shot % 5 == 0 then
             reloadGun(gun)
@@ -2745,14 +2864,15 @@ local function cmdFake(arg)
         State.FakePos = not State.FakePos
     end
     if State.FakePos then
-        -- snap back to slot so we start from formation
         if not IsOwner and not State.InVoid then
             State.Tracking = true
             returnToOwner()
+            pinFakeFreeze()
         end
-        notify("FakePos ON — stay in formation, gun kills still work")
+        notify("FakePos ON — freeze in slot, gun aim only (no TP)")
     else
-        notify("FakePos OFF — normal hover/TP combat")
+        clearFakeFreeze()
+        notify("FakePos OFF — slow TP to targets")
     end
 end
 
@@ -3643,7 +3763,12 @@ local function hcShootBurst(plr, maxShots)
     State.Armed = true
     setAimLock(plr)
     pcall(ensureSilentAim)
-    setCamlock(plr, 2)
+    if State.FakePos then
+        pinFakeFreeze()
+    else
+        softApproachTarget(plr, 0.9)
+        setCamlock(plr, 2)
+    end
     maxShots = maxShots or 6
 
     for shot = 1, maxShots do
@@ -3652,7 +3777,13 @@ local function hcShootBurst(plr, maxShots)
         if State.VoidEat or State.InVoid then break end
 
         if State.FakePos then
-            holdFormation(true)
+            pcall(function()
+                local my = getHRP()
+                if my then
+                    my.AssemblyLinearVelocity = Vector3.zero
+                    my.AssemblyAngularVelocity = Vector3.zero
+                end
+            end)
         else
             hoverOverTarget(plr)
         end
@@ -3665,23 +3796,27 @@ local function hcShootBurst(plr, maxShots)
             local mp = be and be:FindFirstChild("MousePos")
             if mp and mp:IsA("Vector3Value") then mp.Value = aim end
         end)
-        pcall(function() fireMouse(aim) end)
+        if not State.FakePos or (shot % 2 == 1) then
+            pcall(function() fireMouse(aim) end)
+        end
 
         if gun.Parent ~= getChar() then
             gun = equipTool(findGun(), 0.3)
             if not gun then break end
         end
         activateTool(gun)
-        pcall(function() forceGunHit(plr, gun) end)
+        if not State.FakePos then
+            pcall(function() forceGunHit(plr, gun) end)
+        end
 
         if shot % 4 == 0 then
             reloadGun(gun)
         end
-        task.wait(0.11)
+        task.wait(0.14)
     end
 end
 
--- Full HC kill pass: soft hover + shoot (no underground dives)
+-- Full HC kill pass: slow approach + shoot (FakePos = freeze + aim only)
 local function hcKillCycle(plr)
     if not plr then return end
     beginCombat()
@@ -3695,6 +3830,12 @@ local function hcKillCycle(plr)
         reloadGun(gun)
     end
 
+    if State.FakePos then
+        pinFakeFreeze()
+    else
+        softApproachTarget(plr, 1.0)
+    end
+
     local t0 = tick()
     while tick() - t0 < 12 do
         if not State.LoopKill and not State.LoopKnock and not State.CombatActive then break end
@@ -3706,9 +3847,7 @@ local function hcKillCycle(plr)
             if State.VoidEat or State.InVoid then exitCombatVoid() end
         end
 
-        if State.FakePos then
-            holdFormation(true)
-        else
+        if not State.FakePos then
             hoverOverTarget(plr)
         end
         hcShootBurst(plr, 6)
