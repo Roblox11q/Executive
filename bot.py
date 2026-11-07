@@ -1,4 +1,4 @@
- #!/usr/bin/env python3
+#!/usr/bin/env python3
 """Stand Loader Configurator Bot - Render + Supabase."""
 from __future__ import annotations
 
@@ -756,6 +756,22 @@ async def staff_check(interaction: discord.Interaction) -> bool:
     return False
 
 
+async def _update_bot_presence(status: str | None = None) -> None:
+    """Set the bot's activity/presence to reflect the current system status."""
+    if status is None:
+        status = get_system_status()
+    dot = STATUS_DOTS.get(status, "🟢")
+    label = STATUS_LABELS.get(status, status)
+    activity = discord.Activity(
+        type=discord.ActivityType.watching,
+        name=f"{dot} {label}",
+    )
+    try:
+        await bot.change_presence(activity=activity)
+    except Exception as e:
+        print("presence update error:", e)
+
+
 def _status_channel_name(status: str) -> str:
     """Channel name: 🟢｜Stand  /  🔴｜Stand  /  🔵｜Stand  /  🟡｜Stand"""
     dot = STATUS_DOTS.get(status, "🟢")
@@ -788,6 +804,9 @@ async def update_status_channel(
     elif status == "up":
         _status_note = ""
     _save_persisted_status()
+
+    # Keep bot presence in sync with system status
+    await _update_bot_presence(status)
 
     channel = bot.get_channel(STATUS_CHANNEL_ID)
     if channel is None:
@@ -1064,6 +1083,9 @@ async def on_ready():
             print("on_ready status update:", err)
     except Exception as e:
         print("on_ready status error:", e)
+
+    # Set bot activity status to reflect current system status
+    await _update_bot_presence()
 
     # Automatic changelog whenever watched files change between deploys
     try:
