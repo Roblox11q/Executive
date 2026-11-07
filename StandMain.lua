@@ -3016,11 +3016,12 @@ function F.cmdKat(user)
 end
 
 -- .b — bring target near owner
--- HC grab mechanic (from dump): FireServer("Grabbing") with no args.
--- Server checks proximity and attaches GRABBING_CONSTRAINT weld to target.
--- To haul: re-fire "Grabbing" to maintain weld, then move OUR stand incrementally
--- toward owner each step — target follows via the weld constraint.
--- Do NOT snap to owner position directly; small steps carry the target along.
+-- Steps:
+--   1) Knock the target if alive
+--   2) Teleport our stand on top of the target
+--   3) Press G to pick them up (game's native grab key)
+--   4) Walk our stand incrementally to the owner — target is carried via the grab
+--   5) Press G again to drop them next to owner
 function F.cmdBring(user)
     local plr = F.findPlayer(user)
     if not plr then
@@ -3046,37 +3047,67 @@ function F.cmdBring(user)
             return
         end
 
-        -- Fire the grab remote (HC: just "Grabbing" with no extra args per dump)
-        local function fireGrab()
-            if not MainEvent then return end
-            pcall(function() MainEvent:FireServer("Grabbing") end)
+        -- Simulate a G keypress (hold = press+release after delay, tap = instant)
+        local function pressG(hold)
+            local vim = pcall(function() return game:GetService("VirtualInputManager") end)
+                and game:GetService("VirtualInputManager")
+            if vim then
+                pcall(function() vim:SendKeyEvent(true,  Enum.KeyCode.G, false, game) end)
+                task.wait(hold and 0.12 or 0.07)
+                pcall(function() vim:SendKeyEvent(false, Enum.KeyCode.G, false, game) end)
+            end
+            -- Fallback: VirtualUser
+            local vu = pcall(function() return game:GetService("VirtualUser") end)
+                and game:GetService("VirtualUser")
+            if vu then
+                pcall(function() vu:SetKeyDown("0x47") end)   -- G
+                task.wait(hold and 0.12 or 0.07)
+                pcall(function() vu:SetKeyUp("0x47") end)
+            end
+            -- Also fire the Grabbing remote so the server registers it
+            if MainEvent then
+                pcall(function() MainEvent:FireServer("Grabbing") end)
+            end
             if UnreliableMainEvent then
                 pcall(function() UnreliableMainEvent:FireServer("Grabbing") end)
             end
         end
 
-        -- Snap our stand directly onto the target's torso to register the grab
+        -- Snap our stand directly onto (just above) the target so G can reach them
         local function snapOntoTarget()
-            local their = F.getHRP(plr)
-            local my = F.getHRP()
-            if not their or not my then return false end
-            local theirChar = F.getChar(plr)
-            local torso = theirChar and (
-                theirChar:FindFirstChild("UpperTorso")
-                or theirChar:FindFirstChild("Torso")
-                or their
-            )
-            -- Sit just above their torso center — server proximity check requires being close
-            local grabPos = torso.Position + Vector3.new(0, 1.0, 0)
+            local theirHRP = F.getHRP(plr)
+            local myHRP    = F.getHRP()
+            if not theirHRP or not myHRP then return false end
+            local grabPos = theirHRP.Position + Vector3.new(0, 1.2, 0)
             pcall(function()
-                my.CFrame = CFrame.new(grabPos)
-                my.AssemblyLinearVelocity = Vector3.zero
-                my.AssemblyAngularVelocity = Vector3.zero
+                myHRP.CFrame = CFrame.new(grabPos)
+                myHRP.AssemblyLinearVelocity  = Vector3.zero
+                myHRP.AssemblyAngularVelocity = Vector3.zero
             end)
             return true
         end
 
-        -- 1) Knock first if alive — grab only works reliably on KO'd players
+        -- Move our stand one step toward a target position, returns remaining distance
+        local function stepToward(targetPos, stepSize)
+            local myHRP = F.getHRP()
+            if not myHRP then return 0 end
+            local myPos  = myHRP.Position
+            local dir    = targetPos - myPos
+            local dist   = dir.Magnitude
+            if dist < 1 then return dist end
+            local step   = math.min(stepSize, dist - 1)
+            local newPos = myPos + dir.Unit * step
+            local safeY  = math.max(newPos.Y, (Workspace.FallenPartsDestroyHeight or -500) + 32)
+            newPos = Vector3.new(newPos.X, safeY, newPos.Z)
+            pcall(function()
+                myHRP.CFrame = CFrame.new(newPos, Vector3.new(targetPos.X, newPos.Y, targetPos.Z))
+                myHRP.AssemblyLinearVelocity  = Vector3.zero
+                myHRP.AssemblyAngularVelocity = Vector3.zero
+            end)
+            return (targetPos - newPos).Magnitude
+        end
+
+        -- 1) Knock the target first if still alive
         if F.isAlive(plr) and not F.isKO(plr) then
             F.notify("Bring: knocking " .. plr.Name .. "...")
             F.setAimLock(plr)
@@ -3084,7 +3115,7 @@ function F.cmdBring(user)
             F.setCamlock(plr, 3)
             F.shootTarget(plr)
             local t0 = tick()
-            while tick() - t0 < 3.0 do
+            while tick() - t0 < 3.5 do
                 if F.isKO(plr) or not F.getChar(plr) then break end
                 task.wait(0.12)
             end
@@ -3100,60 +3131,52 @@ function F.cmdBring(user)
             return
         end
 
-        -- 2) Snap onto target and register grab
-        F.notify("Bring: grabbing " .. plr.Name)
-        -- Multiple attach attempts — server may need a few ticks to register
-        for _ = 1, 6 do
-            snapOntoTarget()
-            fireGrab()
-            task.wait(0.08)
+        -- 2) Teleport our stand on top of the knocked target
+        F.notify("Bring: picking up " .. plr.Name)
+        snapOntoTarget()
+        task.wait(0.1)
+
+        -- 3) Press G to grab — retry a few times if needed
+        for attempt = 1, 4 do
+            snapOntoTarget()         -- stay on top each attempt
+            pressG(true)
+            task.wait(0.15)
+            -- Check if grab registered: target's HRP should now be very close to ours
+            local myHRP    = F.getHRP()
+            local theirHRP = F.getHRP(plr)
+            if myHRP and theirHRP then
+                local grabDist = (myHRP.Position - theirHRP.Position).Magnitude
+                if grabDist < 4.5 then
+                    break   -- grab likely attached
+                end
+            end
+            if attempt < 4 then task.wait(0.1) end
         end
 
-        -- 3) Haul: move stand incrementally toward owner each step.
-        -- The GRABBING_CONSTRAINT weld carries the target with us.
-        -- Small steps (not full snap) so the physics constraint stays intact.
-        local haulUntil = tick() + 5.0
-        local stepSize = IsHoodCustoms and 4.0 or 6.0  -- studs per step toward owner
+        -- 4) Walk our stand toward the owner in small steps.
+        --    Target is attached via the game's grab — they ride with us.
+        F.notify("Bring: hauling to owner...")
+        local stepSize  = IsHoodCustoms and 3.5 or 5.0
+        local stopDist  = 5.0
+        local haulUntil = tick() + 7.0
+
         while tick() < haulUntil do
             local oHRP = F.getHRP(owner)
-            local my = F.getHRP()
-            local theirHRP = F.getHRP(plr)
-            if not oHRP or not my then break end
+            if not oHRP then break end
+            if not F.getChar(plr) then break end
 
-            local ownerPos = oHRP.Position
-            local myPos = my.Position
-            local distToOwner = (ownerPos - myPos).Magnitude
+            local remaining = stepToward(oHRP.Position, stepSize)
+            if remaining <= stopDist then break end
 
-            -- Done if we're within 5 studs of owner
-            if distToOwner < 5 then break end
-
-            -- Step toward owner (don't snap all the way — that breaks the weld)
-            local dir = (ownerPos - myPos)
-            local moveDir = dir.Magnitude > 0 and dir.Unit or Vector3.new(0, 0, -1)
-            local step = math.min(stepSize, distToOwner - 3)
-            local newPos = myPos + moveDir * step
-            -- Keep Y at a safe height (don't go underground)
-            local safeY = math.max(newPos.Y, (Workspace.FallenPartsDestroyHeight or -500) + 32)
-            newPos = Vector3.new(newPos.X, safeY, newPos.Z)
-
-            pcall(function()
-                my.CFrame = CFrame.new(newPos, Vector3.new(ownerPos.X, newPos.Y, ownerPos.Z))
-                my.AssemblyLinearVelocity = Vector3.zero
-                my.AssemblyAngularVelocity = Vector3.zero
-            end)
-
-            -- Re-fire grab every step to maintain the constraint
-            fireGrab()
-            task.wait(IsHoodCustoms and 0.12 or 0.08)
+            -- Keep re-pressing G every step so the server hold doesn't time out
+            pressG(false)
+            task.wait(IsHoodCustoms and 0.13 or 0.09)
         end
 
-        -- 4) Release
-        if MainEvent then
-            -- Fire once more near owner to ensure the target lands close
-            pcall(function() MainEvent:FireServer("Grabbing") end)
-            task.wait(0.1)
-            -- No explicit "release" remote exists in the dump; stopping firing is the release
-        end
+        -- 5) Press G once more to drop the target next to owner
+        task.wait(0.1)
+        pressG(true)
+        F.notify("Bring: dropped " .. plr.Name .. " at owner")
 
         F.endCombat()
         State.Tracking = true
