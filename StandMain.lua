@@ -14,6 +14,8 @@ if not Config then
     return
 end
 
+local F = {}
+
 ----------------------------------------------------------------------
 -- SERVICES
 ----------------------------------------------------------------------
@@ -84,7 +86,7 @@ do
     end
 end
 
-local function isStandTeam(plr)
+function F.isStandTeam(plr)
     if not plr then return false end
     local n = string.lower(plr.Name)
     if StandTeam[n] then return true end
@@ -187,7 +189,7 @@ local SLOT_CF_AIR = {
 
 local SLOT_CF = SLOT_CF_AIR  -- default: floating (use .air to toggle)
 
-local function getMySlot()
+function F.getMySlot()
     local alts = Config.Alts or {}
     local s = alts[LocalPlayer.Name]
     if s == nil then s = Config.Slot or 2 end
@@ -195,7 +197,7 @@ local function getMySlot()
 end
 
 local IsOwner = (string.lower(LocalPlayer.Name) == string.lower(OwnerName))
-local MySlot  = getMySlot()
+local MySlot  = F.getMySlot()
 local VoidCF  = CFrame.new(0, -480, 0)
 
 ----------------------------------------------------------------------
@@ -217,7 +219,7 @@ local State = {
     AutoHeal      = true,  -- auto buy food + eat when hurt (HC: EatFood / BuyItem)
     Sweep         = false,
     Air           = true,  -- floating summon formation (toggle with .air)
-    FakePos       = false, -- PhysicsRep fake position (server pos desync) + stay in formation
+    FakePos       = false, -- stay in formation; gun kills still work via silent aim + mouse remotes
     Sentry        = false, -- .sentry — knock whoever shoots the OWNER
     Sentry2       = false, -- .sentry2 — knock+stomp whoever shoots the OWNER
     BSentry       = false, -- .bsentry — knock+stomp whoever shoots THIS stand
@@ -241,111 +243,15 @@ local LastSentryAt = 0
 ----------------------------------------------------------------------
 -- CHARACTER HELPERS
 ----------------------------------------------------------------------
-local function getChar(p) return (p or LocalPlayer).Character end
+function F.getChar(p) return (p or LocalPlayer).Character end
 
-local function getHRP(p)
-    local c = getChar(p)
+function F.getHRP(p)
+    local c = F.getChar(p)
     return c and c:FindFirstChild("HumanoidRootPart")
 end
 
-----------------------------------------------------------------------
--- FAKE POSITION (PhysicsRep desync — from NeverLarp / PolSec style)
--- Server keeps reporting an old HRP position while the client moves freely.
--- Requires executor support for sethiddenproperty.
-----------------------------------------------------------------------
-local FakePosServerPos = nil
-local _fpBusy = false
-local _fpCounter = 0
-local _fpConn = nil
-local FP_TICK = 1 / 240
-local FP_PULSE_EVERY = 20 -- every N ticks: drop PhysicsRep briefly
-local FP_PULSE_WAIT = 0.1
-
-local function fpSetRep(hrp, val)
-    if not hrp or not sethiddenproperty then return end
-    pcall(sethiddenproperty, hrp, "PhysicsRepRootPart", val)
-end
-
-local function stopPhysicsFakePos()
-    if _fpConn then
-        pcall(function() task.cancel(_fpConn) end)
-        _fpConn = nil
-    end
-    _fpBusy = false
-    _fpCounter = 0
-    local hrp = getHRP()
-    if hrp then
-        fpSetRep(hrp, hrp) -- restore normal replication
-    end
-    FakePosServerPos = nil
-end
-
-local function startPhysicsFakePos()
-    stopPhysicsFakePos()
-    if type(sethiddenproperty) ~= "function" then
-        notify("FakePos: sethiddenproperty missing (executor)")
-        return false
-    end
-    pcall(function()
-        if setfflag then setfflag("S2PhysicsSenderRate", "1000") end
-    end)
-    local hrp = getHRP()
-    if hrp then
-        FakePosServerPos = hrp.Position
-        fpSetRep(hrp, hrp)
-    end
-    _fpCounter = FP_PULSE_EVERY
-    _fpConn = task.spawn(function()
-        while State.FakePos do
-            task.wait(FP_TICK)
-            if not State.FakePos then break end
-            if _fpBusy then continue end
-            local char = getChar()
-            local root = char and char:FindFirstChild("HumanoidRootPart")
-            if not root then continue end
-
-            if _fpCounter <= 0 then
-                _fpBusy = true
-                local before = root.Position
-                fpSetRep(root, nil)
-                task.wait(FP_PULSE_WAIT)
-                local after = root.Position
-                fpSetRep(root, root)
-                if (after - before).Magnitude > 10 then
-                    FakePosServerPos = after
-                elseif not FakePosServerPos then
-                    FakePosServerPos = before
-                end
-                _fpBusy = false
-                _fpCounter = FP_PULSE_EVERY
-            else
-                _fpCounter -= 1
-                fpSetRep(root, root)
-            end
-        end
-        -- cleanup when loop exits
-        local root = getHRP()
-        if root then fpSetRep(root, root) end
-        _fpBusy = false
-        FakePosServerPos = nil
-        _fpConn = nil
-    end)
-    return true
-end
-
--- Re-arm fake pos after respawn
-LocalPlayer.CharacterAdded:Connect(function()
-    if not State.FakePos then return end
-    task.wait(0.25)
-    local hrp = getHRP()
-    if hrp then
-        FakePosServerPos = hrp.Position
-        fpSetRep(hrp, hrp)
-    end
-end)
-
-local function getHum(p)
-    local c = getChar(p)
+function F.getHum(p)
+    local c = F.getChar(p)
     return c and c:FindFirstChildOfClass("Humanoid")
 end
 
@@ -354,7 +260,7 @@ end
 ----------------------------------------------------------------------
 local IdleTrack = nil
 
-local function normalizeAnimId(id)
+function F.normalizeAnimId(id)
     if type(id) ~= "string" and type(id) ~= "number" then return nil end
     local s = tostring(id):gsub("%s+", "")
     if s == "" or s == "nil" or s == "0" then return nil end
@@ -370,15 +276,15 @@ local function normalizeAnimId(id)
     return nil
 end
 
-local function stopIdleAnim()
+function F.stopIdleAnim()
     if IdleTrack then
         pcall(function() IdleTrack:Stop(0.12) end)
         IdleTrack = nil
     end
 end
 
-local function isHoldingTool()
-    local c = getChar()
+function F.isHoldingTool()
+    local c = F.getChar()
     if not c then return false end
     for _, child in ipairs(c:GetChildren()) do
         if child:IsA("Tool") then return true end
@@ -386,25 +292,25 @@ local function isHoldingTool()
     return false
 end
 
-local function applyIdleAnim()
-    local animId = normalizeAnimId(Config.Anim)
+function F.applyIdleAnim()
+    local animId = F.normalizeAnimId(Config.Anim)
     if not animId then return end
 
     -- Don't fight gun/tool hold poses — idle only when unarmed
-    if State.Armed or isHoldingTool() then
-        stopIdleAnim()
+    if State.Armed or F.isHoldingTool() then
+        F.stopIdleAnim()
         return
     end
 
-    local char = getChar()
+    local char = F.getChar()
     if not char then return end
-    local hum = getHum()
+    local hum = F.getHum()
     if not hum then return end
 
     -- Already playing same track
     if IdleTrack and IdleTrack.IsPlaying then return end
 
-    stopIdleAnim()
+    F.stopIdleAnim()
 
     local ok, err = pcall(function()
         -- Reduce conflict with default Animate script
@@ -443,26 +349,26 @@ local function applyIdleAnim()
 end
 
 -- Watch character for tool equip/unequip so idle never blocks gun hold
-local function hookToolWatch(char)
+function F.hookToolWatch(char)
     if not char then return end
     char.ChildAdded:Connect(function(child)
         if child:IsA("Tool") then
-            stopIdleAnim()
+            F.stopIdleAnim()
         end
     end)
     char.ChildRemoved:Connect(function(child)
         if child:IsA("Tool") then
             task.defer(function()
-                if not State.Armed and not isHoldingTool() then
-                    applyIdleAnim()
+                if not State.Armed and not F.isHoldingTool() then
+                    F.applyIdleAnim()
                 end
             end)
         end
     end)
 end
 
-local function isKO(p)
-    local c = getChar(p)
+function F.isKO(p)
+    local c = F.getChar(p)
     if not c then return false end
     local be = c:FindFirstChild("BodyEffects")
     if be then
@@ -481,7 +387,7 @@ local function isKO(p)
             end
         end
     end
-    local h = getHum(p)
+    local h = F.getHum(p)
     if h then
         if h.PlatformStand and h.Health > 0 and h.Health < h.MaxHealth * 0.35 then
             return true
@@ -495,14 +401,14 @@ local function isKO(p)
     return false
 end
 
-local function isAlive(p)
-    local h = getHum(p)
+function F.isAlive(p)
+    local h = F.getHum(p)
     if not h or h.Health <= 0 then return false end
-    if isKO(p) then return false end
+    if F.isKO(p) then return false end
     return true
 end
 
-local function getOwner()
+function F.getOwner()
     if OwnerName == "" then return nil end
     for _, plr in ipairs(Players:GetPlayers()) do
         if string.lower(plr.Name) == string.lower(OwnerName) then
@@ -512,7 +418,7 @@ local function getOwner()
     return nil
 end
 
-local function findPlayer(name, opts)
+function F.findPlayer(name, opts)
     -- opts.allowSelf = true to include LocalPlayer (default: skip self)
     if not name or name == "" then return nil end
     name = string.lower(tostring(name))
@@ -557,13 +463,13 @@ local function findPlayer(name, opts)
 end
 
 -- returns true, reason
-local function isProtected(plr)
+function F.isProtected(plr)
     if not plr then return true, "nil" end
     if plr == LocalPlayer then return true, "self" end
     if string.lower(plr.Name) == string.lower(OwnerName) then return true, "owner" end
     if Controllers[string.lower(plr.Name)] then return true, "controller" end
     -- Never kill other stands / alts from the same config
-    if isStandTeam(plr) then return true, "stand" end
+    if F.isStandTeam(plr) then return true, "stand" end
     if Whitelist[plr.UserId] then return true, "whitelist" end
     if State.ProtectName and string.lower(plr.Name) == string.lower(State.ProtectName) then
         return true, "protect"
@@ -571,7 +477,7 @@ local function isProtected(plr)
     return false, nil
 end
 
-local function canControl(plr)
+function F.canControl(plr)
     if not plr then return false end
     local n = string.lower(plr.Name)
     if n == string.lower(OwnerName) then return true end
@@ -579,7 +485,7 @@ local function canControl(plr)
     return false
 end
 
-local function notify(msg)
+function F.notify(msg)
     pcall(function()
         StarterGui:SetCore("SendNotification", {
             Title = "Stand",
@@ -593,7 +499,7 @@ end
 ----------------------------------------------------------------------
 -- REMOTES / AIM
 ----------------------------------------------------------------------
-local function fireMouse(pos)
+function F.fireMouse(pos)
     if not pos then return end
     -- reject NaN / inf — HC gun clients throw red errors on bad Vector3
     if pos.X ~= pos.X or pos.Y ~= pos.Y or pos.Z ~= pos.Z then return end
@@ -624,7 +530,7 @@ local function fireMouse(pos)
         end
     end
     pcall(function()
-        local c = getChar()
+        local c = F.getChar()
         local be = c and c:FindFirstChild("BodyEffects")
         if not be then return end
         for _, n in ipairs({"MousePos", "MousePosition", "Mouse", "AimPos"}) do
@@ -640,12 +546,12 @@ local function fireMouse(pos)
     end)
 end
 
-local function getAimPos(plr)
-    local c = getChar(plr)
+function F.getAimPos(plr)
+    local c = F.getChar(plr)
     if not c then return nil end
     local head = c:FindFirstChild("Head")
     local torso = c:FindFirstChild("UpperTorso") or c:FindFirstChild("Torso")
-    local hrp  = getHRP(plr)
+    local hrp  = F.getHRP(plr)
     local base = nil
     -- Prefer head (slight up bias for pellet spread), then upper torso, then HRP
     if head then
@@ -678,16 +584,16 @@ end
 -- Silent aim: force Mouse.Hit / Target onto locked player so guns actually hit
 local AimLockPlayer = nil
 
-local function setAimLock(plr)
+function F.setAimLock(plr)
     AimLockPlayer = plr
 end
 
-local function clearAimLock()
+function F.clearAimLock()
     AimLockPlayer = nil
 end
 
 local silentAimHooked = false
-local function ensureSilentAim()
+function F.ensureSilentAim()
     if silentAimHooked then return end
     silentAimHooked = true
 
@@ -705,15 +611,15 @@ local function ensureSilentAim()
                 if AimLockPlayer ~= nil and self == mouse then
                     local k = key
                     if k == "Hit" or k == "hit" then
-                        local aim = getAimPos(AimLockPlayer)
+                        local aim = F.getAimPos(AimLockPlayer)
                         if aim then return CFrame.new(aim) end
                     elseif k == "Target" or k == "target" then
-                        local ch = getChar(AimLockPlayer)
+                        local ch = F.getChar(AimLockPlayer)
                         if ch then
-                            return ch:FindFirstChild("Head") or getHRP(AimLockPlayer) or ch
+                            return ch:FindFirstChild("Head") or F.getHRP(AimLockPlayer) or ch
                         end
                     elseif k == "UnitRay" then
-                        local aim = getAimPos(AimLockPlayer)
+                        local aim = F.getAimPos(AimLockPlayer)
                         if aim and Camera then
                             local origin = Camera.CFrame.Position
                             local dir = (aim - origin)
@@ -741,15 +647,15 @@ local function ensureSilentAim()
                     if AimLockPlayer ~= nil and self == mouse then
                         local k = key
                         if k == "Hit" or k == "hit" then
-                            local aim = getAimPos(AimLockPlayer)
+                            local aim = F.getAimPos(AimLockPlayer)
                             if aim then return CFrame.new(aim) end
                         elseif k == "Target" or k == "target" then
-                            local ch = getChar(AimLockPlayer)
+                            local ch = F.getChar(AimLockPlayer)
                             if ch then
-                                return ch:FindFirstChild("Head") or getHRP(AimLockPlayer) or ch
+                                return ch:FindFirstChild("Head") or F.getHRP(AimLockPlayer) or ch
                             end
                         elseif k == "UnitRay" then
-                            local aim = getAimPos(AimLockPlayer)
+                            local aim = F.getAimPos(AimLockPlayer)
                             if aim and Camera then
                                 local origin = Camera.CFrame.Position
                                 local dir = (aim - origin)
@@ -763,7 +669,7 @@ local function ensureSilentAim()
                 end) or function(self, key)
                     if AimLockPlayer ~= nil and self == mouse then
                         if key == "Hit" or key == "hit" then
-                            local aim = getAimPos(AimLockPlayer)
+                            local aim = F.getAimPos(AimLockPlayer)
                             if aim then return CFrame.new(aim) end
                         end
                     end
@@ -781,7 +687,7 @@ local function ensureSilentAim()
     local function pushAim(aim)
         -- Always update local BodyEffects MousePos (safe)
         pcall(function()
-            local be = getChar() and getChar():FindFirstChild("BodyEffects")
+            local be = F.getChar() and F.getChar():FindFirstChild("BodyEffects")
             if not be then return end
             for _, n in ipairs({"MousePos", "MousePosition", "AimPos"}) do
                 local mp = be:FindFirstChild(n)
@@ -792,7 +698,7 @@ local function ensureSilentAim()
         if State.FakePos and IsHoodCustoms then
             return
         end
-        pcall(function() fireMouse(aim) end)
+        pcall(function() F.fireMouse(aim) end)
         -- never move real cursor / camera on FakePos
         if State.FakePos then return end
         if IsDersHood or IsHoodCustoms then
@@ -811,8 +717,8 @@ local function ensureSilentAim()
     RunService.RenderStepped:Connect(function()
         local plr = AimLockPlayer
         if not plr then return end
-        if not getChar(plr) then return end
-        local aim = getAimPos(plr)
+        if not F.getChar(plr) then return end
+        local aim = F.getAimPos(plr)
         if not aim then return end
         local now = tick()
         local interval = 0.0
@@ -849,11 +755,11 @@ local function ensureSilentAim()
     if IsDersHood then
         RunService.Heartbeat:Connect(function()
             local plr = AimLockPlayer
-            if not plr or not getChar(plr) then return end
-            local aim = getAimPos(plr)
+            if not plr or not F.getChar(plr) then return end
+            local aim = F.getAimPos(plr)
             if not aim then return end
             pcall(function()
-                local be = getChar() and getChar():FindFirstChild("BodyEffects")
+                local be = F.getChar() and F.getChar():FindFirstChild("BodyEffects")
                 local mp = be and be:FindFirstChild("MousePos")
                 if mp and mp:IsA("Vector3Value") then mp.Value = aim end
             end)
@@ -865,9 +771,9 @@ local function ensureSilentAim()
 end
 
 
-local function setAttacking(on)
+function F.setAttacking(on)
     pcall(function()
-        local be = getChar() and getChar():FindFirstChild("BodyEffects")
+        local be = F.getChar() and F.getChar():FindFirstChild("BodyEffects")
         if not be then return end
         local a = be:FindFirstChild("Attacking")
         if a and a:IsA("BoolValue") then a.Value = on and true or false end
@@ -876,12 +782,12 @@ local function setAttacking(on)
     end)
 end
 
-local function fireHitRemotes(plr)
+function F.fireHitRemotes(plr)
     -- Hood Customs client scripts error (red text) on fake Hit/Knife/Punch remotes
     if IsHoodCustoms then return end
-    local char = getChar(plr)
-    local hum  = getHum(plr)
-    local aim  = getAimPos(plr)
+    local char = F.getChar(plr)
+    local hum  = F.getHum(plr)
+    local aim  = F.getAimPos(plr)
     local function go(remote, isFn)
         if not remote then return end
         local function send(a, b, c)
@@ -914,17 +820,17 @@ local function fireHitRemotes(plr)
 end
 
 -- Force-hit for gun shots: push aim + common damage/hit remotes so shots register more reliably
-local function forceGunHit(plr, gun)
+function F.forceGunHit(plr, gun)
     if not plr then return end
-    local char = getChar(plr)
-    local hum  = getHum(plr)
-    local aim  = getAimPos(plr)
+    local char = F.getChar(plr)
+    local hum  = F.getHum(plr)
+    local aim  = F.getAimPos(plr)
     if not aim then return end
 
     -- Always refresh mouse / aim (safe on all places including HC)
-    pcall(function() fireMouse(aim) end)
+    pcall(function() F.fireMouse(aim) end)
     pcall(function()
-        local be = getChar() and getChar():FindFirstChild("BodyEffects")
+        local be = F.getChar() and F.getChar():FindFirstChild("BodyEffects")
         if not be then return end
         for _, n in ipairs({"MousePos", "MousePosition", "AimPos", "Mouse"}) do
             local mp = be:FindFirstChild(n)
@@ -932,7 +838,7 @@ local function forceGunHit(plr, gun)
             if mp and mp:IsA("CFrameValue") then mp.Value = CFrame.new(aim) end
         end
     end)
-    setAttacking(true)
+    F.setAttacking(true)
 
     -- HC: only mouse / BodyEffects — fake Hit strings cause red client errors
     if IsHoodCustoms then return end
@@ -989,8 +895,8 @@ end
 ----------------------------------------------------------------------
 -- TOOLS
 ----------------------------------------------------------------------
-local function findTool(name, exact)
-    local c = getChar()
+function F.findTool(name, exact)
+    local c = F.getChar()
     local bag = LocalPlayer:FindFirstChild("Backpack")
     local want = string.lower(tostring(name))
     local function match(t)
@@ -1009,11 +915,11 @@ local function findTool(name, exact)
     return nil
 end
 
-local function equipTool(tool, timeout)
+function F.equipTool(tool, timeout)
     if not tool then return nil end
     timeout = timeout or 0.6
-    local c = getChar()
-    local h = getHum()
+    local c = F.getChar()
+    local h = F.getHum()
     if not c or not h then return nil end
     if tool.Parent == c then return tool end
     pcall(function() h:UnequipTools() end)
@@ -1027,11 +933,11 @@ local function equipTool(tool, timeout)
     return (tool.Parent == c) and tool or nil
 end
 
-local function activateTool(tool)
+function F.activateTool(tool)
     if not tool then return false end
-    local c = getChar()
+    local c = F.getChar()
     if tool.Parent ~= c then
-        tool = equipTool(tool, 0.4)
+        tool = F.equipTool(tool, 0.4)
     end
     if not tool or tool.Parent ~= c then return false end
     pcall(function() tool:Activate() end)
@@ -1055,29 +961,29 @@ local function activateTool(tool)
     return true
 end
 
-local function findKnife()
+function F.findKnife()
     -- Katana first (some hood clones), then classic knife names
-    return findTool("[Katana]", true)
-        or findTool("Katana", true)
-        or findTool("[Katana]", false)
-        or findTool("Katana", false)
-        or findTool("[Knife]", true)
-        or findTool("Knife", true)
-        or findTool("[Knife]", false)
-        or findTool("Knife", false)
-        or findTool("[Combat]", false)
-        or findTool("Combat", false)
+    return F.findTool("[Katana]", true)
+        or F.findTool("Katana", true)
+        or F.findTool("[Katana]", false)
+        or F.findTool("Katana", false)
+        or F.findTool("[Knife]", true)
+        or F.findTool("Knife", true)
+        or F.findTool("[Knife]", false)
+        or F.findTool("Knife", false)
+        or F.findTool("[Combat]", false)
+        or F.findTool("Combat", false)
 end
 
-local function findGun()
-    return findTool(PreferredGun, true)
-        or findTool(PreferredGun, false)
-        or findTool("[DoubleBarrel]", false)
-        or findTool("[Double-Barrel SG]", false)
-        or findTool("[Revolver]", false)
+function F.findGun()
+    return F.findTool(PreferredGun, true)
+        or F.findTool(PreferredGun, false)
+        or F.findTool("[DoubleBarrel]", false)
+        or F.findTool("[Double-Barrel SG]", false)
+        or F.findTool("[Revolver]", false)
 end
 
-local function expandKnifeParts(knife)
+function F.expandKnifeParts(knife)
     if not knife then return end
     pcall(function()
         for _, part in ipairs(knife:GetDescendants()) do
@@ -1129,33 +1035,33 @@ end
 ----------------------------------------------------------------------
 local CAM_BIND = "StandCamlock"
 
-local function clearCamlock()
+function F.clearCamlock()
     CamTarget = nil
     State.Camlock = false
     CamlockUntil = 0
-    clearAimLock()
+    F.clearAimLock()
     pcall(function() RunService:UnbindFromRenderStep(CAM_BIND) end)
 end
 
 local lastCamMouseFire = 0
-local function camlockStep()
+function F.camlockStep()
     if not State.Camlock then return end
     if CamlockUntil > 0 and tick() > CamlockUntil then
-        clearCamlock()
+        F.clearCamlock()
         return
     end
-    local plr = CamTarget and findPlayer(CamTarget)
+    local plr = CamTarget and F.findPlayer(CamTarget)
     if not plr then return end
-    local aim = getAimPos(plr)
+    local aim = F.getAimPos(plr)
     if not aim then return end
     local now = tick()
     local interval = IsHoodCustoms and 0.08 or 0.0
     if State.FakePos then interval = 0.12 end
     if now - lastCamMouseFire >= interval then
         lastCamMouseFire = now
-        pcall(function() fireMouse(aim) end)
+        pcall(function() F.fireMouse(aim) end)
         pcall(function()
-            local be = getChar() and getChar():FindFirstChild("BodyEffects")
+            local be = F.getChar() and F.getChar():FindFirstChild("BodyEffects")
             local mp = be and be:FindFirstChild("MousePos")
             if mp and mp:IsA("Vector3Value") then mp.Value = aim end
         end)
@@ -1175,12 +1081,12 @@ local function camlockStep()
     end)
 end
 
-local function setCamlock(plr, seconds)
+function F.setCamlock(plr, seconds)
     if not plr then return end
     CamTarget = plr.Name
     State.Camlock = true
-    setAimLock(plr)
-    pcall(ensureSilentAim)
+    F.setAimLock(plr)
+    pcall(F.ensureSilentAim)
     CamlockUntil = (seconds and seconds > 0) and (tick() + seconds) or 0
     -- FakePos: aim lock only — no RenderStep camera bind (avoids red errors)
     if State.FakePos then
@@ -1189,7 +1095,7 @@ local function setCamlock(plr, seconds)
     end
     pcall(function()
         RunService:UnbindFromRenderStep(CAM_BIND)
-        RunService:BindToRenderStep(CAM_BIND, Enum.RenderPriority.Last.Value, camlockStep)
+        RunService:BindToRenderStep(CAM_BIND, Enum.RenderPriority.Last.Value, F.camlockStep)
     end)
 end
 
@@ -1199,20 +1105,20 @@ end
 local _lastFormAt = 0
 local _fakeFreezeCF = nil -- when FakePos + shooting: pin here, zero CFrame writes
 
-local function clearFakeFreeze()
+function F.clearFakeFreeze()
     _fakeFreezeCF = nil
 end
 
-local function pinFakeFreeze()
+function F.pinFakeFreeze()
     if not State.FakePos then
         _fakeFreezeCF = nil
         return
     end
-    local my = getHRP()
+    local my = F.getHRP()
     if not my then return end
     -- prefer current slot relative to owner once; then freeze
-    local owner = getOwner()
-    local oHRP = owner and getHRP(owner)
+    local owner = F.getOwner()
+    local oHRP = owner and F.getHRP(owner)
     if oHRP then
         local offset = SLOT_CF[MySlot] or SLOT_CF[2]
         _fakeFreezeCF = oHRP.CFrame * offset
@@ -1228,11 +1134,11 @@ end
 
 -- Hold formation slot relative to owner. Soft on HC to avoid CLIENT_UNSYNCED_SERVER.
 -- force=true ignores Tracking (used by FakePos during combat).
-local function holdFormation(force)
+function F.holdFormation(force)
     if IsOwner then return end
     if State.KnifeBusy and not force then return end
     if State.InVoid or State.VoidEat then
-        local hrp = getHRP()
+        local hrp = F.getHRP()
         if hrp then
             pcall(function()
                 hrp.CFrame = VoidCF
@@ -1248,7 +1154,7 @@ local function holdFormation(force)
     -- Writing HRP while activating the gun = ERROR_CLIENT_UNSYNCED_SERVER on HC.
     if State.FakePos and (State.CombatActive or AimLockPlayer ~= nil) and not State.KnifeBusy then
         pcall(function()
-            local my = getHRP()
+            local my = F.getHRP()
             if not my then return end
             if _fakeFreezeCF then
                 -- only re-pin if we drifted a lot (rare); otherwise velocity only
@@ -1263,10 +1169,10 @@ local function holdFormation(force)
         return
     end
 
-    local owner = getOwner()
+    local owner = F.getOwner()
     if not owner then return end
-    local oHRP = getHRP(owner)
-    local my = getHRP()
+    local oHRP = F.getHRP(owner)
+    local my = F.getHRP()
     if not oHRP or not my then return end
     local offset = SLOT_CF[MySlot] or SLOT_CF[2]
     local dest = oHRP.CFrame * offset
@@ -1305,19 +1211,19 @@ local function holdFormation(force)
     end)
 end
 
-local function followOwner()
-    holdFormation(false)
+function F.followOwner()
+    F.holdFormation(false)
 end
 
-local function returnToOwner()
+function F.returnToOwner()
     if IsOwner then return end
-    clearCamlock()
+    F.clearCamlock()
     State.TargetName = nil
     State.InVoid = false
     State.Tracking = true
     State.KnifeBusy = false
     pcall(function()
-        local h = getHum()
+        local h = F.getHum()
         if h then
             h.PlatformStand = false
             h.Sit = false
@@ -1325,9 +1231,9 @@ local function returnToOwner()
             h:UnequipTools()
         end
     end)
-    local owner = getOwner()
-    local oHRP = owner and getHRP(owner)
-    local my = getHRP()
+    local owner = F.getOwner()
+    local oHRP = owner and F.getHRP(owner)
+    local my = F.getHRP()
     if oHRP and my then
         local offset = SLOT_CF[MySlot] or SLOT_CF[2]
         local steps = IsHoodCustoms and 2 or 5
@@ -1336,7 +1242,7 @@ local function returnToOwner()
                 local cf = oHRP.CFrame * offset
                 -- HC: never PivotTo (desync red error)
                 if not IsHoodCustoms then
-                    local char = getChar()
+                    local char = F.getChar()
                     if char and char.PivotTo then char:PivotTo(cf) end
                 end
                 my.CFrame = cf
@@ -1344,24 +1250,24 @@ local function returnToOwner()
                 my.AssemblyAngularVelocity = Vector3.zero
             end)
             task.wait(IsHoodCustoms and 0.08 or 0.05)
-            oHRP = getHRP(owner)
-            my = getHRP()
+            oHRP = F.getHRP(owner)
+            my = F.getHRP()
             if not oHRP or not my then break end
         end
     end
-    holdFormation(true)
+    F.holdFormation(true)
 end
 
 ----------------------------------------------------------------------
 ----------------------------------------------------------------------
 -- COMBAT: RELOAD
 ----------------------------------------------------------------------
-local function reloadGun(gun)
-    gun = gun or findGun()
+function F.reloadGun(gun)
+    gun = gun or F.findGun()
     if not gun then return false end
 
-    local c = getChar()
-    local h = getHum()
+    local c = F.getChar()
+    local h = F.getHum()
     if not c or not h then return false end
 
     -- must be equipped for most hood places
@@ -1451,13 +1357,13 @@ local function reloadGun(gun)
 end
 
 local lastAutoReload = 0
-local function autoReloadTick()
+function F.autoReloadTick()
     if not State.AutoReload then return end
     if State.KnifeBusy then return end
     if tick() - lastAutoReload < 1.5 then return end
     lastAutoReload = tick()
 
-    local c = getChar()
+    local c = F.getChar()
     if not c then return end
 
     -- prefer currently equipped gun
@@ -1478,10 +1384,10 @@ local function autoReloadTick()
 
     -- if armed or loopkill gun mode, equip preferred gun and reload
     if not equipped and (State.Armed or (State.LoopKill and not State.LoopKillKnife)) then
-        equipped = findGun()
+        equipped = F.findGun()
         if equipped then
             pcall(function()
-                local h = getHum()
+                local h = F.getHum()
                 if h then h:EquipTool(equipped) end
             end)
             task.wait(0.08)
@@ -1495,7 +1401,7 @@ local function autoReloadTick()
             need = (ammo.Value <= 0)
         end
         if need then
-            reloadGun(equipped)
+            F.reloadGun(equipped)
         end
     end
 end
@@ -1509,7 +1415,7 @@ local FOOD_NAMES = {
     "bagel", "cookie", "soda", "water", "milk", "juice", "candy",
 }
 
-local function isFoodName(name)
+function F.isFoodName(name)
     local n = string.lower(tostring(name or ""))
     for _, key in ipairs(FOOD_NAMES) do
         if n:find(key, 1, true) then return true end
@@ -1517,13 +1423,13 @@ local function isFoodName(name)
     return false
 end
 
-local function findFood()
-    local c = getChar()
+function F.findFood()
+    local c = F.getChar()
     local bag = LocalPlayer:FindFirstChild("Backpack")
     for _, container in ipairs({c, bag}) do
         if container then
             for _, t in ipairs(container:GetChildren()) do
-                if t:IsA("Tool") and isFoodName(t.Name) then
+                if t:IsA("Tool") and F.isFoodName(t.Name) then
                     return t
                 end
             end
@@ -1536,7 +1442,7 @@ end
 local HC_FOOD_ITEMS = { "[Chicken]", "[Pizza]", "[Taco]", "[Burger]" }
 
 -- Auto-buy food from shop if none in inventory
-local function buyFood()
+function F.buyFood()
     -- Hood Customs: BuyItem remote + FFA_MAP.Shop Grab pads
     if IsHoodCustoms and MainEvent then
         for _, item in ipairs(HC_FOOD_ITEMS) do
@@ -1575,15 +1481,15 @@ local function buyFood()
         end
         if not shop then return end
 
-        local my = getHRP()
+        local my = F.getHRP()
         local savedCF = my and my.CFrame
 
         for _, m in ipairs(shop:GetDescendants()) do
-            local nameOk = isFoodName(m.Name)
+            local nameOk = F.isFoodName(m.Name)
             -- HC pads named "Grab - [Chicken]" etc; also check PromptItem attribute
             if not nameOk and m:IsA("ClickDetector") then
                 local item = m:GetAttribute("PromptItem")
-                if item and isFoodName(tostring(item)) then nameOk = true end
+                if item and F.isFoodName(tostring(item)) then nameOk = true end
                 if m:GetAttribute("PromptKind") == "food" then nameOk = true end
             end
             if not nameOk then continue end
@@ -1612,7 +1518,7 @@ local function buyFood()
                     end
                 end)
                 task.wait(0.08)
-                if findFood() then break end
+                if F.findFood() then break end
             end
         end
 
@@ -1629,10 +1535,10 @@ local function buyFood()
     end)
 
     task.wait(0.15)
-    return findFood() ~= nil
+    return F.findFood() ~= nil
 end
 
-local function fireEatRemotes(food)
+function F.fireEatRemotes(food)
     if not MainEvent then return end
 
     -- Hood Customs (from dump): MainEvent:FireServer("EatFood", p167, v213)
@@ -1666,23 +1572,23 @@ local function fireEatRemotes(food)
     end
 end
 
-local function eatFood()
-    local food = findFood()
+function F.eatFood()
+    local food = F.findFood()
     -- never shop-TP while already void-healing (yanks character out)
     if not food and not State.VoidEat then
-        buyFood()
-        food = findFood()
+        F.buyFood()
+        food = F.findFood()
     end
     if food then
-        food = equipTool(food, State.VoidEat and 0.9 or 0.45)
+        food = F.equipTool(food, State.VoidEat and 0.9 or 0.45)
         if food then
             for _ = 1, 12 do
                 if State.VoidEat then
-                    pinToVoid()
+                    F.pinToVoid()
                 end
                 pcall(function() food:Activate() end)
-                activateTool(food)
-                fireEatRemotes(food)
+                F.activateTool(food)
+                F.fireEatRemotes(food)
                 -- HC: also fire ACTION on the food tool
                 if IsHoodCustoms then
                     pcall(function()
@@ -1709,7 +1615,7 @@ local function eatFood()
             return true
         end
     end
-    fireEatRemotes(nil)
+    F.fireEatRemotes(nil)
     if MainEvent then
         if IsHoodCustoms then
             for _, item in ipairs(HC_FOOD_ITEMS) do
@@ -1729,8 +1635,8 @@ local function eatFood()
 end
 
 -- Focused void heal: buy if needed, equip food, eat hard while pinned
-local function getLocalBlood()
-    local c = getChar()
+function F.getLocalBlood()
+    local c = F.getChar()
     if not c then return nil end
     local be = c:FindFirstChild("BodyEffects")
     if not be then return nil end
@@ -1743,14 +1649,14 @@ local function getLocalBlood()
     return nil
 end
 
-local function getLocalHurt()
+function F.getLocalHurt()
     -- Prefer BodyEffects blood; fall back to Humanoid + KO
-    local blood = getLocalBlood()
+    local blood = F.getLocalBlood()
     if blood ~= nil and blood < 90 then return true end
-    local hum = getHum()
+    local hum = F.getHum()
     if not hum then return true end
     if hum.Health < hum.MaxHealth * 0.9 then return true end
-    if isKO(LocalPlayer) then return true end
+    if F.isKO(LocalPlayer) then return true end
     return false
 end
 
@@ -1761,11 +1667,11 @@ local _voidEnterBusy = false
 local _lastVoidEatAt = 0
 local _voidCooldownUntil = 0 -- prevent instant re-void after exit
 
-local function pinToVoid()
-    local hrp = getHRP()
+function F.pinToVoid()
+    local hrp = F.getHRP()
     if not hrp then return end
     pcall(function()
-        local ch = getChar()
+        local ch = F.getChar()
         if ch and ch.PivotTo then
             ch:PivotTo(VoidCF)
         end
@@ -1774,7 +1680,7 @@ local function pinToVoid()
         hrp.AssemblyAngularVelocity = Vector3.zero
     end)
     pcall(function()
-        local h = getHum()
+        local h = F.getHum()
         if h then
             h.PlatformStand = false
             h.Sit = false
@@ -1787,21 +1693,21 @@ local function pinToVoid()
     end)
 end
 
-local function startVoidPinRender()
+function F.startVoidPinRender()
     pcall(function()
         RunService:UnbindFromRenderStep("StandVoidPin")
         RunService:BindToRenderStep("StandVoidPin", Enum.RenderPriority.Camera.Value - 1, function()
             if not State.VoidEat then return end
-            pinToVoid()
+            F.pinToVoid()
         end)
     end)
 end
 
-local function voidHealBurst()
+function F.voidHealBurst()
     if not State.VoidEat then return end
-    pinToVoid()
+    F.pinToVoid()
 
-    if not findFood() then
+    if not F.findFood() then
         -- remote-buy first (no TP)
         if MainEvent then
             for _, n in ipairs({
@@ -1813,28 +1719,28 @@ local function voidHealBurst()
             end
         end
         task.wait(0.2)
-        pinToVoid()
+        F.pinToVoid()
         -- if still no food, brief shop trip then back to void
-        if not findFood() then
-            pcall(buyFood)
-            pinToVoid()
+        if not F.findFood() then
+            pcall(F.buyFood)
+            F.pinToVoid()
             task.wait(0.15)
-            pinToVoid()
+            F.pinToVoid()
         end
     end
 
     for _ = 1, 6 do
         if not State.VoidEat then break end
-        pinToVoid()
-        eatFood()
-        pinToVoid()
+        F.pinToVoid()
+        F.eatFood()
+        F.pinToVoid()
         task.wait(0.1)
     end
 end
 
-local function enterCombatVoid()
+function F.enterCombatVoid()
     if State.VoidEat then
-        pinToVoid()
+        F.pinToVoid()
         return
     end
     State.InVoid = true
@@ -1844,15 +1750,15 @@ local function enterCombatVoid()
     local now = tick()
     VoidRecoverUntil = now + 4.5   -- max time in void then forced return
     VoidMinUntil = now + 2.0      -- MUST stay long enough to buy + eat
-    VoidBloodAtEnter = getLocalBlood()
+    VoidBloodAtEnter = F.getLocalBlood()
 
-    clearCamlock()
-    clearAimLock()
-    startVoidPinRender()
-    pinToVoid()
+    F.clearCamlock()
+    F.clearAimLock()
+    F.startVoidPinRender()
+    F.pinToVoid()
 
     pcall(function()
-        local h = getHum()
+        local h = F.getHum()
         if h then
             h.PlatformStand = false
             h.Sit = false
@@ -1862,25 +1768,25 @@ local function enterCombatVoid()
         end
     end)
 
-    pinToVoid()
+    F.pinToVoid()
 
     -- dedicated void heal: buy + equip + eat while pinned
-    pcall(voidHealBurst)
-    pinToVoid()
+    pcall(F.voidHealBurst)
+    F.pinToVoid()
 end
 
-local function getCombatReturnCF()
+function F.getCombatReturnCF()
     -- Prefer current fight target, else owner formation
     local targetName = State.LoopKill or State.LoopKnock or State.TargetName
     if targetName then
-        local plr = findPlayer(targetName)
-        local their = plr and getHRP(plr)
+        local plr = F.findPlayer(targetName)
+        local their = plr and F.getHRP(plr)
         if their then
             return their.CFrame * CFrame.new(0, 2, 6)
         end
     end
-    local owner = getOwner()
-    local oHRP = owner and getHRP(owner)
+    local owner = F.getOwner()
+    local oHRP = owner and F.getHRP(owner)
     if oHRP then
         local offset = SLOT_CF[MySlot] or SLOT_CF[2]
         return oHRP.CFrame * offset
@@ -1889,20 +1795,20 @@ local function getCombatReturnCF()
     return CFrame.new(0, 50, 0)
 end
 
-local function warpOutOfVoid()
-    local cf = getCombatReturnCF()
+function F.warpOutOfVoid()
+    local cf = F.getCombatReturnCF()
     for _ = 1, 8 do
         if State.VoidEat then return end
         pcall(function()
-            local h = getHum()
+            local h = F.getHum()
             if h then
                 h.PlatformStand = false
                 h.Sit = false
                 h:ChangeState(Enum.HumanoidStateType.GettingUp)
                 h:ChangeState(Enum.HumanoidStateType.Running)
             end
-            local hrp = getHRP()
-            local ch = getChar()
+            local hrp = F.getHRP()
+            local ch = F.getChar()
             if ch and ch.PivotTo then
                 ch:PivotTo(cf)
             end
@@ -1916,7 +1822,7 @@ local function warpOutOfVoid()
     end
 end
 
-local function exitCombatVoid()
+function F.exitCombatVoid()
     State.InVoid = false
     State.VoidEat = false
     VoidRecoverUntil = 0
@@ -1930,11 +1836,11 @@ local function exitCombatVoid()
 
     -- MUST leave void coordinates or stand stays stuck under map / in sky
     task.spawn(function()
-        warpOutOfVoid()
+        F.warpOutOfVoid()
     end)
 
     pcall(function()
-        local h = getHum()
+        local h = F.getHum()
         if h then
             h.PlatformStand = false
             h.Sit = false
@@ -1947,17 +1853,17 @@ local function exitCombatVoid()
     if State.CombatActive and (State.LoopKill or State.LoopKnock or State.SentryBusy) then
         State.Tracking = false
         State.LoopKillBusy = false -- allow loop worker to start again
-        notify("Combat resume")
+        F.notify("Combat resume")
     elseif State.CombatActive then
         State.Tracking = false
-        notify("Combat resume")
+        F.notify("Combat resume")
     else
         State.Tracking = true
-        notify("Healed — back")
+        F.notify("Healed — back")
         task.spawn(function()
             task.wait(0.1)
             if not State.CombatActive and not State.VoidEat then
-                pcall(returnToOwner)
+                pcall(F.returnToOwner)
             end
         end)
     end
@@ -1967,14 +1873,14 @@ end
 -- HC: large throttle + small lerp steps so we still close distance WITHOUT
 -- ERROR_CLIENT_UNSYNCED_SERVER (hard/fast TP is what triggers the red error).
 local _lastHoverAt = 0
-local function hoverOverTarget(plr, height)
+function F.hoverOverTarget(plr, height)
     if State.VoidEat or State.InVoid then return end
     if State.FakePos then return end -- never move body in FakePos
     height = height or State.HoverHeight or 4
-    local my = getHRP()
-    local their = getHRP(plr)
+    local my = F.getHRP()
+    local their = F.getHRP(plr)
     if not my or not their then return end
-    local aim = getAimPos(plr) or their.Position
+    local aim = F.getAimPos(plr) or their.Position
     local vel = their.AssemblyLinearVelocity or Vector3.zero
     local speed = vel.Magnitude
     local airborne = speed > 12 or (their.Position.Y - (Workspace.FallenPartsDestroyHeight or -500) > 40
@@ -2037,7 +1943,7 @@ local function hoverOverTarget(plr, height)
 
         if not IsHoodCustoms then
             local cf = CFrame.new(targetPos, look)
-            local ch = getChar()
+            local ch = F.getChar()
             if ch and ch.PivotTo then ch:PivotTo(cf) end
             my.CFrame = cf
             if airborne and speed > 8 then
@@ -2080,30 +1986,30 @@ end
 
 -- Multi-step slow approach before shooting (HC, FakePos OFF).
 -- Takes ~0.8–1.5s to close distance safely instead of one hard TP.
-local function softApproachTarget(plr, seconds)
+function F.softApproachTarget(plr, seconds)
     if State.FakePos or not plr then return end
     if not IsHoodCustoms then
-        hoverOverTarget(plr)
+        F.hoverOverTarget(plr)
         return
     end
     seconds = seconds or 1.0
     local t0 = tick()
     while tick() - t0 < seconds do
-        if not getChar(plr) then break end
+        if not F.getChar(plr) then break end
         if State.VoidEat or State.InVoid then break end
-        hoverOverTarget(plr)
+        F.hoverOverTarget(plr)
         task.wait(0.28)
     end
 end
 
-local function beginCombat()
+function F.beginCombat()
     State.CombatActive = true
     if State.FakePos then
-        pinFakeFreeze()
+        F.pinFakeFreeze()
     end
 end
 
-local function endCombat()
+function F.endCombat()
     State.CombatActive = false
     State.VoidEat = false
     State.InVoid = false
@@ -2111,27 +2017,27 @@ local function endCombat()
     VoidMinUntil = 0
     VoidBloodAtEnter = nil
     _voidEnterBusy = false
-    clearFakeFreeze()
+    F.clearFakeFreeze()
     pcall(function()
         RunService:UnbindFromRenderStep("StandVoidPin")
     end)
 end
 
 -- If shot during combat → void + eat, then ALWAYS leave void and resume combat
-local function combatSurviveTick()
+function F.combatSurviveTick()
     if IsOwner then return end
 
     -- CRITICAL: always process void recovery even if CombatActive became false,
     -- otherwise the stand gets permanently stuck in void.
     if State.VoidEat then
-        pinToVoid()
+        F.pinToVoid()
 
         -- keep eating while voided
         if tick() - _lastVoidEatAt >= 0.55 then
             _lastVoidEatAt = tick()
             pcall(function()
-                if findFood() then
-                    eatFood()
+                if F.findFood() then
+                    F.eatFood()
                 else
                     -- remote buy only (no shop TP from heartbeat)
                     if MainEvent then
@@ -2143,10 +2049,10 @@ local function combatSurviveTick()
                             pcall(function() MainEvent:FireServer("Buy", n) end)
                         end
                     end
-                    fireEatRemotes(nil)
+                    F.fireEatRemotes(nil)
                 end
             end)
-            pinToVoid()
+            F.pinToVoid()
         end
 
         local now = tick()
@@ -2160,29 +2066,29 @@ local function combatSurviveTick()
         -- Healed = no longer hurt (blood/hp recovered or full health bar)
         local healed = false
         if minDone then
-            if not getLocalHurt() then
+            if not F.getLocalHurt() then
                 healed = true
             else
-                local blood = getLocalBlood()
+                local blood = F.getLocalBlood()
                 if blood ~= nil and blood >= 95 then
                     healed = true
                 end
-                local hum = getHum()
-                if hum and not isKO(LocalPlayer) and hum.Health >= hum.MaxHealth * 0.92 then
+                local hum = F.getHum()
+                if hum and not F.isKO(LocalPlayer) and hum.Health >= hum.MaxHealth * 0.92 then
                     healed = true
                 end
             end
         end
 
         if (minDone and healed) or maxDone then
-            exitCombatVoid()
+            F.exitCombatVoid()
         end
         return
     end
 
     -- Auto void-heal on shot DISABLED — does not work reliably (manual .heal still works via cmdHeal)
     -- if not State.CombatActive then return end
-    -- if getLocalHurt() and not _voidEnterBusy and tick() >= _voidCooldownUntil then
+    -- if F.getLocalHurt() and not _voidEnterBusy and tick() >= _voidCooldownUntil then
     --     ...
     -- end
 end
@@ -2194,8 +2100,8 @@ end
 ----------------------------------------------------------------------
 local _lastHcMoveAt = 0
 
-local function hcSetCF(cf, vel)
-    local my = getHRP()
+function F.hcSetCF(cf, vel)
+    local my = F.getHRP()
     if not my then return end
     pcall(function()
         -- clamp Y so we never write an under-map CFrame
@@ -2212,22 +2118,22 @@ local function hcSetCF(cf, vel)
 end
 
 -- Deprecated no-op: underground dives caused falling + red errors
-local function hcGoUnderground(_plr)
+function F.hcGoUnderground(_plr)
     -- intentionally empty
 end
 
 -- Soft surface orbit only (throttled). Respects FakePos.
-local function hcSurfaceAbove(plr)
+function F.hcSurfaceAbove(plr)
     if State.FakePos then return end
     if State.VoidEat or State.InVoid then return end
-    local their = getHRP(plr)
-    local my = getHRP()
+    local their = F.getHRP(plr)
+    local my = F.getHRP()
     if not my or not their then return end
     local now = tick()
     if now - _lastHcMoveAt < 0.20 then return end
     _lastHcMoveAt = now
 
-    local aim = getAimPos(plr) or (their.Position + Vector3.new(0, 1.35, 0))
+    local aim = F.getAimPos(plr) or (their.Position + Vector3.new(0, 1.35, 0))
     local phase = (now * 1.2) % (math.pi * 2)
     local r = 2.6
     local pos = their.Position + Vector3.new(math.cos(phase) * r, 2.4, math.sin(phase) * r)
@@ -2249,27 +2155,27 @@ local function hcSurfaceAbove(plr)
         if mid.Y < their.Position.Y + 1.0 then
             mid = Vector3.new(mid.X, their.Position.Y + 2.0, mid.Z)
         end
-        hcSetCF(CFrame.new(mid, look), Vector3.zero)
+        F.hcSetCF(CFrame.new(mid, look), Vector3.zero)
     elseif dist > 2.5 then
         local mid = my.Position:Lerp(pos, 0.35)
-        hcSetCF(CFrame.new(mid, look), Vector3.zero)
+        F.hcSetCF(CFrame.new(mid, look), Vector3.zero)
     else
         -- close: rotate only + tiny drift (avoids micro-teleport spam)
-        hcSetCF(CFrame.new(my.Position, look), Vector3.zero)
+        F.hcSetCF(CFrame.new(my.Position, look), Vector3.zero)
     end
 end
 
 -- COMBAT: SHOOT
 ----------------------------------------------------------------------
-local function shootTarget(plr)
-    if not plr or isProtected(plr) or not isAlive(plr) then return end
+function F.shootTarget(plr)
+    if not plr or F.isProtected(plr) or not F.isAlive(plr) then return end
     if State.InVoid and not State.VoidEat then State.InVoid = false end
     if State.VoidEat then
         -- wait for heal void to finish (up to recover window), don't force-exit early
         local t0 = tick()
         while State.VoidEat and tick() - t0 < 4 do task.wait(0.1) end
         if State.VoidEat then
-            exitCombatVoid()
+            F.exitCombatVoid()
         end
     end
 
@@ -2277,106 +2183,106 @@ local function shootTarget(plr)
     --   FakePos ON  → freeze in slot, aim-only (no CFrame / camera / VIM mid-shot)
     --   FakePos OFF → SLOW TP toward target, then shoot (no hard snaps)
     if IsHoodCustoms then
-        local gun = findGun()
+        local gun = F.findGun()
         if not gun then
-            notify("No gun: " .. PreferredGun)
+            F.notify("No gun: " .. PreferredGun)
             return
         end
-        gun = equipTool(gun, 0.5)
+        gun = F.equipTool(gun, 0.5)
         if not gun then
-            notify("Could not equip gun")
+            F.notify("Could not equip gun")
             return
         end
         State.Armed = true
-        setAimLock(plr)
-        pcall(ensureSilentAim)
+        F.setAimLock(plr)
+        pcall(F.ensureSilentAim)
 
         if State.FakePos then
-            pinFakeFreeze() -- one pin, then zero CFrame writes during shots
+            F.pinFakeFreeze() -- one pin, then zero CFrame writes during shots
         else
-            softApproachTarget(plr, 1.1) -- slow crawl into range
-            setCamlock(plr, 3)
+            F.softApproachTarget(plr, 1.1) -- slow crawl into range
+            F.setCamlock(plr, 3)
         end
-        reloadGun(gun)
+        F.reloadGun(gun)
         task.wait(0.06)
 
         for shot = 1, 8 do
-            if not isAlive(plr) or isKO(plr) then break end
+            if not F.isAlive(plr) or F.isKO(plr) then break end
             if State.VoidEat or State.InVoid then break end
-            if gun.Parent ~= getChar() then
-                gun = equipTool(findGun(), 0.35)
+            if gun.Parent ~= F.getChar() then
+                gun = F.equipTool(F.findGun(), 0.35)
                 if not gun then break end
             end
             if State.FakePos then
                 -- velocity only — never CFrame while gun is firing
                 pcall(function()
-                    local my = getHRP()
+                    local my = F.getHRP()
                     if not my then return end
                     my.AssemblyLinearVelocity = Vector3.zero
                     my.AssemblyAngularVelocity = Vector3.zero
                 end)
             else
                 -- slow step closer between shots (throttled inside hoverOverTarget)
-                hoverOverTarget(plr)
+                F.hoverOverTarget(plr)
             end
-            local aim = getAimPos(plr)
+            local aim = F.getAimPos(plr)
             if not aim then break end
             -- BodyEffects MousePos only (HC-safe). Skip extra MainEvent spam on FakePos.
             pcall(function()
-                local be = getChar() and getChar():FindFirstChild("BodyEffects")
+                local be = F.getChar() and F.getChar():FindFirstChild("BodyEffects")
                 if not be then return end
                 local mp = be:FindFirstChild("MousePos")
                 if mp and mp:IsA("Vector3Value") then mp.Value = aim end
             end)
             if not State.FakePos then
-                pcall(function() fireMouse(aim) end)
+                pcall(function() F.fireMouse(aim) end)
             else
                 -- FakePos: one light mouse remote max every other shot
                 if shot % 2 == 1 then
-                    pcall(function() fireMouse(aim) end)
+                    pcall(function() F.fireMouse(aim) end)
                 end
             end
-            activateTool(gun)
+            F.activateTool(gun)
             if not State.FakePos then
-                pcall(function() forceGunHit(plr, gun) end)
+                pcall(function() F.forceGunHit(plr, gun) end)
             end
-            if shot % 4 == 0 then reloadGun(gun) end
+            if shot % 4 == 0 then F.reloadGun(gun) end
             task.wait(0.12)
         end
-        reloadGun(gun)
-        clearAimLock()
+        F.reloadGun(gun)
+        F.clearAimLock()
         if State.FakePos then
-            clearFakeFreeze()
-            holdFormation(true)
+            F.clearFakeFreeze()
+            F.holdFormation(true)
         end
         return
     end
 
-    local gun = findGun()
+    local gun = F.findGun()
     if not gun then
-        notify("No gun: " .. PreferredGun)
+        F.notify("No gun: " .. PreferredGun)
         return
     end
-    gun = equipTool(gun, 0.8)
+    gun = F.equipTool(gun, 0.8)
     if not gun then
-        notify("Could not equip gun")
+        F.notify("Could not equip gun")
         return
     end
     State.Armed = true
-    setAimLock(plr)
-    pcall(ensureSilentAim)
+    F.setAimLock(plr)
+    pcall(F.ensureSilentAim)
     if State.FakePos then
-        holdFormation(true)
+        F.holdFormation(true)
     else
-        setCamlock(plr, 4)
-        hoverOverTarget(plr)
+        F.setCamlock(plr, 4)
+        F.hoverOverTarget(plr)
     end
-    reloadGun(gun)
+    F.reloadGun(gun)
     task.wait(0.1)
 
     local maxShots = IsDersHood and 18 or 16
     for shot = 1, maxShots do
-        if not isAlive(plr) or isKO(plr) then break end
+        if not F.isAlive(plr) or F.isKO(plr) then break end
         -- if we got voided mid-fight, wait and resume
         if State.VoidEat or State.InVoid then
             local t0 = tick()
@@ -2384,34 +2290,34 @@ local function shootTarget(plr)
                 task.wait(0.1)
             end
             if State.VoidEat or State.InVoid then
-                exitCombatVoid()
+                F.exitCombatVoid()
             end
-            gun = equipTool(findGun(), 0.5)
+            gun = F.equipTool(F.findGun(), 0.5)
             if not gun then break end
-            setAimLock(plr)
-            if not State.FakePos then setCamlock(plr, 3) end
+            F.setAimLock(plr)
+            if not State.FakePos then F.setCamlock(plr, 3) end
         end
-        if gun.Parent ~= getChar() then
-            gun = equipTool(findGun(), 0.5)
+        if gun.Parent ~= F.getChar() then
+            gun = F.equipTool(F.findGun(), 0.5)
             if not gun then break end
         end
 
         if not State.FakePos then
-            hoverOverTarget(plr)
+            F.hoverOverTarget(plr)
         end
-        local aim = getAimPos(plr)
+        local aim = F.getAimPos(plr)
         if not aim then break end
 
-        pcall(function() fireMouse(aim) end)
+        pcall(function() F.fireMouse(aim) end)
         pcall(function()
-            local be = getChar() and getChar():FindFirstChild("BodyEffects")
+            local be = F.getChar() and F.getChar():FindFirstChild("BodyEffects")
             local mp = be and be:FindFirstChild("MousePos")
             if mp and mp:IsA("Vector3Value") then mp.Value = aim end
         end)
         -- FakePos: no camera / VIM — only remotes + Activate
         if not State.FakePos then
             if IsDersHood then
-                for _ = 1, 2 do pcall(function() fireMouse(aim) end) end
+                for _ = 1, 2 do pcall(function() F.fireMouse(aim) end) end
                 pcall(function()
                     if Camera and Camera.CameraType ~= Enum.CameraType.Scriptable then
                         local origin = Camera.CFrame.Position
@@ -2439,8 +2345,8 @@ local function shootTarget(plr)
             end
         end
 
-        activateTool(gun)
-        pcall(function() forceGunHit(plr, gun) end)
+        F.activateTool(gun)
+        pcall(function() F.forceGunHit(plr, gun) end)
 
         if not State.FakePos then
             pcall(function()
@@ -2458,18 +2364,18 @@ local function shootTarget(plr)
         end
 
         if shot % 5 == 0 then
-            reloadGun(gun)
+            F.reloadGun(gun)
             task.wait(0.05)
         end
         task.wait(0.07)
     end
 
-    reloadGun(gun)
+    F.reloadGun(gun)
 end
 
 -- COMBAT: STOMP
 ----------------------------------------------------------------------
-local function stompTarget(plr, times)
+function F.stompTarget(plr, times)
     if not plr then return end
     -- HC: fewer stomps + slower cadence = no CLIENT_UNSYNCED_SERVER
     if IsHoodCustoms then
@@ -2478,11 +2384,11 @@ local function stompTarget(plr, times)
         times = times or 16
     end
     State.Tracking = false
-    clearAimLock()
+    F.clearAimLock()
 
     -- unequip so stomp input isn't eaten by gun/tool
     pcall(function()
-        local h = getHum()
+        local h = F.getHum()
         if h then h:UnequipTools() end
     end)
     State.Armed = false
@@ -2490,16 +2396,16 @@ local function stompTarget(plr, times)
 
     local lastStompMove = 0
     for i = 1, times do
-        if not getChar(plr) then break end
+        if not F.getChar(plr) then break end
         -- if they got up and are no longer KO, stop stomping this cycle
-        if not isKO(plr) and i > 3 then
-            local h = getHum(plr)
+        if not F.isKO(plr) and i > 3 then
+            local h = F.getHum(plr)
             if h and h.Health > 20 then break end
         end
 
-        local my = getHRP()
-        local theirChar = getChar(plr)
-        local their = getHRP(plr)
+        local my = F.getHRP()
+        local theirChar = F.getChar(plr)
+        local their = F.getHRP(plr)
         -- prefer UpperTorso for standing on knocked body (HRP can float)
         local standOn = theirChar and (theirChar:FindFirstChild("UpperTorso") or theirChar:FindFirstChild("Torso") or their)
         if my and standOn then
@@ -2524,7 +2430,7 @@ local function stompTarget(plr, times)
                         my.AssemblyAngularVelocity = Vector3.zero
                     end
                 else
-                    local ch = getChar()
+                    local ch = F.getChar()
                     if ch and ch.PivotTo then ch:PivotTo(cf) end
                     my.CFrame = cf
                     my.AssemblyLinearVelocity = Vector3.zero
@@ -2535,7 +2441,7 @@ local function stompTarget(plr, times)
 
         -- ensure upright / not ragdolled ourselves
         pcall(function()
-            local h = getHum()
+            local h = F.getHum()
             if h then
                 h.PlatformStand = false
                 h.Sit = false
@@ -2583,16 +2489,16 @@ end
 
 -- COMBAT: KNIFE / KATANA — controlled strafe + big hitbox + charge swings + stomp
 ----------------------------------------------------------------------
-local function forceTPTo(plr, offset)
+function F.forceTPTo(plr, offset)
     offset = offset or Vector3.new(0, 0.2, 0)
-    local my = getHRP()
-    local their = getHRP(plr)
+    local my = F.getHRP()
+    local their = F.getHRP(plr)
     if not my or not their then return false end
     local pos = their.Position + offset
     local look = their.Position + Vector3.new(0, 1.0, 0)
     local cf = CFrame.new(pos, look)
     pcall(function()
-        local ch = getChar()
+        local ch = F.getChar()
         if ch and ch.PivotTo then ch:PivotTo(cf) end
         my.CFrame = cf
         my.AssemblyLinearVelocity = Vector3.zero
@@ -2602,7 +2508,7 @@ local function forceTPTo(plr, offset)
 end
 
 -- Soft strafe around target: orbit at human-ish speed so hits land without hard TP spam flags
-local function knifeStrafeOffset(under)
+function F.knifeStrafeOffset(under)
     -- ~2.1 rad/s orbit, radius 1.5–2.2 (fast enough to stay on target, not teleport-spam)
     local t = tick()
     local phase = t * 2.1
@@ -2613,27 +2519,27 @@ local function knifeStrafeOffset(under)
     return Vector3.new(ox, height, oz)
 end
 
-local function knifeTarget(plr)
-    if not plr or isProtected(plr) then return end
+function F.knifeTarget(plr)
+    if not plr or F.isProtected(plr) then return end
     if State.KnifeBusy then return end
     State.KnifeBusy = true
     State.Tracking = false
     if State.InVoid then State.InVoid = false end
 
     task.spawn(function()
-        local knife = findKnife()
-        if knife then knife = equipTool(knife, 0.6) end
+        local knife = F.findKnife()
+        if knife then knife = F.equipTool(knife, 0.6) end
         if not knife then
-            notify("Knife: equip [Katana]/[Knife] in backpack first")
+            F.notify("Knife: equip [Katana]/[Knife] in backpack first")
             State.KnifeBusy = false
             State.Tracking = true
             return
         end
-        expandKnifeParts(knife)
-        setAimLock(plr)
-        pcall(ensureSilentAim)
-        setCamlock(plr, 10)
-        notify("Strafe -> " .. plr.Name)
+        F.expandKnifeParts(knife)
+        F.setAimLock(plr)
+        pcall(F.ensureSilentAim)
+        F.setCamlock(plr, 10)
+        F.notify("Strafe -> " .. plr.Name)
 
         -- Throttled strafe lock (not every Heartbeat frame — reduces flag risk)
         local under = false
@@ -2641,19 +2547,19 @@ local function knifeTarget(plr)
         local STRAFE_INTERVAL = 0.09 -- ~11 Hz position updates
         local lockConn
         lockConn = RunService.Heartbeat:Connect(function()
-            if not plr or not getChar(plr) then return end
+            if not plr or not F.getChar(plr) then return end
             local now = tick()
             if now - lastStrafeAt < STRAFE_INTERVAL then
                 -- still refresh aim every frame for hit registration
-                local aim = getAimPos(plr)
-                if aim then pcall(function() fireMouse(aim) end) end
+                local aim = F.getAimPos(plr)
+                if aim then pcall(function() F.fireMouse(aim) end) end
                 return
             end
             lastStrafeAt = now
-            local off = knifeStrafeOffset(under)
-            forceTPTo(plr, off)
-            local aim = getAimPos(plr)
-            if aim then pcall(function() fireMouse(aim) end) end
+            local off = F.knifeStrafeOffset(under)
+            F.forceTPTo(plr, off)
+            local aim = F.getAimPos(plr)
+            if aim then pcall(function() F.fireMouse(aim) end) end
         end)
 
         -- Keep swinging for full window — do NOT stop after first hit / false KO
@@ -2661,9 +2567,9 @@ local function knifeTarget(plr)
         local t0 = tick()
         local swing = 0
         while tick() - t0 < 5.0 do
-            local theirChar = getChar(plr)
+            local theirChar = F.getChar(plr)
             if not theirChar then break end
-            local theirHum = getHum(plr)
+            local theirHum = F.getHum(plr)
             if theirHum and theirHum.Health <= 0 then break end
 
             swing = swing + 1
@@ -2671,29 +2577,29 @@ local function knifeTarget(plr)
             under = (swing % 6) >= 4
 
             -- Re-equip every few swings (tool often unequips after one Activate on these games)
-            if not knife or knife.Parent ~= getChar() or swing % 3 == 0 then
-                local h = getHum()
+            if not knife or knife.Parent ~= F.getChar() or swing % 3 == 0 then
+                local h = F.getHum()
                 if h then pcall(function() h:UnequipTools() end) end
                 task.wait(0.02)
-                knife = equipTool(findKnife(), 0.35)
-                if knife then expandKnifeParts(knife) end
+                knife = F.equipTool(F.findKnife(), 0.35)
+                if knife then F.expandKnifeParts(knife) end
             end
 
-            forceTPTo(plr, knifeStrafeOffset(under))
+            F.forceTPTo(plr, F.knifeStrafeOffset(under))
 
-            local aim = getAimPos(plr)
+            local aim = F.getAimPos(plr)
             if aim then
-                for _ = 1, 3 do fireMouse(aim) end
+                for _ = 1, 3 do F.fireMouse(aim) end
             end
 
-            setAttacking(true)
-            if knife and knife.Parent == getChar() then
+            F.setAttacking(true)
+            if knife and knife.Parent == F.getChar() then
                 -- spam Activate — some tools ignore the first click after equip
                 for _ = 1, 3 do
-                    activateTool(knife)
+                    F.activateTool(knife)
                 end
             end
-            fireHitRemotes(plr)
+            F.fireHitRemotes(plr)
 
             pcall(function()
                 local vim = game:GetService("VirtualInputManager")
@@ -2713,32 +2619,32 @@ local function knifeTarget(plr)
         end
 
         if lockConn then pcall(function() lockConn:Disconnect() end) end
-        setAttacking(false)
+        F.setAttacking(false)
 
         -- Always stomp after the swing window
         task.wait(0.1)
-        if getChar(plr) then
-            local h = getHum(plr)
+        if F.getChar(plr) then
+            local h = F.getHum(plr)
             if not h or h.Health > 0 then
-                notify("Stomping " .. plr.Name)
-                stompTarget(plr, 14)
+                F.notify("Stomping " .. plr.Name)
+                F.stompTarget(plr, 14)
             end
         end
 
-        clearCamlock()
-        clearAimLock()
+        F.clearCamlock()
+        F.clearAimLock()
         State.KnifeBusy = false
         State.Tracking = true
-        returnToOwner()
+        F.returnToOwner()
     end)
 end
 
 ----------------------------------------------------------------------
 -- AUTO PERKS
 ----------------------------------------------------------------------
-local function applyArmorMax()
+function F.applyArmorMax()
     pcall(function()
-        local c = getChar()
+        local c = F.getChar()
         if not c then return end
         local be = c:FindFirstChild("BodyEffects")
         if be then
@@ -2758,7 +2664,7 @@ local function applyArmorMax()
     end)
 end
 
-local function buyArmor()
+function F.buyArmor()
     if MainEvent then
         -- BuyArmor + Armor (both used on hood clones)
         pcall(function() MainEvent:FireServer("BuyArmor") end)
@@ -2782,12 +2688,12 @@ local function buyArmor()
             end
         end
     end)
-    applyArmorMax()
+    F.applyArmorMax()
 end
 
 -- Auto-buy armor when current armor drops below threshold (default 80%)
-local function getArmorPercent()
-    local c = getChar()
+function F.getArmorPercent()
+    local c = F.getChar()
     if not c then return 100 end
     local be = c:FindFirstChild("BodyEffects")
     if not be then return 100 end
@@ -2813,59 +2719,59 @@ local function getArmorPercent()
 end
 
 local lastArmorBuyAt = 0
-local function armorMaintainTick()
+function F.armorMaintainTick()
     if IsOwner then return end
     -- Only if AutoArmor/Inf config (not forced for Hood Customs)
     local enabled = Config.AutoArmor or Config.Inf or Config.ArmorMax
     if not enabled then return end
-    local pct = getArmorPercent()
+    local pct = F.getArmorPercent()
     local threshold = 50
     if pct <= threshold and (tick() - lastArmorBuyAt) > 1.2 then
         lastArmorBuyAt = tick()
-        buyArmor()
+        F.buyArmor()
     end
 end
 
 -- Auto heal: when hurt, buy food (BuyItem / shop) + EatFood without full void unless already voiding
 local lastAutoHealAt = 0
-local function autoHealTick()
+function F.autoHealTick()
     if IsOwner then return end
     if not State.AutoHeal then return end
     if State.VoidEat then return end -- void heal path already handles eating
     if State.KnifeBusy then return end
     if tick() - lastAutoHealAt < 2.0 then return end
-    if not getLocalHurt() then return end
+    if not F.getLocalHurt() then return end
     lastAutoHealAt = tick()
     task.spawn(function()
         pcall(function()
-            if not findFood() then
-                buyFood()
+            if not F.findFood() then
+                F.buyFood()
             end
-            if findFood() then
-                eatFood()
+            if F.findFood() then
+                F.eatFood()
             elseif MainEvent and IsHoodCustoms then
                 -- remote-only attempt if shop TP failed
                 for _, item in ipairs(HC_FOOD_ITEMS) do
                     pcall(function() MainEvent:FireServer("BuyItem", item) end)
                 end
-                fireEatRemotes(findFood())
+                F.fireEatRemotes(F.findFood())
             end
         end)
     end)
 end
 
-local function buyMask()
+function F.buyMask()
     if MainEvent then
         pcall(function() MainEvent:FireServer("Mask") end)
         pcall(function() MainEvent:FireServer("BuyMask") end)
     end
 end
 
-local function applyMuscle()
+function F.applyMuscle()
     if not Config.Muscle then return end
     local size = tonumber(Config.MuscleSize) or 15000
     pcall(function()
-        local be = getChar() and getChar():FindFirstChild("BodyEffects")
+        local be = F.getChar() and F.getChar():FindFirstChild("BodyEffects")
         if be then
             for _, name in ipairs({"Muscle", "MuscleSize", "Strength"}) do
                 local v = be:FindFirstChild(name)
@@ -2880,27 +2786,27 @@ local function applyMuscle()
     end)
 end
 
-local function startAutoPerks()
-pcall(ensureSilentAim)
+function F.startAutoPerks()
+pcall(F.ensureSilentAim)
     if IsOwner then return end
     task.spawn(function()
         local t0 = tick()
         while tick() - t0 < 10 do
-            if getHRP() then break end
+            if F.getHRP() then break end
             task.wait(0.3)
         end
         task.wait(0.5)
-        if Config.AutoArmor then buyArmor() end
-        if Config.ArmorMax or Config.Inf then applyArmorMax() end
-        if Config.AutoMask then buyMask() end
-        if Config.Muscle then applyMuscle() end
+        if Config.AutoArmor then F.buyArmor() end
+        if Config.ArmorMax or Config.Inf then F.applyArmorMax() end
+        if Config.AutoMask then F.buyMask() end
+        if Config.Muscle then F.applyMuscle() end
         if Config.Inf or Config.ArmorMax then
             while true do
                 if Config.Inf or Config.ArmorMax then
-                    applyArmorMax()
+                    F.applyArmorMax()
                     -- only buy when below threshold (armorMaintainTick also handles this)
-                    if Config.Inf and getArmorPercent() <= 80 then
-                        buyArmor()
+                    if Config.Inf and F.getArmorPercent() <= 80 then
+                        F.buyArmor()
                     end
                 end
                 task.wait(Config.Inf and 2.5 or 4)
@@ -2912,29 +2818,29 @@ end
 ----------------------------------------------------------------------
 -- COMMANDS
 ----------------------------------------------------------------------
-local function cmdVoid()
+function F.cmdVoid()
     if IsOwner then return end
     State.InVoid = true
     State.Tracking = false
-    clearCamlock()
-    notify("Void ON")
+    F.clearCamlock()
+    F.notify("Void ON")
 end
 
-local function cmdCall()
+function F.cmdCall()
     if IsOwner then return end
     State.InVoid = false
     State.Tracking = true
-    returnToOwner()
-    notify("Call - returning")
+    F.returnToOwner()
+    F.notify("Call - returning")
 end
 
-local function cmdTrack()
+function F.cmdTrack()
     if IsOwner then return end
     State.Tracking = not State.Tracking
-    notify("Track " .. (State.Tracking and "ON" or "OFF"))
+    F.notify("Track " .. (State.Tracking and "ON" or "OFF"))
 end
 
-local function cmdAir(arg)
+function F.cmdAir(arg)
     if arg == "on" or arg == "1" or arg == "true" then
         State.Air = true
     elseif arg == "off" or arg == "0" or arg == "false" then
@@ -2944,14 +2850,14 @@ local function cmdAir(arg)
     end
     SLOT_CF = State.Air and SLOT_CF_AIR or SLOT_CF_GROUND
     if not IsOwner and State.Tracking and not State.InVoid then
-        returnToOwner()
+        F.returnToOwner()
     end
-    notify("Air " .. (State.Air and "ON (floating)" or "OFF (ground)"))
+    F.notify("Air " .. (State.Air and "ON (floating)" or "OFF (ground)"))
 end
 
--- .fake / .fp / .fakepos — PhysicsRep fake position (server thinks you're elsewhere)
--- + stay in formation on client. Gun kills via silent aim. From NeverLarp-style desync.
-local function cmdFake(arg)
+-- .fake / .fp — stay in formation (fake position). Gun kills still work via silent aim + mouse remotes.
+-- Character does not hover/TP onto targets. Knife/stomp still need proximity (brief leave).
+function F.cmdFake(arg)
     if arg == "on" or arg == "1" or arg == "true" then
         State.FakePos = true
     elseif arg == "off" or arg == "0" or arg == "false" then
@@ -2960,116 +2866,109 @@ local function cmdFake(arg)
         State.FakePos = not State.FakePos
     end
     if State.FakePos then
-        local ok = startPhysicsFakePos()
         if not IsOwner and not State.InVoid then
             State.Tracking = true
-            returnToOwner()
-            pinFakeFreeze()
+            F.returnToOwner()
+            F.pinFakeFreeze()
         end
-        if ok then
-            notify("FakePos ON — physics desync + formation")
-        else
-            State.FakePos = false
-            notify("FakePos failed (no sethiddenproperty)")
-        end
+        F.notify("FakePos ON — freeze in slot, gun aim only (no TP)")
     else
-        stopPhysicsFakePos()
-        clearFakeFreeze()
-        notify("FakePos OFF")
+        F.clearFakeFreeze()
+        F.notify("FakePos OFF — slow TP to targets")
     end
 end
 
-local function cmdPos(slot)
+function F.cmdPos(slot)
     local n = tonumber(slot)
     if n and SLOT_CF[n] then
         MySlot = n
-        notify("Slot " .. n)
+        F.notify("Slot " .. n)
     else
-        notify("Usage: " .. Prefix .. "pos 1-6")
+        F.notify("Usage: " .. Prefix .. "pos 1-6")
     end
 end
 
-local function cmdArm()
-    local g = findGun()
-    if not g then notify("No gun found") return end
-    stopIdleAnim()
-    g = equipTool(g, 0.7)
+function F.cmdArm()
+    local g = F.findGun()
+    if not g then F.notify("No gun found") return end
+    F.stopIdleAnim()
+    g = F.equipTool(g, 0.7)
     State.Armed = g ~= nil
-    notify(State.Armed and ("Armed " .. g.Name) or "Arm failed")
+    F.notify(State.Armed and ("Armed " .. g.Name) or "Arm failed")
 end
 
-local function cmdUnarm()
+function F.cmdUnarm()
     pcall(function()
-        local h = getHum()
+        local h = F.getHum()
         if h then h:UnequipTools() end
     end)
     State.Armed = false
-    task.defer(applyIdleAnim)
-    notify("Unarmed")
+    task.defer(F.applyIdleAnim)
+    F.notify("Unarmed")
 end
 
 -- .d — knock only (no stomp)
-local function cmdKnock(user)
-    local plr = findPlayer(user)
-    if not plr then notify("Knock: not found (" .. tostring(user) .. ")") return end
-    local prot, why = isProtected(plr)
+function F.cmdKnock(user)
+    local plr = F.findPlayer(user)
+    if not plr then F.notify("Knock: not found (" .. tostring(user) .. ")") return end
+    local prot, why = F.isProtected(plr)
     if prot then
-        notify("Knock: protected (" .. tostring(why) .. " = " .. plr.Name .. ")")
+        F.notify("Knock: protected (" .. tostring(why) .. " = " .. plr.Name .. ")")
         return
     end
     State.Tracking = false
-    beginCombat()
+    F.beginCombat()
     task.spawn(function()
-        shootTarget(plr)
+        F.shootTarget(plr)
         local t0 = tick()
         while tick() - t0 < 2.5 do
-            if isKO(plr) then break end
-            if not getChar(plr) then break end
+            if F.isKO(plr) then break end
+            if not F.getChar(plr) then break end
             task.wait(0.15)
         end
-        if not isKO(plr) then
-            shootTarget(plr)
+        if not F.isKO(plr) then
+            F.shootTarget(plr)
         end
-        clearAimLock()
-        clearCamlock()
-        endCombat()
+        F.clearAimLock()
+        F.clearCamlock()
+        F.endCombat()
         State.Tracking = true
-        returnToOwner()
+        F.returnToOwner()
     end)
 end
 
 -- .s — stomp only
-local function cmdStomp(user)
-    local plr = findPlayer(user)
-    if not plr then notify("Stomp: not found") return end
+function F.cmdStomp(user)
+    local plr = F.findPlayer(user)
+    if not plr then F.notify("Stomp: not found") return end
     State.Tracking = false
-    beginCombat()
+    F.beginCombat()
     task.spawn(function()
-        stompTarget(plr, 12)
-        endCombat()
+        F.stompTarget(plr, 12)
+        F.endCombat()
         State.Tracking = true
-        returnToOwner()
+        F.returnToOwner()
     end)
 end
 
-local function cmdKnife(user)
-    local plr = findPlayer(user)
-    if not plr then notify("Knife: not found (" .. tostring(user) .. ")") return end
-    local prot, why = isProtected(plr)
+function F.cmdKnife(user)
+    local plr = F.findPlayer(user)
+    if not plr then F.notify("Knife: not found (" .. tostring(user) .. ")") return end
+    local prot, why = F.isProtected(plr)
     if prot then
-        notify("Knife: protected (" .. tostring(why) .. " = " .. plr.Name .. ")")
+        F.notify("Knife: protected (" .. tostring(why) .. " = " .. plr.Name .. ")")
         return
     end
-    knifeTarget(plr)
+    F.knifeTarget(plr)
 end
 
 -- .kat <user> — loop kill with katana/knife + stomp
-local function cmdKat(user)
-    local plr = findPlayer(user)
-    if not plr then notify("Kat: not found (" .. tostring(user) .. ")") return end
-    local prot, why = isProtected(plr)
+function F.cmdKat(user)
+    local plr = F.findPlayer(user)
+    if not plr then F.notify("Kat: not found (" .. tostring(user) .. ")") return end
+    local prot, why = F.isProtected(plr)
     if prot then
-        notify("Kat: protected (" .. tostring(why) .. " = " .. plr.Name .. ")")
+        F.notify("Kat: protected (" .. tostring(why) .. " = " .. plr.Name .. ")")
         return
     end
     -- reuse loopkill knife mode (knifeTarget + stomp when KO)
@@ -3078,33 +2977,33 @@ local function cmdKat(user)
     State.LoopKillKnife = true
     State.LoopKillBusy = false
     State.Tracking = false
-    beginCombat()
-    notify("Kat loopkill ON " .. plr.Name .. " (katana/knife + stomp)")
+    F.beginCombat()
+    F.notify("Kat loopkill ON " .. plr.Name .. " (katana/knife + stomp)")
 end
 
 -- .b — bring target near owner (improved)
-local function cmdBring(user)
-    local plr = findPlayer(user)
+function F.cmdBring(user)
+    local plr = F.findPlayer(user)
     if not plr then
-        notify("Bring: not found (" .. tostring(user) .. ")")
+        F.notify("Bring: not found (" .. tostring(user) .. ")")
         return
     end
-    local prot, why = isProtected(plr)
+    local prot, why = F.isProtected(plr)
     if prot then
-        notify("Bring: protected (" .. tostring(why) .. ")")
+        F.notify("Bring: protected (" .. tostring(why) .. ")")
         return
     end
 
     State.Tracking = false
-    beginCombat()
+    F.beginCombat()
 
     task.spawn(function()
-        local owner = getOwner()
+        local owner = F.getOwner()
         if not owner then
-            notify("Bring: no owner")
-            endCombat()
+            F.notify("Bring: no owner")
+            F.endCombat()
             State.Tracking = true
-            returnToOwner()
+            F.returnToOwner()
             return
         end
 
@@ -3125,15 +3024,15 @@ local function cmdBring(user)
         local function getClose(targetPlr, tries)
             tries = tries or 10
             for i = 1, tries do
-                local their = getHRP(targetPlr)
-                local my = getHRP()
+                local their = F.getHRP(targetPlr)
+                local my = F.getHRP()
                 if not their or not my then break end
 
                 -- Sit right on / slightly above the body (best for grab registration)
                 local offset = CFrame.new(0, 1.4 + (i % 3) * 0.15, 0.35)
                 pcall(function()
                     if not IsHoodCustoms then
-                        local ch = getChar()
+                        local ch = F.getChar()
                         if ch and ch.PivotTo then
                             ch:PivotTo(their.CFrame * offset)
                         end
@@ -3149,40 +3048,40 @@ local function cmdBring(user)
         end
 
         -- 1) Prefer knocking first (grab is much more reliable on KO'd players)
-        if isAlive(plr) and not isKO(plr) then
-            notify("Bring: knocking first...")
-            setAimLock(plr)
-            pcall(ensureSilentAim)
-            setCamlock(plr, 3)
-            shootTarget(plr)
+        if F.isAlive(plr) and not F.isKO(plr) then
+            F.notify("Bring: knocking first...")
+            F.setAimLock(plr)
+            pcall(F.ensureSilentAim)
+            F.setCamlock(plr, 3)
+            F.shootTarget(plr)
 
             local t0 = tick()
             while tick() - t0 < 2.8 do
-                if isKO(plr) or not getChar(plr) then break end
+                if F.isKO(plr) or not F.getChar(plr) then break end
                 task.wait(0.12)
             end
-            clearCamlock()
-            clearAimLock()
+            F.clearCamlock()
+            F.clearAimLock()
         end
 
-        if not getChar(plr) then
-            notify("Bring: target gone")
-            endCombat()
+        if not F.getChar(plr) then
+            F.notify("Bring: target gone")
+            F.endCombat()
             State.Tracking = true
-            returnToOwner()
+            F.returnToOwner()
             return
         end
 
         -- 2) Get on them + start grab
-        notify("Bring: grabbing " .. plr.Name)
+        F.notify("Bring: grabbing " .. plr.Name)
         getClose(plr, 14)
 
         -- 3) Haul toward owner while keeping grab active
         local haulUntil = tick() + 4.5
         while tick() < haulUntil do
-            local oHRP = getHRP(owner)
-            local their = getHRP(plr)
-            local my = getHRP()
+            local oHRP = F.getHRP(owner)
+            local their = F.getHRP(plr)
+            local my = F.getHRP()
             if not oHRP or not my then break end
 
             -- Keep re-attaching if they slip
@@ -3190,7 +3089,7 @@ local function cmdBring(user)
                 pcall(function()
                     local cf = their.CFrame * CFrame.new(0, 1.35, 0.3)
                     if not IsHoodCustoms then
-                        local ch = getChar()
+                        local ch = F.getChar()
                         if ch and ch.PivotTo then ch:PivotTo(cf) end
                     end
                     my.CFrame = cf
@@ -3202,7 +3101,7 @@ local function cmdBring(user)
             pcall(function()
                 local dest = oHRP.CFrame * CFrame.new(0, 0, 3.5)
                 if not IsHoodCustoms then
-                    local ch = getChar()
+                    local ch = F.getChar()
                     if ch and ch.PivotTo then ch:PivotTo(dest) end
                 end
                 my.CFrame = dest
@@ -3221,20 +3120,20 @@ local function cmdBring(user)
             pcall(function() MainEvent:FireServer("Grabbing") end)
         end
 
-        endCombat()
+        F.endCombat()
         State.Tracking = true
-        returnToOwner()
-        notify("Bring done → " .. plr.Name)
+        F.returnToOwner()
+        F.notify("Bring done → " .. plr.Name)
     end)
 end
 
 -- .l — loop kill (shoot + stomp)
-local function cmdLoopKill(user, useKnife)
-    local plr = findPlayer(user)
-    if not plr then notify("LoopKill: not found (" .. tostring(user) .. ")") return end
-    local prot, why = isProtected(plr)
+function F.cmdLoopKill(user, useKnife)
+    local plr = F.findPlayer(user)
+    if not plr then F.notify("LoopKill: not found (" .. tostring(user) .. ")") return end
+    local prot, why = F.isProtected(plr)
     if prot then
-        notify("LoopKill: protected (" .. tostring(why) .. " = " .. plr.Name .. ")")
+        F.notify("LoopKill: protected (" .. tostring(why) .. " = " .. plr.Name .. ")")
         return
     end
     State.LoopKnock = nil
@@ -3242,17 +3141,17 @@ local function cmdLoopKill(user, useKnife)
     State.LoopKillKnife = useKnife and true or false
     State.LoopKillBusy = false
     State.Tracking = false
-    beginCombat()
-    notify("LoopKill " .. (useKnife and "knife " or "gun ") .. "ON " .. plr.Name)
+    F.beginCombat()
+    F.notify("LoopKill " .. (useKnife and "knife " or "gun ") .. "ON " .. plr.Name)
 end
 
 -- .lk — loop knock only (no stomp)
-local function cmdLoopKnock(user)
-    local plr = findPlayer(user)
-    if not plr then notify("LoopKnock: not found (" .. tostring(user) .. ")") return end
-    local prot, why = isProtected(plr)
+function F.cmdLoopKnock(user)
+    local plr = F.findPlayer(user)
+    if not plr then F.notify("LoopKnock: not found (" .. tostring(user) .. ")") return end
+    local prot, why = F.isProtected(plr)
     if prot then
-        notify("LoopKnock: protected (" .. tostring(why) .. ")")
+        F.notify("LoopKnock: protected (" .. tostring(why) .. ")")
         return
     end
     State.LoopKill = nil
@@ -3260,35 +3159,35 @@ local function cmdLoopKnock(user)
     State.LoopKnock = plr.Name
     State.LoopKillBusy = false
     State.Tracking = false
-    beginCombat()
-    notify("LoopKnock ON " .. plr.Name)
+    F.beginCombat()
+    F.notify("LoopKnock ON " .. plr.Name)
 end
 
-local function cmdUnLoopKill()
+function F.cmdUnLoopKill()
     State.LoopKill = nil
     State.LoopKillKnife = false
     State.LoopKnock = nil
     State.LoopKillBusy = false
-    endCombat()
-    clearCamlock()
+    F.endCombat()
+    F.clearCamlock()
     if not IsOwner then State.Tracking = true end
-    notify("Loop OFF")
+    F.notify("Loop OFF")
 end
 
-local function parseOnOff(arg, current)
+function F.parseOnOff(arg, current)
     if arg == "on" or arg == "1" or arg == "true" then return true end
     if arg == "off" or arg == "0" or arg == "false" then return false end
     return not current
 end
 
-local function baselineSentryPlayer(plr)
+function F.baselineSentryPlayer(plr)
     if not plr then return end
-    local hum = getHum(plr)
+    local hum = F.getHum(plr)
     if not hum then return end
     HealthWatch[plr.UserId] = hum.Health
-    KoWatch[plr.UserId] = isKO(plr)
+    KoWatch[plr.UserId] = F.isKO(plr)
     local armor = 0
-    local c = getChar(plr)
+    local c = F.getChar(plr)
     local be = c and c:FindFirstChild("BodyEffects")
     if be then
         for _, name in ipairs({"Armor", "Defence", "Defense", "Helmet", "CurrentArmor"}) do
@@ -3299,22 +3198,22 @@ local function baselineSentryPlayer(plr)
     ArmorWatch[plr.UserId] = armor
 end
 
-local function cmdSentry(arg)
-    State.Sentry = parseOnOff(arg, State.Sentry)
+function F.cmdSentry(arg)
+    State.Sentry = F.parseOnOff(arg, State.Sentry)
     if State.Sentry then State.Sentry2 = false end
-    local o = getOwner()
-    baselineSentryPlayer(o)
-    notify("Sentry " .. (State.Sentry and "ON" or "OFF")
+    local o = F.getOwner()
+    F.baselineSentryPlayer(o)
+    F.notify("Sentry " .. (State.Sentry and "ON" or "OFF")
         .. " (knock who shoots owner)"
         .. (State.Sentry and (o and (" | owner=" .. o.Name) or " | WARNING: no owner set") or ""))
 end
 
-local function cmdSentry2(arg)
-    State.Sentry2 = parseOnOff(arg, State.Sentry2)
+function F.cmdSentry2(arg)
+    State.Sentry2 = F.parseOnOff(arg, State.Sentry2)
     if State.Sentry2 then State.Sentry = false end
-    local o = getOwner()
-    baselineSentryPlayer(o)
-    notify("Sentry2 " .. (State.Sentry2 and "ON" or "OFF")
+    local o = F.getOwner()
+    F.baselineSentryPlayer(o)
+    F.notify("Sentry2 " .. (State.Sentry2 and "ON" or "OFF")
         .. " (knock+stomp who shoots owner)"
         .. (State.Sentry2 and (o and (" | owner=" .. o.Name) or " | WARNING: no owner set") or ""))
 end
@@ -3322,24 +3221,24 @@ end
 local BSentryConn = nil
 local BSentryCharConn = nil
 
-local function hookBSentryLocal()
+function F.hookBSentryLocal()
     if BSentryConn then pcall(function() BSentryConn:Disconnect() end) BSentryConn = nil end
     if BSentryCharConn then pcall(function() BSentryCharConn:Disconnect() end) BSentryCharConn = nil end
     if not State.BSentry then return end
 
     local function attach(hum)
         if not hum then return end
-        baselineSentryPlayer(LocalPlayer)
+        F.baselineSentryPlayer(LocalPlayer)
         if BSentryConn then pcall(function() BSentryConn:Disconnect() end) end
         local last = hum.Health
         BSentryConn = hum.HealthChanged:Connect(function(hp)
             if not State.BSentry then return end
-            if hp < last - 0.5 or isKO(LocalPlayer) then
+            if hp < last - 0.5 or F.isKO(LocalPlayer) then
                 last = hp
                 -- immediate reaction on local damage (most reliable)
                 task.defer(function()
                     if State.SentryBusy then return end
-                    onVictimDamaged(LocalPlayer, true)
+                    F.onVictimDamaged(LocalPlayer, true)
                 end)
             else
                 last = hp
@@ -3347,36 +3246,36 @@ local function hookBSentryLocal()
         end)
     end
 
-    attach(getHum(LocalPlayer))
+    attach(F.getHum(LocalPlayer))
     BSentryCharConn = LocalPlayer.CharacterAdded:Connect(function()
         task.wait(0.5)
-        if State.BSentry then attach(getHum(LocalPlayer)) end
+        if State.BSentry then attach(F.getHum(LocalPlayer)) end
     end)
 end
 
-local function cmdBSentry(arg)
-    State.BSentry = parseOnOff(arg, State.BSentry)
-    baselineSentryPlayer(LocalPlayer)
-    hookBSentryLocal()
-    notify("BSentry " .. (State.BSentry and "ON" or "OFF") .. " (knock+stomp who shoots stand)")
+function F.cmdBSentry(arg)
+    State.BSentry = F.parseOnOff(arg, State.BSentry)
+    F.baselineSentryPlayer(LocalPlayer)
+    F.hookBSentryLocal()
+    F.notify("BSentry " .. (State.BSentry and "ON" or "OFF") .. " (knock+stomp who shoots stand)")
 end
 
-local function cmdAssist(user)
-    local plr = findPlayer(user)
-    if not plr then notify("Assist: not found") return end
+function F.cmdAssist(user)
+    local plr = F.findPlayer(user)
+    if not plr then F.notify("Assist: not found") return end
     State.AssistName = plr.Name
-    baselineSentryPlayer(plr)
-    notify("Assist ON " .. plr.Name .. " (sentry covers them too)")
+    F.baselineSentryPlayer(plr)
+    F.notify("Assist ON " .. plr.Name .. " (sentry covers them too)")
 end
 
-local function cmdUnassist()
+function F.cmdUnassist()
     State.AssistName = nil
-    notify("Assist OFF")
+    F.notify("Assist OFF")
 end
 
-local function cmdSay(msg)
+function F.cmdSay(msg)
     if not msg or msg == "" then
-        notify("Usage: " .. Prefix .. "say <message>")
+        F.notify("Usage: " .. Prefix .. "say <message>")
         return
     end
     pcall(function()
@@ -3393,7 +3292,7 @@ local function cmdSay(msg)
     pcall(function()
         local chat = game:GetService("Chat")
         if chat and chat.Chat then
-            chat:Chat(getChar() or LocalPlayer, msg)
+            chat:Chat(F.getChar() or LocalPlayer, msg)
         end
     end)
     pcall(function()
@@ -3407,21 +3306,21 @@ local function cmdSay(msg)
 end
 
 -- React to attacker (sentry / sentry2 / bsentry / assist)
-local function sentryReact(plr, doStomp)
-    if not plr or isProtected(plr) then return end
+function F.sentryReact(plr, doStomp)
+    if not plr or F.isProtected(plr) then return end
     if plr == LocalPlayer then return end
-    if not isAlive(plr) and not isKO(plr) then return end
+    if not F.isAlive(plr) and not F.isKO(plr) then return end
     if State.SentryBusy then return end
     State.SentryBusy = true
     State.Tracking = false
-    beginCombat()
-    notify("Sentry → " .. plr.Name .. (doStomp and " (stomp)" or ""))
+    F.beginCombat()
+    F.notify("Sentry → " .. plr.Name .. (doStomp and " (stomp)" or ""))
     task.spawn(function()
         local ok, err = pcall(function()
             -- if WE are knocked, try to stand back up so we can shoot
             pcall(function()
-                local h = getHum()
-                if h and (h.PlatformStand or isKO(LocalPlayer)) then
+                local h = F.getHum()
+                if h and (h.PlatformStand or F.isKO(LocalPlayer)) then
                     h.PlatformStand = false
                     h:ChangeState(Enum.HumanoidStateType.GettingUp)
                     h:ChangeState(Enum.HumanoidStateType.Running)
@@ -3429,57 +3328,57 @@ local function sentryReact(plr, doStomp)
             end)
             task.wait(0.05)
 
-            if isKO(plr) and doStomp then
-                stompTarget(plr, 14)
+            if F.isKO(plr) and doStomp then
+                F.stompTarget(plr, 14)
             else
-                setCamlock(plr, 4)
-                setAimLock(plr)
+                F.setCamlock(plr, 4)
+                F.setAimLock(plr)
                 -- force arm + shoot even if we just took damage
-                local gun = findGun()
+                local gun = F.findGun()
                 if gun then
-                    stopIdleAnim()
-                    equipTool(gun, 0.5)
+                    F.stopIdleAnim()
+                    F.equipTool(gun, 0.5)
                     State.Armed = true
                 end
-                shootTarget(plr)
+                F.shootTarget(plr)
                 local t0 = tick()
                 while tick() - t0 < 2.8 do
-                    if isKO(plr) then break end
-                    if not getChar(plr) then break end
+                    if F.isKO(plr) then break end
+                    if not F.getChar(plr) then break end
                     task.wait(0.1)
                 end
                 if doStomp then
-                    if isKO(plr) then
-                        stompTarget(plr, 14)
+                    if F.isKO(plr) then
+                        F.stompTarget(plr, 14)
                     else
-                        shootTarget(plr)
+                        F.shootTarget(plr)
                         task.wait(0.35)
-                        if isKO(plr) then stompTarget(plr, 12) end
+                        if F.isKO(plr) then F.stompTarget(plr, 12) end
                     end
                 end
             end
         end)
-        if not ok then warn("[Stand] sentryReact:", err) end
-        clearAimLock()
-        clearCamlock()
-        endCombat()
+        if not ok then warn("[Stand] F.sentryReact:", err) end
+        F.clearAimLock()
+        F.clearCamlock()
+        F.endCombat()
         State.Tracking = true
-        returnToOwner()
+        F.returnToOwner()
         task.wait(0.2)
         State.SentryBusy = false
     end)
 end
 
-local function resolvePlayerFromValue(val)
+function F.resolvePlayerFromValue(val)
     if not val then return nil end
     if typeof(val) == "Instance" then
         if val:IsA("Player") then return val end
         if val:IsA("Model") then return Players:GetPlayerFromCharacter(val) end
         if val:IsA("ObjectValue") and val.Value then
-            return resolvePlayerFromValue(val.Value)
+            return F.resolvePlayerFromValue(val.Value)
         end
     elseif type(val) == "string" then
-        return findPlayer(val)
+        return F.findPlayer(val)
     elseif type(val) == "number" then
         return Players:GetPlayerByUserId(val)
     end
@@ -3487,18 +3386,18 @@ local function resolvePlayerFromValue(val)
 end
 
 -- Find who most likely shot `victim`
-local function findAttacker(victim)
+function F.findAttacker(victim)
     if not victim then return nil end
-    local char = getChar(victim)
-    local hum = getHum(victim)
+    local char = F.getChar(victim)
+    local hum = F.getHum(victim)
 
     -- 1) Creator / attacker tags on humanoid & character
     if hum then
         for _, inst in ipairs(hum:GetChildren()) do
             local n = string.lower(inst.Name)
             if n:find("creat") or n:find("attack") or n:find("kill") or n:find("hit") or n:find("shoot") then
-                local p = resolvePlayerFromValue(inst.Value or inst)
-                if p and p ~= victim and p ~= LocalPlayer and not isProtected(p) then return p end
+                local p = F.resolvePlayerFromValue(inst.Value or inst)
+                if p and p ~= victim and p ~= LocalPlayer and not F.isProtected(p) then return p end
             end
         end
     end
@@ -3508,28 +3407,28 @@ local function findAttacker(victim)
             for _, inst in ipairs(be:GetDescendants()) do
                 local n = string.lower(inst.Name)
                 if n:find("creat") or n:find("attack") or n:find("kill") or n:find("shoot") or n:find("last") then
-                    local p = resolvePlayerFromValue(inst.Value)
-                    if p and p ~= victim and p ~= LocalPlayer and not isProtected(p) then return p end
+                    local p = F.resolvePlayerFromValue(inst.Value)
+                    if p and p ~= victim and p ~= LocalPlayer and not F.isProtected(p) then return p end
                 end
             end
         end
         for _, inst in ipairs(char:GetChildren()) do
             local n = string.lower(inst.Name)
             if n:find("creat") or n:find("attack") then
-                local p = resolvePlayerFromValue(inst.Value)
-                if p and p ~= victim and p ~= LocalPlayer and not isProtected(p) then return p end
+                local p = F.resolvePlayerFromValue(inst.Value)
+                if p and p ~= victim and p ~= LocalPlayer and not F.isProtected(p) then return p end
             end
         end
     end
 
     -- 2) Player looking at victim with a gun equipped (most reliable fallback)
-    local vHRP = getHRP(victim)
+    local vHRP = F.getHRP(victim)
     if not vHRP then return nil end
     local best, bestScore = nil, -1
     for _, plr in ipairs(Players:GetPlayers()) do
-        if plr ~= victim and plr ~= LocalPlayer and not isProtected(plr) and isAlive(plr) then
-            local hrp = getHRP(plr)
-            local ch = getChar(plr)
+        if plr ~= victim and plr ~= LocalPlayer and not F.isProtected(plr) and F.isAlive(plr) then
+            local hrp = F.getHRP(plr)
+            local ch = F.getChar(plr)
             if hrp and ch then
                 local hasTool = false
                 for _, c in ipairs(ch:GetChildren()) do
@@ -3559,9 +3458,9 @@ local function findAttacker(victim)
     -- 3) Closest armed player within range
     local closest, closestD = nil, 70
     for _, plr in ipairs(Players:GetPlayers()) do
-        if plr ~= victim and plr ~= LocalPlayer and not isProtected(plr) and isAlive(plr) then
-            local hrp = getHRP(plr)
-            local ch = getChar(plr)
+        if plr ~= victim and plr ~= LocalPlayer and not F.isProtected(plr) and F.isAlive(plr) then
+            local hrp = F.getHRP(plr)
+            local ch = F.getChar(plr)
             if hrp and ch then
                 local hasTool = false
                 for _, c in ipairs(ch:GetChildren()) do
@@ -3580,8 +3479,8 @@ local function findAttacker(victim)
     return closest
 end
 
-local function readArmor(plr)
-    local c = getChar(plr)
+function F.readArmor(plr)
+    local c = F.getChar(plr)
     if not c then return 0 end
     local be = c:FindFirstChild("BodyEffects")
     if not be then return 0 end
@@ -3595,19 +3494,19 @@ local function readArmor(plr)
     return sum
 end
 
-local function onVictimDamaged(victim, doStomp)
+function F.onVictimDamaged(victim, doStomp)
     if State.SentryBusy then return end
     if tick() - LastSentryAt < 0.45 then return end
-    local attacker = findAttacker(victim)
+    local attacker = F.findAttacker(victim)
     if not attacker then
         -- last resort: any armed player within 100 studs of victim
-        local vHRP = getHRP(victim)
+        local vHRP = F.getHRP(victim)
         if vHRP then
             local best, bestD = nil, 100
             for _, plr in ipairs(Players:GetPlayers()) do
-                if plr ~= victim and plr ~= LocalPlayer and not isProtected(plr) and isAlive(plr) then
-                    local hrp = getHRP(plr)
-                    local ch = getChar(plr)
+                if plr ~= victim and plr ~= LocalPlayer and not F.isProtected(plr) and F.isAlive(plr) then
+                    local hrp = F.getHRP(plr)
+                    local ch = F.getChar(plr)
                     if hrp and ch then
                         local armed = false
                         for _, c in ipairs(ch:GetChildren()) do
@@ -3625,30 +3524,30 @@ local function onVictimDamaged(victim, doStomp)
     end
     if attacker then
         LastSentryAt = tick()
-        sentryReact(attacker, doStomp)
+        F.sentryReact(attacker, doStomp)
     else
-        notify("Sentry: damage on " .. (victim and victim.Name or "?") .. " — no shooter found")
+        F.notify("Sentry: damage on " .. (victim and victim.Name or "?") .. " — no shooter found")
     end
 end
 
 -- Multi-signal poll: health, KO, armor (Da Hood style)
-local function sentryTick()
+function F.sentryTick()
     if IsOwner then return end
     if State.SentryBusy then return end
     if not (State.Sentry or State.Sentry2 or State.BSentry) then return end
 
     local function check(plr, doStomp)
         if not plr then return end
-        local hum = getHum(plr)
-        local char = getChar(plr)
+        local hum = F.getHum(plr)
+        local char = F.getChar(plr)
         if not hum or not char then return end
         local key = plr.UserId
 
         local hp = hum.Health
         local prevHp = HealthWatch[key]
-        local knocked = isKO(plr)
+        local knocked = F.isKO(plr)
         local wasKO = KoWatch[key]
-        local armor = readArmor(plr)
+        local armor = F.readArmor(plr)
         local prevArmor = ArmorWatch[key]
 
         if prevHp == nil then
@@ -3671,11 +3570,11 @@ local function sentryTick()
         ArmorWatch[key] = armor
 
         if hit then
-            onVictimDamaged(plr, doStomp)
+            F.onVictimDamaged(plr, doStomp)
         end
     end
 
-    local owner = getOwner()
+    local owner = F.getOwner()
     if owner and (State.Sentry or State.Sentry2) then
         check(owner, State.Sentry2 and true or false)
     end
@@ -3683,26 +3582,26 @@ local function sentryTick()
         check(LocalPlayer, true)
     end
     if State.AssistName and (State.Sentry or State.Sentry2 or State.BSentry) then
-        local ap = findPlayer(State.AssistName)
+        local ap = F.findPlayer(State.AssistName)
         if ap then
             check(ap, (State.Sentry2 or State.BSentry) and true or false)
         end
     end
 end
 
-local function refreshSentryWatches()
+function F.refreshSentryWatches()
     local function baseline(plr)
         if not plr then return end
-        local hum = getHum(plr)
+        local hum = F.getHum(plr)
         if not hum then return end
         HealthWatch[plr.UserId] = hum.Health
-        KoWatch[plr.UserId] = isKO(plr)
-        ArmorWatch[plr.UserId] = readArmor(plr)
+        KoWatch[plr.UserId] = F.isKO(plr)
+        ArmorWatch[plr.UserId] = F.readArmor(plr)
     end
-    baseline(getOwner())
+    baseline(F.getOwner())
     baseline(LocalPlayer)
     if State.AssistName then
-        baseline(findPlayer(State.AssistName))
+        baseline(F.findPlayer(State.AssistName))
     end
 end
 
@@ -3710,13 +3609,13 @@ end
 -- close-range pressure → shoot until KO → hard stomp until dead → re-engage on get-up/respawn
 -- Hood Customs: soft position (no PivotTo spam) — hard CFrame snaps trigger ERROR_CLIENT_UNSYNCED_SERVER
 local _lastMoonPosAt = 0
-local function moonCloseHover(plr)
+function F.moonCloseHover(plr)
     if State.VoidEat or State.InVoid then return end
     if State.FakePos then return end -- stay in formation; silent aim still hits
-    local my = getHRP()
-    local their = getHRP(plr)
+    local my = F.getHRP()
+    local their = F.getHRP(plr)
     if not my or not their then return end
-    local aim = getAimPos(plr) or (their.Position + Vector3.new(0, 1.4, 0))
+    local aim = F.getAimPos(plr) or (their.Position + Vector3.new(0, 1.4, 0))
 
     -- HC: throttle position updates + never PivotTo (desyncs gun client ↔ server)
     if IsHoodCustoms then
@@ -3764,7 +3663,7 @@ local function moonCloseHover(plr)
     local pos = behind + side
     pcall(function()
         local cf = CFrame.new(pos, aim)
-        local ch = getChar()
+        local ch = F.getChar()
         if ch and ch.PivotTo then ch:PivotTo(cf) end
         my.CFrame = cf
         my.AssemblyLinearVelocity = Vector3.zero
@@ -3772,51 +3671,51 @@ local function moonCloseHover(plr)
     end)
 end
 
-local function moonShootBurst(plr, maxShots)
-    if not plr or not isAlive(plr) then return end
-    local gun = findGun()
+function F.moonShootBurst(plr, maxShots)
+    if not plr or not F.isAlive(plr) then return end
+    local gun = F.findGun()
     if not gun then return end
-    gun = equipTool(gun, 0.5)
+    gun = F.equipTool(gun, 0.5)
     if not gun then return end
     State.Armed = true
-    setAimLock(plr)
-    pcall(ensureSilentAim)
-    setCamlock(plr, 3)
+    F.setAimLock(plr)
+    pcall(F.ensureSilentAim)
+    F.setCamlock(plr, 3)
     maxShots = maxShots or (IsHoodCustoms and 6 or 12)
 
     for shot = 1, maxShots do
         if not State.LoopKill and not State.LoopKnock then break end
-        if not isAlive(plr) or isKO(plr) then break end
+        if not F.isAlive(plr) or F.isKO(plr) then break end
         if State.VoidEat or State.InVoid then break end
 
-        moonCloseHover(plr)
-        local aim = getAimPos(plr)
+        F.moonCloseHover(plr)
+        local aim = F.getAimPos(plr)
         if not aim then break end
 
         if IsHoodCustoms then
             pcall(function()
-                local be = getChar() and getChar():FindFirstChild("BodyEffects")
+                local be = F.getChar() and F.getChar():FindFirstChild("BodyEffects")
                 local mp = be and be:FindFirstChild("MousePos")
                 if mp and mp:IsA("Vector3Value") then mp.Value = aim end
             end)
             if shot % 2 == 1 then
-                pcall(function() fireMouse(aim) end)
+                pcall(function() F.fireMouse(aim) end)
             end
         else
-            pcall(function() fireMouse(aim) end)
+            pcall(function() F.fireMouse(aim) end)
             pcall(function()
-                local be = getChar() and getChar():FindFirstChild("BodyEffects")
+                local be = F.getChar() and F.getChar():FindFirstChild("BodyEffects")
                 local mp = be and be:FindFirstChild("MousePos")
                 if mp and mp:IsA("Vector3Value") then mp.Value = aim end
             end)
         end
 
-        if gun.Parent ~= getChar() then
-            gun = equipTool(findGun(), 0.3)
+        if gun.Parent ~= F.getChar() then
+            gun = F.equipTool(F.findGun(), 0.3)
             if not gun then break end
         end
-        activateTool(gun)
-        pcall(function() forceGunHit(plr, gun) end)
+        F.activateTool(gun)
+        pcall(function() F.forceGunHit(plr, gun) end)
 
         if not IsHoodCustoms then
             pcall(function()
@@ -3830,197 +3729,197 @@ local function moonShootBurst(plr, maxShots)
         end
 
         if shot % 4 == 0 then
-            reloadGun(gun)
+            F.reloadGun(gun)
         end
         task.wait(IsHoodCustoms and 0.09 or 0.055)
     end
 end
 
-local function moonStompHard(plr)
+function F.moonStompHard(plr)
     if not plr then return end
     -- HC: one lighter stomp pass (hard multi-TP stomp = CLIENT_UNSYNCED_SERVER)
     if IsHoodCustoms then
-        if not getChar(plr) then return end
-        stompTarget(plr, 6)
+        if not F.getChar(plr) then return end
+        F.stompTarget(plr, 6)
         return
     end
     for pass = 1, 3 do
         if not State.LoopKill then break end
-        if not getChar(plr) then break end
-        if isAlive(plr) and not isKO(plr) then break end
-        stompTarget(plr, 12)
+        if not F.getChar(plr) then break end
+        if F.isAlive(plr) and not F.isKO(plr) then break end
+        F.stompTarget(plr, 12)
         task.wait(0.08)
-        if isAlive(plr) and not isKO(plr) then break end
+        if F.isAlive(plr) and not F.isKO(plr) then break end
     end
 end
 
 ----------------------------------------------------------------------
 -- HOOD CUSTOMS: soft surface shoot only (no underground, no hard TP)
 ----------------------------------------------------------------------
-local function hcShootBurst(plr, maxShots)
-    if not plr or not isAlive(plr) then return end
-    local gun = findGun()
+function F.hcShootBurst(plr, maxShots)
+    if not plr or not F.isAlive(plr) then return end
+    local gun = F.findGun()
     if not gun then return end
-    gun = equipTool(gun, 0.4)
+    gun = F.equipTool(gun, 0.4)
     if not gun then return end
     State.Armed = true
-    setAimLock(plr)
-    pcall(ensureSilentAim)
+    F.setAimLock(plr)
+    pcall(F.ensureSilentAim)
     if State.FakePos then
-        pinFakeFreeze()
+        F.pinFakeFreeze()
     else
-        softApproachTarget(plr, 0.9)
-        setCamlock(plr, 2)
+        F.softApproachTarget(plr, 0.9)
+        F.setCamlock(plr, 2)
     end
     maxShots = maxShots or 6
 
     for shot = 1, maxShots do
         if not State.LoopKill and not State.LoopKnock and not State.CombatActive then break end
-        if not isAlive(plr) or isKO(plr) then break end
+        if not F.isAlive(plr) or F.isKO(plr) then break end
         if State.VoidEat or State.InVoid then break end
 
         if State.FakePos then
             pcall(function()
-                local my = getHRP()
+                local my = F.getHRP()
                 if my then
                     my.AssemblyLinearVelocity = Vector3.zero
                     my.AssemblyAngularVelocity = Vector3.zero
                 end
             end)
         else
-            hoverOverTarget(plr)
+            F.hoverOverTarget(plr)
         end
 
-        local aim = getAimPos(plr)
+        local aim = F.getAimPos(plr)
         if not aim then break end
 
         pcall(function()
-            local be = getChar() and getChar():FindFirstChild("BodyEffects")
+            local be = F.getChar() and F.getChar():FindFirstChild("BodyEffects")
             local mp = be and be:FindFirstChild("MousePos")
             if mp and mp:IsA("Vector3Value") then mp.Value = aim end
         end)
         if not State.FakePos or (shot % 2 == 1) then
-            pcall(function() fireMouse(aim) end)
+            pcall(function() F.fireMouse(aim) end)
         end
 
-        if gun.Parent ~= getChar() then
-            gun = equipTool(findGun(), 0.3)
+        if gun.Parent ~= F.getChar() then
+            gun = F.equipTool(F.findGun(), 0.3)
             if not gun then break end
         end
-        activateTool(gun)
+        F.activateTool(gun)
         if not State.FakePos then
-            pcall(function() forceGunHit(plr, gun) end)
+            pcall(function() F.forceGunHit(plr, gun) end)
         end
 
         if shot % 4 == 0 then
-            reloadGun(gun)
+            F.reloadGun(gun)
         end
         task.wait(0.14)
     end
 end
 
 -- Full HC kill pass: slow approach + shoot (FakePos = freeze + aim only)
-local function hcKillCycle(plr)
+function F.hcKillCycle(plr)
     if not plr then return end
-    beginCombat()
-    setAimLock(plr)
-    pcall(ensureSilentAim)
+    F.beginCombat()
+    F.setAimLock(plr)
+    pcall(F.ensureSilentAim)
 
-    local gun = findGun()
+    local gun = F.findGun()
     if gun then
-        equipTool(gun, 0.4)
+        F.equipTool(gun, 0.4)
         State.Armed = true
-        reloadGun(gun)
+        F.reloadGun(gun)
     end
 
     if State.FakePos then
-        pinFakeFreeze()
+        F.pinFakeFreeze()
     else
-        softApproachTarget(plr, 1.0)
+        F.softApproachTarget(plr, 1.0)
     end
 
     local t0 = tick()
     while tick() - t0 < 12 do
         if not State.LoopKill and not State.LoopKnock and not State.CombatActive then break end
-        if not getChar(plr) then break end
-        if isKO(plr) or not isAlive(plr) then break end
+        if not F.getChar(plr) then break end
+        if F.isKO(plr) or not F.isAlive(plr) then break end
         if State.VoidEat or State.InVoid then
             local w = tick()
             while (State.VoidEat or State.InVoid) and tick() - w < 3 do task.wait(0.08) end
-            if State.VoidEat or State.InVoid then exitCombatVoid() end
+            if State.VoidEat or State.InVoid then F.exitCombatVoid() end
         end
 
         if not State.FakePos then
-            hoverOverTarget(plr)
+            F.hoverOverTarget(plr)
         end
-        hcShootBurst(plr, 6)
+        F.hcShootBurst(plr, 6)
 
-        if isKO(plr) or not isAlive(plr) then break end
+        if F.isKO(plr) or not F.isAlive(plr) then break end
         task.wait(0.08)
     end
 
-    if isKO(plr) and not State.FakePos then
-        hoverOverTarget(plr)
+    if F.isKO(plr) and not State.FakePos then
+        F.hoverOverTarget(plr)
         task.wait(0.05)
-        moonStompHard(plr)
-    elseif isKO(plr) and State.FakePos then
+        F.moonStompHard(plr)
+    elseif F.isKO(plr) and State.FakePos then
         -- FakePos: still try a light stomp then snap back to slot
-        moonStompHard(plr)
-        holdFormation(true)
+        F.moonStompHard(plr)
+        F.holdFormation(true)
     end
 end
 
 -- One full attack cycle for loopkill (gun or knife).
-local function loopKillCycle(plr)
+function F.loopKillCycle(plr)
     if not plr then return end
     if State.LoopKillKnife then
         if State.KnifeBusy then return end
-        knifeTarget(plr)
+        F.knifeTarget(plr)
         local t0 = tick()
         while State.KnifeBusy and tick() - t0 < 12 and State.LoopKill do
             task.wait(0.15)
         end
-        if isKO(plr) then
-            moonStompHard(plr)
+        if F.isKO(plr) then
+            F.moonStompHard(plr)
         end
     else
         if IsHoodCustoms then
             -- HC: soft surface hover + shoot (no underground / no hard TP)
-            hcKillCycle(plr)
+            F.hcKillCycle(plr)
         else
             local t0 = tick()
             while State.LoopKill and tick() - t0 < 6 do
-                if not getChar(plr) then break end
-                if isKO(plr) then break end
-                if not isAlive(plr) then break end
-                moonShootBurst(plr, 7)
-                if isKO(plr) then break end
+                if not F.getChar(plr) then break end
+                if F.isKO(plr) then break end
+                if not F.isAlive(plr) then break end
+                F.moonShootBurst(plr, 7)
+                if F.isKO(plr) then break end
                 task.wait(0.05)
             end
-            if isKO(plr) or (getHum(plr) and getHum(plr).Health <= 0) then
-                moonStompHard(plr)
-            elseif isAlive(plr) then
-                shootTarget(plr)
-                if isKO(plr) then moonStompHard(plr) end
+            if F.isKO(plr) or (F.getHum(plr) and F.getHum(plr).Health <= 0) then
+                F.moonStompHard(plr)
+            elseif F.isAlive(plr) then
+                F.shootTarget(plr)
+                if F.isKO(plr) then F.moonStompHard(plr) end
             end
         end
     end
 end
 
-local function cmdSweep()
+function F.cmdSweep()
     if State.Sweep then
-        notify("Sweep already ON")
+        F.notify("Sweep already ON")
         return
     end
     State.Sweep = true
     State.Tracking = false
-    notify("Sweep ON — clearing server")
+    F.notify("Sweep ON — clearing server")
     task.spawn(function()
         while State.Sweep do
             local targets = {}
             for _, plr in ipairs(Players:GetPlayers()) do
-                if plr ~= LocalPlayer and not isProtected(plr) then
-                    if isAlive(plr) or isKO(plr) then
+                if plr ~= LocalPlayer and not F.isProtected(plr) then
+                    if F.isAlive(plr) or F.isKO(plr) then
                         targets[#targets + 1] = plr
                     end
                 end
@@ -4030,22 +3929,22 @@ local function cmdSweep()
             else
                 for _, plr in ipairs(targets) do
                     if not State.Sweep then break end
-                    if isProtected(plr) then continue end
-                    if isKO(plr) then
-                        stompTarget(plr, 10)
-                    elseif isAlive(plr) then
-                        setAimLock(plr)
-                        pcall(ensureSilentAim)
-                        setCamlock(plr, 3)
-                        shootTarget(plr)
+                    if F.isProtected(plr) then continue end
+                    if F.isKO(plr) then
+                        F.stompTarget(plr, 10)
+                    elseif F.isAlive(plr) then
+                        F.setAimLock(plr)
+                        pcall(F.ensureSilentAim)
+                        F.setCamlock(plr, 3)
+                        F.shootTarget(plr)
                         local t0 = tick()
                         while tick() - t0 < 2 and State.Sweep do
-                            if isKO(plr) then break end
-                            if not getChar(plr) then break end
+                            if F.isKO(plr) then break end
+                            if not F.getChar(plr) then break end
                             task.wait(0.15)
                         end
-                        if isKO(plr) then
-                            stompTarget(plr, 12)
+                        if F.isKO(plr) then
+                            F.stompTarget(plr, 12)
                         end
                     end
                     task.wait(0.2)
@@ -4053,81 +3952,81 @@ local function cmdSweep()
             end
             task.wait(0.35)
         end
-        clearAimLock()
-        clearCamlock()
+        F.clearAimLock()
+        F.clearCamlock()
         State.Tracking = true
-        returnToOwner()
-        notify("Sweep OFF")
+        F.returnToOwner()
+        F.notify("Sweep OFF")
     end)
 end
 
-local function cmdUnSweep()
+function F.cmdUnSweep()
     State.Sweep = false
-    notify("Sweep stopping...")
+    F.notify("Sweep stopping...")
 end
 
-local function cmdProtect(user)
-    local plr = findPlayer(user)
-    if not plr then notify("Protect: not found") return end
+function F.cmdProtect(user)
+    local plr = F.findPlayer(user)
+    if not plr then F.notify("Protect: not found") return end
     State.ProtectName = plr.Name
-    notify("Protect " .. plr.Name)
+    F.notify("Protect " .. plr.Name)
 end
 
-local function cmdUnprotect()
+function F.cmdUnprotect()
     State.ProtectName = nil
-    notify("Protect OFF")
+    F.notify("Protect OFF")
 end
 
-local function cmdWL(user)
-    local plr = findPlayer(user)
-    if not plr then notify("WL: not found") return end
+function F.cmdWL(user)
+    local plr = F.findPlayer(user)
+    if not plr then F.notify("WL: not found") return end
     Whitelist[plr.UserId] = true
-    notify("WL " .. plr.Name)
+    F.notify("WL " .. plr.Name)
 end
 
-local function cmdUWL(user)
+function F.cmdUWL(user)
     if user and user ~= "" then
-        local plr = findPlayer(user)
+        local plr = F.findPlayer(user)
         if plr then
             Whitelist[plr.UserId] = nil
-            notify("UWL " .. plr.Name)
+            F.notify("UWL " .. plr.Name)
             return
         end
     end
     Whitelist = {}
-    notify("WL cleared")
+    F.notify("WL cleared")
 end
 
-local function cmdTarget(user)
-    local plr = findPlayer(user)
-    if not plr then notify("Target: not found") return end
-    if isProtected(plr) then notify("Target: protected") return end
+function F.cmdTarget(user)
+    local plr = F.findPlayer(user)
+    if not plr then F.notify("Target: not found") return end
+    if F.isProtected(plr) then F.notify("Target: protected") return end
     State.TargetName = plr.Name
-    setCamlock(plr, 0)
-    notify("Target " .. plr.Name)
+    F.setCamlock(plr, 0)
+    F.notify("Target " .. plr.Name)
 end
 
-local function cmdUntarget()
+function F.cmdUntarget()
     State.TargetName = nil
-    clearCamlock()
-    notify("Target OFF")
+    F.clearCamlock()
+    F.notify("Target OFF")
 end
 
-local function cmdArmor()
-    buyArmor()
-    notify("Armor")
+function F.cmdArmor()
+    F.buyArmor()
+    F.notify("Armor")
 end
 
-local function cmdMask()
-    buyMask()
-    notify("Mask")
+function F.cmdMask()
+    F.buyMask()
+    F.notify("Mask")
 end
 
-local function cmdFix()
+function F.cmdFix()
     -- Full reset + real respawn (HC uses MainEvent RespawnCharacter / ResetCharacter)
-    notify("Fix — respawning...")
-    clearCamlock()
-    clearAimLock()
+    F.notify("Fix — respawning...")
+    F.clearCamlock()
+    F.clearAimLock()
     pcall(function() RunService:UnbindFromRenderStep("StandVoidPin") end)
     pcall(function() RunService:UnbindFromRenderStep(CAM_BIND) end)
 
@@ -4148,10 +4047,10 @@ local function cmdFix()
     VoidMinUntil = 0
     VoidBloodAtEnter = nil
     _voidEnterBusy = false
-    setAttacking(false)
+    F.setAttacking(false)
 
-    local oldChar = getChar()
-    local oldHum = getHum()
+    local oldChar = F.getChar()
+    local oldHum = F.getHum()
 
     pcall(function()
         if oldHum then
@@ -4186,7 +4085,7 @@ local function cmdFix()
 
     -- 3) Last resort LoadCharacter (often blocked on custom char systems)
     task.delay(0.35, function()
-        if getChar() == oldChar then
+        if F.getChar() == oldChar then
             pcall(function() LocalPlayer:LoadCharacter() end)
         end
     end)
@@ -4196,14 +4095,14 @@ local function cmdFix()
         local t0 = tick()
         local newChar = nil
         while tick() - t0 < 10 do
-            local c = getChar()
-            local h = getHum()
+            local c = F.getChar()
+            local h = F.getHum()
             if c and c ~= oldChar and h and h.Health > 0 then
                 newChar = c
                 break
             end
             -- if same char recovered somehow, still accept if alive + HRP
-            if c and h and h.Health > 0 and getHRP() and (tick() - t0) > 1.5 then
+            if c and h and h.Health > 0 and F.getHRP() and (tick() - t0) > 1.5 then
                 newChar = c
                 break
             end
@@ -4219,7 +4118,7 @@ local function cmdFix()
 
         -- clean humanoid state
         pcall(function()
-            local h = getHum()
+            local h = F.getHum()
             if h then
                 h.PlatformStand = false
                 h.Sit = false
@@ -4233,10 +4132,10 @@ local function cmdFix()
         end)
 
         -- re-apply perks after respawn
-        if Config.AutoArmor then pcall(buyArmor) end
-        if Config.ArmorMax or Config.Inf then pcall(applyArmorMax) end
-        if Config.AutoMask then pcall(buyMask) end
-        if Config.Muscle then pcall(applyMuscle) end
+        if Config.AutoArmor then pcall(F.buyArmor) end
+        if Config.ArmorMax or Config.Inf then pcall(F.applyArmorMax) end
+        if Config.AutoMask then pcall(F.buyMask) end
+        if Config.Muscle then pcall(F.applyMuscle) end
 
         State.Tracking = true
         State.InVoid = false
@@ -4248,18 +4147,18 @@ local function cmdFix()
 
         if not IsOwner then
             for _ = 1, 6 do
-                pcall(returnToOwner)
+                pcall(F.returnToOwner)
                 task.wait(0.08)
             end
         end
 
-        notify(newChar and "Fix — respawned" or "Fix — reset (respawn may be delayed)")
+        F.notify(newChar and "Fix — respawned" or "Fix — reset (respawn may be delayed)")
     end)
 end
 
-local function cmdKick()
+function F.cmdKick()
     -- Leave server and rejoin same place / same job if possible
-    notify("Rejoining...")
+    F.notify("Rejoining...")
     task.spawn(function()
         task.wait(0.2)
         local ok = pcall(function()
@@ -4273,18 +4172,18 @@ local function cmdKick()
     end)
 end
 
-local function cmdBuyFood()
+function F.cmdBuyFood()
     State.Tracking = false
-    notify("Buying food...")
+    F.notify("Buying food...")
     task.spawn(function()
         local ok, err = pcall(function()
-            local had = findFood() ~= nil
+            local had = F.findFood() ~= nil
             if not had then
-                buyFood()
+                F.buyFood()
             end
             task.wait(0.25)
-            if findFood() then
-                notify("Food ready: " .. tostring(findFood().Name))
+            if F.findFood() then
+                F.notify("Food ready: " .. tostring(F.findFood().Name))
             else
                 -- one more remote-only attempt
                 if MainEvent then
@@ -4297,66 +4196,66 @@ local function cmdBuyFood()
                     end
                 end
                 task.wait(0.3)
-                if findFood() then
-                    notify("Food ready: " .. tostring(findFood().Name))
+                if F.findFood() then
+                    F.notify("Food ready: " .. tostring(F.findFood().Name))
                 else
-                    notify("No food — try near shop")
+                    F.notify("No food — try near shop")
                 end
             end
         end)
         if not ok then warn("[Stand] buyfood:", err) end
         if not State.CombatActive and not State.VoidEat then
             State.Tracking = true
-            returnToOwner()
+            F.returnToOwner()
         end
     end)
 end
 
-local function cmdHeal()
+function F.cmdHeal()
     if State.VoidEat then
-        notify("Already healing")
+        F.notify("Already healing")
         return
     end
-    notify("Heal — void + eat")
+    F.notify("Heal — void + eat")
     State.Tracking = false
     task.spawn(function()
         local ok, err = pcall(function()
             -- force combat-void style heal even outside combat
             local wasCombat = State.CombatActive
             State.CombatActive = true
-            enterCombatVoid()
+            F.enterCombatVoid()
             -- wait until void heal finishes (exitCombatVoid clears VoidEat)
             local t0 = tick()
             while State.VoidEat and tick() - t0 < 6 do
                 task.wait(0.15)
             end
             if State.VoidEat then
-                exitCombatVoid()
+                F.exitCombatVoid()
             end
             if not wasCombat then
                 State.CombatActive = false
             end
             -- ensure out of void and near owner/target
-            warpOutOfVoid()
+            F.warpOutOfVoid()
             if not State.CombatActive then
                 State.Tracking = true
-                returnToOwner()
+                F.returnToOwner()
             end
-            notify("Heal done")
+            F.notify("Heal done")
         end)
         if not ok then
             warn("[Stand] heal:", err)
-            pcall(exitCombatVoid)
+            pcall(F.exitCombatVoid)
             State.Tracking = true
         end
     end)
 end
 
-local function cmdHelp()
-    notify("See F9 for command list")
+function F.cmdHelp()
+    F.notify("See F9 for command list")
     print("[Stand] Commands:")
     print("  " .. Prefix .. "void / call / track / air [on|off] / pos <1-6>")
-    print("  " .. Prefix .. "fake [on|off] / fp / fakepos  -- physics FakePos (server desync)")
+    print("  " .. Prefix .. "fake [on|off] / fp  -- stay in formation; gun kills still work")
     print("  " .. Prefix .. "arm / unarm")
     print("  " .. Prefix .. "d <user>   -- knock")
     print("  " .. Prefix .. "b <user>   -- bring")
@@ -4381,9 +4280,9 @@ end
 ----------------------------------------------------------------------
 -- CHAT HANDLER
 ----------------------------------------------------------------------
-local function onControlChat(msg, speaker)
+function F.onControlChat(msg, speaker)
     if type(msg) ~= "string" then return end
-    if not canControl(speaker) then return end
+    if not F.canControl(speaker) then return end
 
     msg = string.gsub(msg, "^%s+", "")
     msg = string.gsub(msg, "%s+$", "")
@@ -4408,49 +4307,49 @@ local function onControlChat(msg, speaker)
         sayMsg = rest
     end
 
-    if cmd == "void" then cmdVoid()
-    elseif cmd == "call" or cmd == "come" then cmdCall()
-    elseif cmd == "track" or cmd == "follow" then cmdTrack()
-    elseif cmd == "air" or cmd == "float" or cmd == "summon" then cmdAir(a1)
-    elseif cmd == "fake" or cmd == "fp" or cmd == "fakepos" then cmdFake(a1)
-    elseif cmd == "pos" or cmd == "slot" then cmdPos(a1)
-    elseif cmd == "arm" then cmdArm()
-    elseif cmd == "unarm" then cmdUnarm()
+    if cmd == "void" then F.cmdVoid()
+    elseif cmd == "call" or cmd == "come" then F.cmdCall()
+    elseif cmd == "track" or cmd == "follow" then F.cmdTrack()
+    elseif cmd == "air" or cmd == "float" or cmd == "summon" then F.cmdAir(a1)
+    elseif cmd == "fake" or cmd == "fp" or cmd == "fakepos" then F.cmdFake(a1)
+    elseif cmd == "pos" or cmd == "slot" then F.cmdPos(a1)
+    elseif cmd == "arm" then F.cmdArm()
+    elseif cmd == "unarm" then F.cmdUnarm()
     -- combat shortcuts
-    elseif cmd == "d" or cmd == "knock" or cmd == "k" then cmdKnock(a1)
-    elseif cmd == "b" or cmd == "bring" then cmdBring(a1)
-    elseif cmd == "s" or cmd == "stomp" then cmdStomp(a1)
-    elseif cmd == "l" or cmd == "loopkill" then cmdLoopKill(a1, false)
-    elseif cmd == "lk" then cmdLoopKnock(a1)
-    elseif cmd == "lkk" then cmdLoopKill(a1, true)
-    elseif cmd == "kat" or cmd == "katana" then cmdKat(a1)
-    elseif cmd == "knife" then cmdKnife(a1)
-    elseif cmd == "unlk" or cmd == "unloopkill" or cmd == "unl" then cmdUnLoopKill()
+    elseif cmd == "d" or cmd == "knock" or cmd == "k" then F.cmdKnock(a1)
+    elseif cmd == "b" or cmd == "bring" then F.cmdBring(a1)
+    elseif cmd == "s" or cmd == "stomp" then F.cmdStomp(a1)
+    elseif cmd == "l" or cmd == "loopkill" then F.cmdLoopKill(a1, false)
+    elseif cmd == "lk" then F.cmdLoopKnock(a1)
+    elseif cmd == "lkk" then F.cmdLoopKill(a1, true)
+    elseif cmd == "kat" or cmd == "katana" then F.cmdKat(a1)
+    elseif cmd == "knife" then F.cmdKnife(a1)
+    elseif cmd == "unlk" or cmd == "unloopkill" or cmd == "unl" then F.cmdUnLoopKill()
     -- protection
-    elseif cmd == "sentry" then cmdSentry(a1)
-    elseif cmd == "sentry2" then cmdSentry2(a1)
-    elseif cmd == "bsentry" then cmdBSentry(a1)
-    elseif cmd == "assist" then cmdAssist(a1)
-    elseif cmd == "unassist" then cmdUnassist()
-    elseif cmd == "say" then cmdSay(sayMsg or "")
-    elseif cmd == "sweep" then cmdSweep()
-    elseif cmd == "unsweep" or cmd == "stopsweep" then cmdUnSweep()
-    elseif cmd == "protect" or cmd == "prot" then cmdProtect(a1)
-    elseif cmd == "unprotect" or cmd == "unprot" then cmdUnprotect()
-    elseif cmd == "wl" or cmd == "whitelist" then cmdWL(a1)
-    elseif cmd == "uwl" or cmd == "unwhitelist" then cmdUWL(a1)
-    elseif cmd == "target" or cmd == "t" then cmdTarget(a1)
-    elseif cmd == "untarget" or cmd == "unt" then cmdUntarget()
-    elseif cmd == "armor" then cmdArmor()
-    elseif cmd == "mask" then cmdMask()
-    elseif cmd == "buyfood" or cmd == "food" or cmd == "bf" then cmdBuyFood()
-    elseif cmd == "heal" or cmd == "eat" then cmdHeal()
+    elseif cmd == "sentry" then F.cmdSentry(a1)
+    elseif cmd == "sentry2" then F.cmdSentry2(a1)
+    elseif cmd == "bsentry" then F.cmdBSentry(a1)
+    elseif cmd == "assist" then F.cmdAssist(a1)
+    elseif cmd == "unassist" then F.cmdUnassist()
+    elseif cmd == "say" then F.cmdSay(sayMsg or "")
+    elseif cmd == "sweep" then F.cmdSweep()
+    elseif cmd == "unsweep" or cmd == "stopsweep" then F.cmdUnSweep()
+    elseif cmd == "protect" or cmd == "prot" then F.cmdProtect(a1)
+    elseif cmd == "unprotect" or cmd == "unprot" then F.cmdUnprotect()
+    elseif cmd == "wl" or cmd == "whitelist" then F.cmdWL(a1)
+    elseif cmd == "uwl" or cmd == "unwhitelist" then F.cmdUWL(a1)
+    elseif cmd == "target" or cmd == "t" then F.cmdTarget(a1)
+    elseif cmd == "untarget" or cmd == "unt" then F.cmdUntarget()
+    elseif cmd == "armor" then F.cmdArmor()
+    elseif cmd == "mask" then F.cmdMask()
+    elseif cmd == "buyfood" or cmd == "food" or cmd == "bf" then F.cmdBuyFood()
+    elseif cmd == "heal" or cmd == "eat" then F.cmdHeal()
     elseif cmd == "reload" then
-        reloadGun(findGun())
-        notify("Reload")
+        F.reloadGun(F.findGun())
+        F.notify("Reload")
     elseif cmd == "autoreload" then
         State.AutoReload = not State.AutoReload
-        notify("AutoReload " .. (State.AutoReload and "ON" or "OFF"))
+        F.notify("AutoReload " .. (State.AutoReload and "ON" or "OFF"))
     elseif cmd == "autoheal" or cmd == "ah" then
         local a1 = parts[2]
         if a1 == "on" or a1 == "1" or a1 == "true" then
@@ -4460,25 +4359,25 @@ local function onControlChat(msg, speaker)
         else
             State.AutoHeal = not State.AutoHeal
         end
-        notify("AutoHeal " .. (State.AutoHeal and "ON" or "OFF"))
-    elseif cmd == "fix" then cmdFix()
-    elseif cmd == "kick" or cmd == "rejoin" then cmdKick()
-    elseif cmd == "help" or cmd == "cmds" then cmdHelp()
+        F.notify("AutoHeal " .. (State.AutoHeal and "ON" or "OFF"))
+    elseif cmd == "fix" then F.cmdFix()
+    elseif cmd == "kick" or cmd == "rejoin" then F.cmdKick()
+    elseif cmd == "help" or cmd == "cmds" then F.cmdHelp()
     end
 end
 
-local function hookPlayerChat(plr)
+function F.hookPlayerChat(plr)
     pcall(function()
         plr.Chatted:Connect(function(msg)
-            onControlChat(msg, plr)
+            F.onControlChat(msg, plr)
         end)
     end)
 end
 
 for _, plr in ipairs(Players:GetPlayers()) do
-    hookPlayerChat(plr)
+    F.hookPlayerChat(plr)
 end
-Players.PlayerAdded:Connect(hookPlayerChat)
+Players.PlayerAdded:Connect(F.hookPlayerChat)
 
 pcall(function()
     local tcs = game:GetService("TextChatService")
@@ -4487,7 +4386,7 @@ pcall(function()
         local src = message.TextSource
         if not src then return end
         local plr = Players:GetPlayerByUserId(src.UserId)
-        if plr then onControlChat(message.Text, plr) end
+        if plr then F.onControlChat(message.Text, plr) end
     end)
 end)
 
@@ -4500,26 +4399,26 @@ Connections.Main = RunService.Heartbeat:Connect(function()
     -- Silent aim + mouse remotes still kill from the slot. Knife briefly leaves.
     if State.FakePos then
         if not State.KnifeBusy and not State.InVoid and not State.VoidEat then
-            holdFormation(true)
+            F.holdFormation(true)
         end
     elseif not State.KnifeBusy and not State.LoopKillBusy and not State.Sweep
         and not State.LoopKill and not State.LoopKnock and not State.SentryBusy then
-        followOwner()
+        F.followOwner()
     end
-    autoReloadTick()
-    pcall(sentryTick)
-    pcall(combatSurviveTick)
-    pcall(armorMaintainTick)
-    pcall(autoHealTick)
+    F.autoReloadTick()
+    pcall(F.sentryTick)
+    pcall(F.combatSurviveTick)
+    pcall(F.armorMaintainTick)
+    pcall(F.autoHealTick)
 
     -- LoopKnock: shoot only, no stomp
     if State.LoopKnock and not State.LoopKillBusy and not State.KnifeBusy then
-        local hum = getHum()
+        local hum = F.getHum()
         if hum and hum.Health <= 0 then return end
-        local lk = findPlayer(State.LoopKnock)
+        local lk = F.findPlayer(State.LoopKnock)
         if not lk then return end
-        if isProtected(lk) then
-            notify("LoopKnock stopped: protected " .. lk.Name)
+        if F.isProtected(lk) then
+            F.notify("LoopKnock stopped: protected " .. lk.Name)
             State.LoopKnock = nil
             State.Tracking = true
             return
@@ -4527,9 +4426,9 @@ Connections.Main = RunService.Heartbeat:Connect(function()
         State.LoopKillBusy = true
         task.spawn(function()
             local ok, err = pcall(function()
-                if isAlive(lk) then
-                    setCamlock(lk, 2)
-                    shootTarget(lk)
+                if F.isAlive(lk) then
+                    F.setCamlock(lk, 2)
+                    F.shootTarget(lk)
                     task.wait(0.4)
                 else
                     task.wait(0.5)
@@ -4539,7 +4438,7 @@ Connections.Main = RunService.Heartbeat:Connect(function()
             State.LoopKillBusy = false
             if not State.LoopKnock and not IsOwner then
                 State.Tracking = true
-                clearCamlock()
+                F.clearCamlock()
             end
         end)
     end
@@ -4547,16 +4446,16 @@ Connections.Main = RunService.Heartbeat:Connect(function()
     -- LoopKill: MoonStand-style single-flight worker
     -- KO → hard stomp spam | alive → close burst + stomp | dead → wait respawn then re-engage
     if State.LoopKill and not State.LoopKillBusy and not State.KnifeBusy then
-        local hum = getHum()
+        local hum = F.getHum()
         if hum and hum.Health <= 0 then return end
         local name = State.LoopKill
-        local lk = findPlayer(name)
+        local lk = F.findPlayer(name)
         if not lk then
             return
         end
-        local prot = isProtected(lk)
+        local prot = F.isProtected(lk)
         if prot then
-            notify("LoopKill stopped: protected " .. lk.Name)
+            F.notify("LoopKill stopped: protected " .. lk.Name)
             State.LoopKill = nil
             State.LoopKillBusy = false
             State.Tracking = true
@@ -4566,37 +4465,37 @@ Connections.Main = RunService.Heartbeat:Connect(function()
         State.LoopKillBusy = true
         task.spawn(function()
             local ok, err = pcall(function()
-                beginCombat()
-                if isKO(lk) then
+                F.beginCombat()
+                if F.isKO(lk) then
                     -- already down: finish them
-                    moonStompHard(lk)
+                    F.moonStompHard(lk)
                     -- hold pressure briefly in case they try to get up mid-stomp
                     local t0 = tick()
                     while tick() - t0 < 2.5 and State.LoopKill do
-                        if not getChar(lk) then break end
-                        if isAlive(lk) and not isKO(lk) then
+                        if not F.getChar(lk) then break end
+                        if F.isAlive(lk) and not F.isKO(lk) then
                             -- got up — shoot again immediately
-                            setCamlock(lk, 2)
-                            loopKillCycle(lk)
+                            F.setCamlock(lk, 2)
+                            F.loopKillCycle(lk)
                             break
                         end
-                        if isKO(lk) then
-                            stompTarget(lk, 4)
+                        if F.isKO(lk) then
+                            F.stompTarget(lk, 4)
                         end
                         task.wait(0.2)
                     end
                     task.wait(0.15)
-                elseif isAlive(lk) then
-                    setCamlock(lk, 3)
-                    loopKillCycle(lk)
+                elseif F.isAlive(lk) then
+                    F.setCamlock(lk, 3)
+                    F.loopKillCycle(lk)
                     -- if still alive after cycle, tiny gap then next worker pass
                     task.wait(0.12)
                 else
                     -- dead / no char — wait for respawn, then snap back on
                     local t0 = tick()
                     while tick() - t0 < 8 and State.LoopKill do
-                        local p = findPlayer(name)
-                        if p and getChar(p) and (isAlive(p) or isKO(p)) then
+                        local p = F.findPlayer(name)
+                        if p and F.getChar(p) and (F.isAlive(p) or F.isKO(p)) then
                             break
                         end
                         task.wait(0.25)
@@ -4610,7 +4509,7 @@ Connections.Main = RunService.Heartbeat:Connect(function()
             State.LoopKillBusy = false
             if not State.LoopKill and not IsOwner then
                 State.Tracking = true
-                clearCamlock()
+                F.clearCamlock()
             end
         end)
     end
@@ -4621,23 +4520,23 @@ end)
 ----------------------------------------------------------------------
 task.spawn(function()
     while true do
-        pcall(refreshSentryWatches)
+        pcall(F.refreshSentryWatches)
         task.wait(1.5)
     end
 end)
 
 LocalPlayer.CharacterAdded:Connect(function(char)
     task.wait(1)
-    hookToolWatch(char)
-    pcall(refreshSentryWatches)
-    if Config.AutoArmor then buyArmor() end
-    if Config.ArmorMax or Config.Inf then applyArmorMax() end
-    if Config.AutoMask then buyMask() end
-    if Config.Muscle then applyMuscle() end
-    if not State.Armed and not isHoldingTool() then
-        applyIdleAnim()
+    F.hookToolWatch(char)
+    pcall(F.refreshSentryWatches)
+    if Config.AutoArmor then F.buyArmor() end
+    if Config.ArmorMax or Config.Inf then F.applyArmorMax() end
+    if Config.AutoMask then F.buyMask() end
+    if Config.Muscle then F.applyMuscle() end
+    if not State.Armed and not F.isHoldingTool() then
+        F.applyIdleAnim()
     else
-        stopIdleAnim()
+        F.stopIdleAnim()
     end
 end)
 
@@ -4645,13 +4544,13 @@ end)
 task.spawn(function()
     local t0 = tick()
     while tick() - t0 < 8 do
-        if getHum() then
+        if F.getHum() then
             task.wait(0.8)
-            local c = getChar()
-            hookToolWatch(c)
-            pcall(refreshSentryWatches)
-            if not State.Armed and not isHoldingTool() then
-                applyIdleAnim()
+            local c = F.getChar()
+            F.hookToolWatch(c)
+            pcall(F.refreshSentryWatches)
+            if not State.Armed and not F.isHoldingTool() then
+                F.applyIdleAnim()
             end
             break
         end
@@ -4666,8 +4565,8 @@ elseif Config.AutoHeal == true or Config.AutoHeal == "on" then
     State.AutoHeal = true
 end
 
-startAutoPerks()
-pcall(ensureSilentAim)
+F.startAutoPerks()
+pcall(F.ensureSilentAim)
 
 do
     local n = 0
@@ -4679,4 +4578,4 @@ print("[Stand] AutoHeal", State.AutoHeal and "ON" or "OFF",
 
 print("[Stand] Main v2 loaded |", IsOwner and "OWNER" or ("ALT slot " .. tostring(MySlot)),
     "| prefix", Prefix, "| owner", OwnerName, "| anim", tostring(Config.Anim or "none"))
-notify(IsOwner and "Owner ready" or ("Alt slot " .. tostring(MySlot)))
+F.notify(IsOwner and "Owner ready" or ("Alt slot " .. tostring(MySlot)))
