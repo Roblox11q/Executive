@@ -1080,30 +1080,71 @@ end
 ----------------------------------------------------------------------
 -- FORMATION
 ----------------------------------------------------------------------
-local function followOwner()
+local _lastFormAt = 0
+
+-- Hold formation slot relative to owner. Soft on HC to avoid CLIENT_UNSYNCED_SERVER.
+-- force=true ignores Tracking (used by FakePos during combat).
+local function holdFormation(force)
     if IsOwner then return end
-    if State.KnifeBusy then return end
-    if State.InVoid then
+    if State.KnifeBusy and not force then return end
+    if State.InVoid or State.VoidEat then
         local hrp = getHRP()
         if hrp then
             pcall(function()
                 hrp.CFrame = VoidCF
                 hrp.AssemblyLinearVelocity = Vector3.zero
+                hrp.AssemblyAngularVelocity = Vector3.zero
             end)
         end
         return
     end
-    if not State.Tracking then return end
+    if not force and not State.Tracking then return end
     local owner = getOwner()
     if not owner then return end
     local oHRP = getHRP(owner)
-    local my   = getHRP()
+    local my = getHRP()
     if not oHRP or not my then return end
     local offset = SLOT_CF[MySlot] or SLOT_CF[2]
+    local dest = oHRP.CFrame * offset
+    -- never allow formation Y to go under map
+    if dest.Position.Y < (oHRP.Position.Y - 2) then
+        dest = CFrame.new(dest.Position.X, oHRP.Position.Y + math.max(offset.Y, 0), dest.Position.Z)
+            * (dest - dest.Position)
+    end
     pcall(function()
-        my.CFrame = oHRP.CFrame * offset
-        my.AssemblyLinearVelocity = Vector3.zero
+        if IsHoodCustoms then
+            local now = tick()
+            -- throttle hard snaps; FakePos still updates often enough to stick
+            local minGap = force and 0.05 or 0.12
+            if now - _lastFormAt < minGap then
+                -- only kill residual velocity so we don't drift/fall
+                local v = my.AssemblyLinearVelocity
+                if v.Magnitude > 6 or v.Y < -2 then
+                    my.AssemblyLinearVelocity = Vector3.new(v.X * 0.3, math.max(v.Y, 0), v.Z * 0.3)
+                end
+                return
+            end
+            _lastFormAt = now
+            local dist = (dest.Position - my.Position).Magnitude
+            if dist > 14 then
+                my.CFrame = dest
+            elseif dist > 1.5 then
+                my.CFrame = my.CFrame:Lerp(dest, 0.55)
+            else
+                my.CFrame = dest
+            end
+            my.AssemblyLinearVelocity = Vector3.zero
+            my.AssemblyAngularVelocity = Vector3.zero
+        else
+            my.CFrame = dest
+            my.AssemblyLinearVelocity = Vector3.zero
+            my.AssemblyAngularVelocity = Vector3.zero
+        end
     end)
+end
+
+local function followOwner()
+    holdFormation(false)
 end
 
 local function returnToOwner()
@@ -1127,21 +1168,26 @@ local function returnToOwner()
     local my = getHRP()
     if oHRP and my then
         local offset = SLOT_CF[MySlot] or SLOT_CF[2]
-        for _ = 1, 5 do
+        local steps = IsHoodCustoms and 2 or 5
+        for _ = 1, steps do
             pcall(function()
                 local cf = oHRP.CFrame * offset
-                local char = getChar()
-                if char and char.PivotTo then char:PivotTo(cf) end
+                -- HC: never PivotTo (desync red error)
+                if not IsHoodCustoms then
+                    local char = getChar()
+                    if char and char.PivotTo then char:PivotTo(cf) end
+                end
                 my.CFrame = cf
                 my.AssemblyLinearVelocity = Vector3.zero
+                my.AssemblyAngularVelocity = Vector3.zero
             end)
-            task.wait(0.05)
+            task.wait(IsHoodCustoms and 0.08 or 0.05)
             oHRP = getHRP(owner)
             my = getHRP()
             if not oHRP or not my then break end
         end
     end
-    followOwner()
+    holdFormation(true)
 end
 
 ----------------------------------------------------------------------
@@ -1813,6 +1859,15 @@ local function hoverOverTarget(plr, height)
     end
 
     local targetPos = their.Position + Vector3.new(ox, height, oz)
+    -- hard floor: never write a CFrame under the target / under the map
+    local floorY = their.Position.Y + 1.2
+    if targetPos.Y < floorY then
+        targetPos = Vector3.new(targetPos.X, floorY, targetPos.Z)
+    end
+    local mapFloor = (Workspace.FallenPartsDestroyHeight or -500) + 30
+    if targetPos.Y < mapFloor then
+        targetPos = Vector3.new(targetPos.X, mapFloor, targetPos.Z)
+    end
     pcall(function()
         -- Look at head height, but keep enough horizontal offset so ray isn't vertical
         -- (pure top-down rays = red client errors on Hood Customs gun scripts)
@@ -1821,7 +1876,6 @@ local function hoverOverTarget(plr, height)
         local toLook = look - targetPos
         local flat = Vector3.new(toLook.X, 0, toLook.Z)
         if flat.Magnitude < 0.8 then
-            -- push look target outward from our position
             local push = Vector3.new(ox, 0, oz)
             if push.Magnitude < 0.1 then push = Vector3.new(1, 0, 0) end
             look = look + push.Unit * 1.2
@@ -1834,7 +1888,6 @@ local function hoverOverTarget(plr, height)
                 ch:PivotTo(cf)
             end
             my.CFrame = cf
-            -- Match horizontal velocity when chasing air targets; only kill vertical snap so we don't fall through
             if airborne and speed > 8 then
                 my.AssemblyLinearVelocity = Vector3.new(vel.X, math.min(vel.Y, 0), vel.Z)
             else
@@ -1843,20 +1896,22 @@ local function hoverOverTarget(plr, height)
         else
             local dist = (targetPos - my.Position).Magnitude
             if dist > 9 then
-                -- long gap: step once toward target (still no PivotTo)
-                my.CFrame = CFrame.new(my.Position:Lerp(targetPos, 0.55), look)
+                local mid = my.Position:Lerp(targetPos, 0.40)
+                if mid.Y < floorY then mid = Vector3.new(mid.X, floorY, mid.Z) end
+                my.CFrame = CFrame.new(mid, look)
             elseif dist > 2.2 then
-                my.CFrame = CFrame.new(my.Position:Lerp(targetPos, 0.35), look)
+                local mid = my.Position:Lerp(targetPos, 0.30)
+                if mid.Y < floorY then mid = Vector3.new(mid.X, floorY, mid.Z) end
+                my.CFrame = CFrame.new(mid, look)
             else
-                -- already close: only rotate to keep ray angled, avoid micro-teleports
                 my.CFrame = CFrame.new(my.Position, look)
             end
-            -- gentle horizontal drift only — zero vertical, cap magnitude
+            -- gentle horizontal drift only — zero vertical so we never fall through
             local d = targetPos - my.Position
-            local hx, hz = d.X * 0.9, d.Z * 0.9
+            local hx, hz = d.X * 0.7, d.Z * 0.7
             local hm = math.sqrt(hx * hx + hz * hz)
-            if hm > 14 then
-                local s = 14 / hm
+            if hm > 10 then
+                local s = 10 / hm
                 hx, hz = hx * s, hz * s
             end
             my.AssemblyLinearVelocity = Vector3.new(hx, 0, hz)
@@ -1955,47 +2010,74 @@ end
 
 ----------------------------------------------------------------------
 -- HOOD CUSTOMS helpers (defined early so shootTarget / loopkill can use them)
+-- NO underground dives — they make the stand fall through the map and
+-- hard TP spam triggers ERROR_CLIENT_UNSYNCED_SERVER (red client).
 ----------------------------------------------------------------------
-local HC_UNDER_Y = -18
+local _lastHcMoveAt = 0
+
 local function hcSetCF(cf, vel)
     local my = getHRP()
     if not my then return end
     pcall(function()
+        -- clamp Y so we never write an under-map CFrame
+        local pos = cf.Position
+        local minY = (Workspace.FallenPartsDestroyHeight or -500) + 30
+        if pos.Y < minY then
+            pos = Vector3.new(pos.X, minY, pos.Z)
+            cf = CFrame.new(pos) * (cf - cf.Position)
+        end
         my.CFrame = cf
         my.AssemblyLinearVelocity = vel or Vector3.zero
         my.AssemblyAngularVelocity = Vector3.zero
     end)
 end
 
-local function hcGoUnderground(plr)
-    if State.FakePos then return end -- stay in formation
-    local their = plr and getHRP(plr)
-    local my = getHRP()
-    if not my then return end
-    local base = their and their.Position or my.Position
-    local under = Vector3.new(base.X + 0.35, base.Y + HC_UNDER_Y, base.Z - 0.25)
-    hcSetCF(CFrame.new(under), Vector3.zero)
-    task.wait(0.02)
-    hcSetCF(CFrame.new(under), Vector3.zero)
+-- Deprecated no-op: underground dives caused falling + red errors
+local function hcGoUnderground(_plr)
+    -- intentionally empty
 end
 
+-- Soft surface orbit only (throttled). Respects FakePos.
 local function hcSurfaceAbove(plr)
-    if State.FakePos then return end -- stay in formation; aim still locked
+    if State.FakePos then return end
+    if State.VoidEat or State.InVoid then return end
     local their = getHRP(plr)
     local my = getHRP()
     if not my or not their then return end
+    local now = tick()
+    if now - _lastHcMoveAt < 0.20 then return end
+    _lastHcMoveAt = now
+
     local aim = getAimPos(plr) or (their.Position + Vector3.new(0, 1.35, 0))
-    local phase = (tick() * 2.4) % (math.pi * 2)
-    local r = 1.8
-    local pos = their.Position + Vector3.new(math.cos(phase) * r, 2.2, math.sin(phase) * r)
-    local look = Vector3.new(aim.X, their.Position.Y + 1.2, aim.Z)
-    local flat = Vector3.new(look.X - pos.X, 0, look.Z - pos.Z)
-    if flat.Magnitude < 0.6 then
-        look = look + Vector3.new(0.9, 0, 0.6)
+    local phase = (now * 1.2) % (math.pi * 2)
+    local r = 2.6
+    local pos = their.Position + Vector3.new(math.cos(phase) * r, 2.4, math.sin(phase) * r)
+    -- never sink below target
+    if pos.Y < their.Position.Y + 1.0 then
+        pos = Vector3.new(pos.X, their.Position.Y + 2.2, pos.Z)
     end
-    hcSetCF(CFrame.new(pos, look), Vector3.zero)
-    task.wait(0.02)
-    hcSetCF(CFrame.new(pos, look), Vector3.zero)
+    local look = Vector3.new(aim.X, their.Position.Y + 1.15, aim.Z)
+    local flat = Vector3.new(look.X - pos.X, 0, look.Z - pos.Z)
+    if flat.Magnitude < 0.7 then
+        look = look + Vector3.new(0.8, 0, 0.6)
+    end
+
+    local dest = CFrame.new(pos, look)
+    local dist = (pos - my.Position).Magnitude
+    if dist > 12 then
+        -- step partway, never hard-snap full distance
+        local mid = my.Position:Lerp(pos, 0.45)
+        if mid.Y < their.Position.Y + 1.0 then
+            mid = Vector3.new(mid.X, their.Position.Y + 2.0, mid.Z)
+        end
+        hcSetCF(CFrame.new(mid, look), Vector3.zero)
+    elseif dist > 2.5 then
+        local mid = my.Position:Lerp(pos, 0.35)
+        hcSetCF(CFrame.new(mid, look), Vector3.zero)
+    else
+        -- close: rotate only + tiny drift (avoids micro-teleport spam)
+        hcSetCF(CFrame.new(my.Position, look), Vector3.zero)
+    end
 end
 
 -- COMBAT: SHOOT
@@ -2012,8 +2094,8 @@ local function shootTarget(plr)
         end
     end
 
-    -- Hood Customs: under → surface → shoot → under (shared fast path)
-    -- .d / one-shot uses one pass; loopkill uses hcKillCycle multi-pass
+    -- Hood Customs: soft surface hover + shoot only (NO underground — falls + red errors)
+    -- FakePos: stay in formation; silent aim still hits from slot
     if IsHoodCustoms then
         local gun = findGun()
         if not gun then
@@ -2029,13 +2111,8 @@ local function shootTarget(plr)
         setAimLock(plr)
         pcall(ensureSilentAim)
         setCamlock(plr, 3)
-
-        -- under → up → shoot → under (single aggressive pass)
-        hcGoUnderground(plr)
-        task.wait(0.03)
-        hcSurfaceAbove(plr)
         reloadGun(gun)
-        task.wait(0.03)
+        task.wait(0.04)
 
         for shot = 1, 8 do
             if not isAlive(plr) or isKO(plr) then break end
@@ -2044,7 +2121,11 @@ local function shootTarget(plr)
                 gun = equipTool(findGun(), 0.35)
                 if not gun then break end
             end
-            hcSurfaceAbove(plr)
+            if State.FakePos then
+                holdFormation(true)
+            else
+                hoverOverTarget(plr)
+            end
             local aim = getAimPos(plr)
             if not aim then break end
             pcall(function()
@@ -2056,10 +2137,10 @@ local function shootTarget(plr)
             activateTool(gun)
             pcall(function() forceGunHit(plr, gun) end)
             if shot % 4 == 0 then reloadGun(gun) end
-            task.wait(0.09)
+            task.wait(0.11)
         end
-        hcGoUnderground(plr)
         reloadGun(gun)
+        if State.FakePos then holdFormation(true) end
         return
     end
 
@@ -2175,7 +2256,12 @@ end
 ----------------------------------------------------------------------
 local function stompTarget(plr, times)
     if not plr then return end
-    times = times or 16
+    -- HC: fewer stomps + slower cadence = no CLIENT_UNSYNCED_SERVER
+    if IsHoodCustoms then
+        times = math.min(times or 8, 6)
+    else
+        times = times or 16
+    end
     State.Tracking = false
     clearAimLock()
 
@@ -2187,6 +2273,7 @@ local function stompTarget(plr, times)
     State.Armed = false
     task.wait(0.05)
 
+    local lastStompMove = 0
     for i = 1, times do
         if not getChar(plr) then break end
         -- if they got up and are no longer KO, stop stomping this cycle
@@ -2201,18 +2288,33 @@ local function stompTarget(plr, times)
         -- prefer UpperTorso for standing on knocked body (HRP can float)
         local standOn = theirChar and (theirChar:FindFirstChild("UpperTorso") or theirChar:FindFirstChild("Torso") or their)
         if my and standOn then
-            -- plant feet on chest — classic hood stomp distance
-            -- HC: CFrame only (no PivotTo) + throttle to avoid ERROR_CLIENT_UNSYNCED_SERVER
             local pos = standOn.Position + Vector3.new(0, 2.15, 0)
+            -- never under map
+            if pos.Y < standOn.Position.Y + 0.5 then
+                pos = Vector3.new(pos.X, standOn.Position.Y + 2.15, pos.Z)
+            end
             pcall(function()
                 local cf = CFrame.new(pos)
-                if not IsHoodCustoms then
+                if IsHoodCustoms then
+                    local now = tick()
+                    if now - lastStompMove >= 0.16 then
+                        lastStompMove = now
+                        local dist = (pos - my.Position).Magnitude
+                        if dist > 10 then
+                            my.CFrame = CFrame.new(my.Position:Lerp(pos, 0.5))
+                        else
+                            my.CFrame = cf
+                        end
+                        my.AssemblyLinearVelocity = Vector3.zero
+                        my.AssemblyAngularVelocity = Vector3.zero
+                    end
+                else
                     local ch = getChar()
                     if ch and ch.PivotTo then ch:PivotTo(cf) end
+                    my.CFrame = cf
+                    my.AssemblyLinearVelocity = Vector3.zero
+                    my.AssemblyAngularVelocity = Vector3.zero
                 end
-                my.CFrame = cf
-                my.AssemblyLinearVelocity = Vector3.zero
-                my.AssemblyAngularVelocity = Vector3.zero
             end)
         end
 
@@ -3396,12 +3498,14 @@ local function moonCloseHover(plr)
     -- HC: throttle position updates + never PivotTo (desyncs gun client ↔ server)
     if IsHoodCustoms then
         local now = tick()
-        if now - _lastMoonPosAt < 0.18 then return end
+        if now - _lastMoonPosAt < 0.20 then return end
         _lastMoonPosAt = now
-        -- orbit-ish soft offset (same idea as hoverOverTarget) so ray stays angled
-        local phase = (now * 1.8) % (math.pi * 2)
+        local phase = (now * 1.2) % (math.pi * 2)
         local r = 2.8
         local pos = their.Position + Vector3.new(math.cos(phase) * r, 2.5, math.sin(phase) * r)
+        if pos.Y < their.Position.Y + 1.2 then
+            pos = Vector3.new(pos.X, their.Position.Y + 2.3, pos.Z)
+        end
         local look = Vector3.new(aim.X, their.Position.Y + 1.1, aim.Z)
         local toLook = look - pos
         local flat = Vector3.new(toLook.X, 0, toLook.Z)
@@ -3409,13 +3513,22 @@ local function moonCloseHover(plr)
             look = look + Vector3.new(0.6, 0, 0.6)
         end
         pcall(function()
-            my.CFrame = CFrame.new(pos, look)
-            -- keep a little horizontal velocity so server doesn't flag hard stop-teleport
-            my.AssemblyLinearVelocity = Vector3.new(
-                (pos.X - my.Position.X) * 2,
-                0,
-                (pos.Z - my.Position.Z) * 2
-            )
+            local dist = (pos - my.Position).Magnitude
+            if dist > 10 then
+                local mid = my.Position:Lerp(pos, 0.40)
+                if mid.Y < their.Position.Y + 1.2 then
+                    mid = Vector3.new(mid.X, their.Position.Y + 2.2, mid.Z)
+                end
+                my.CFrame = CFrame.new(mid, look)
+            elseif dist > 2.5 then
+                my.CFrame = CFrame.new(my.Position:Lerp(pos, 0.30), look)
+            else
+                my.CFrame = CFrame.new(my.Position, look)
+            end
+            local d = pos - my.Position
+            local hx = math.clamp(d.X * 0.7, -10, 10)
+            local hz = math.clamp(d.Z * 0.7, -10, 10)
+            my.AssemblyLinearVelocity = Vector3.new(hx, 0, hz)
             my.AssemblyAngularVelocity = Vector3.zero
         end)
         return
@@ -3519,8 +3632,7 @@ local function moonStompHard(plr)
 end
 
 ----------------------------------------------------------------------
--- HOOD CUSTOMS: under → surface → shoot → under (fast + reliable)
--- Helpers (hcGoUnderground / hcSurfaceAbove) defined above shootTarget.
+-- HOOD CUSTOMS: soft surface shoot only (no underground, no hard TP)
 ----------------------------------------------------------------------
 local function hcShootBurst(plr, maxShots)
     if not plr or not isAlive(plr) then return end
@@ -3539,8 +3651,11 @@ local function hcShootBurst(plr, maxShots)
         if not isAlive(plr) or isKO(plr) then break end
         if State.VoidEat or State.InVoid then break end
 
-        -- stay glued above them each shot
-        hcSurfaceAbove(plr)
+        if State.FakePos then
+            holdFormation(true)
+        else
+            hoverOverTarget(plr)
+        end
 
         local aim = getAimPos(plr)
         if not aim then break end
@@ -3562,11 +3677,11 @@ local function hcShootBurst(plr, maxShots)
         if shot % 4 == 0 then
             reloadGun(gun)
         end
-        task.wait(0.09)
+        task.wait(0.11)
     end
 end
 
--- Full HC kill pass: under → up → shoot → under (repeat until KO / dead)
+-- Full HC kill pass: soft hover + shoot (no underground dives)
 local function hcKillCycle(plr)
     if not plr then return end
     beginCombat()
@@ -3591,30 +3706,25 @@ local function hcKillCycle(plr)
             if State.VoidEat or State.InVoid then exitCombatVoid() end
         end
 
-        -- 1) under ground (safe)
-        hcGoUnderground(plr)
-        task.wait(0.03)
-
-        -- 2) pop above target
-        hcSurfaceAbove(plr)
-        task.wait(0.02)
-
-        -- 3) short shoot burst while above
+        if State.FakePos then
+            holdFormation(true)
+        else
+            hoverOverTarget(plr)
+        end
         hcShootBurst(plr, 6)
 
         if isKO(plr) or not isAlive(plr) then break end
-
-        -- 4) dive under again before next pass
-        hcGoUnderground(plr)
-        task.wait(0.04)
+        task.wait(0.08)
     end
 
-    if isKO(plr) then
-        -- surface briefly for stomp then hide
-        hcSurfaceAbove(plr)
-        task.wait(0.03)
+    if isKO(plr) and not State.FakePos then
+        hoverOverTarget(plr)
+        task.wait(0.05)
         moonStompHard(plr)
-        hcGoUnderground(plr)
+    elseif isKO(plr) and State.FakePos then
+        -- FakePos: still try a light stomp then snap back to slot
+        moonStompHard(plr)
+        holdFormation(true)
     end
 end
 
@@ -3633,7 +3743,7 @@ local function loopKillCycle(plr)
         end
     else
         if IsHoodCustoms then
-            -- HC: under → surface → shoot → under loop (avoids sustained top-side CFrame spam)
+            -- HC: soft surface hover + shoot (no underground / no hard TP)
             hcKillCycle(plr)
         else
             local t0 = tick()
@@ -4144,15 +4254,11 @@ end)
 ----------------------------------------------------------------------
 Connections.Main = RunService.Heartbeat:Connect(function()
     if IsOwner then return end
-    -- FakePos: keep formation even during gun combat (silent aim hits from slot)
-    -- Knife still leaves formation (needs proximity)
+    -- FakePos: ALWAYS hold formation slot (even mid gun combat / loopkill).
+    -- Silent aim + mouse remotes still kill from the slot. Knife briefly leaves.
     if State.FakePos then
         if not State.KnifeBusy and not State.InVoid and not State.VoidEat then
-            -- force tracking so followOwner runs while shooting from fake pos
-            local prevTrack = State.Tracking
-            State.Tracking = true
-            followOwner()
-            State.Tracking = prevTrack
+            holdFormation(true)
         end
     elseif not State.KnifeBusy and not State.LoopKillBusy and not State.Sweep
         and not State.LoopKill and not State.LoopKnock and not State.SentryBusy then
