@@ -1889,18 +1889,37 @@ function F.hoverOverTarget(plr, height)
     local ox, oz
     local side = IsHoodCustoms and 2.8 or 1.4
     if IsHoodCustoms then
-        -- SLOW approach: max ~4 writes/sec, small steps
+        -- Snap BEHIND the target once; skip if already close enough.
+        -- No orbit — orbiting causes constant visible teleports between every shot.
         local now = tick()
-        if now - _lastHoverAt < 0.28 then
-            return
-        end
+        -- Throttle: don't re-snap more than once per 0.35s
+        if now - _lastHoverAt < 0.35 then return end
+
+        -- Compute behind position using their CFrame (relative to where they face)
+        local behindCF = their.CFrame * CFrame.new(0, 1.6, 2.2)
+        local behindPos = behindCF.Position
+        local floorY2 = their.Position.Y + 1.0
+        local mapFloor2 = (Workspace.FallenPartsDestroyHeight or -500) + 30
+        if behindPos.Y < floorY2 then behindPos = Vector3.new(behindPos.X, floorY2, behindPos.Z) end
+        if behindPos.Y < mapFloor2 then behindPos = Vector3.new(behindPos.X, mapFloor2, behindPos.Z) end
+
+        local dist = (behindPos - my.Position).Magnitude
+        -- Only snap if we're not already behind them (> 3.5 studs away from behind-slot)
+        if dist <= 3.5 then return end
+
         _lastHoverAt = now
-        local phase = (now * 0.85) % (math.pi * 2)
-        local orbitR = 3.0
-        ox = math.cos(phase) * orbitR
-        oz = math.sin(phase) * orbitR
-        height = math.max(2.0, math.min(height, 3.0))
-        if airborne then height = math.min(height, 2.3) end
+        local aimPos = aim or their.Position
+        local look = Vector3.new(aimPos.X, their.Position.Y + 1.3, aimPos.Z)
+        local toLook = look - behindPos
+        if Vector3.new(toLook.X, 0, toLook.Z).Magnitude < 0.5 then
+            look = look + Vector3.new(0.5, 0, 0.5)
+        end
+        pcall(function()
+            my.CFrame = CFrame.new(behindPos, look)
+            my.AssemblyLinearVelocity = Vector3.zero
+            my.AssemblyAngularVelocity = Vector3.zero
+        end)
+        return
     elseif airborne then
         if speed > 2 then
             local flat = Vector3.new(vel.X, 0, vel.Z)
@@ -2001,22 +2020,21 @@ function F.hoverOverTarget(plr, height)
     end)
 end
 
--- Multi-step slow approach before shooting (HC, FakePos OFF).
--- Takes ~0.8–1.5s to close distance safely instead of one hard TP.
-function F.softApproachTarget(plr, seconds)
+-- Approach target before shooting. HC: single snap behind + short settle wait.
+-- No loop = no visible repeated teleports before the first shot.
+function F.softApproachTarget(plr, _seconds)
     if State.FakePos or not plr then return end
+    if not F.getChar(plr) then return end
+    if State.VoidEat or State.InVoid then return end
     if not IsHoodCustoms then
         F.hoverOverTarget(plr)
         return
     end
-    seconds = seconds or 1.0
-    local t0 = tick()
-    while tick() - t0 < seconds do
-        if not F.getChar(plr) then break end
-        if State.VoidEat or State.InVoid then break end
-        F.hoverOverTarget(plr)
-        task.wait(0.28)
-    end
+    -- Force _lastHoverAt to 0 so the throttle doesn't skip the initial snap
+    _lastHoverAt = 0
+    F.hoverOverTarget(plr)
+    -- Brief settle so the server can register the new position before shots start
+    task.wait(0.18)
 end
 
 function F.beginCombat()
@@ -2139,7 +2157,7 @@ function F.hcGoUnderground(_plr)
     -- intentionally empty
 end
 
--- Soft surface orbit only (throttled). Respects FakePos.
+-- Move behind target (throttled). Respects FakePos.
 function F.hcSurfaceAbove(plr)
     if State.FakePos then return end
     if State.VoidEat or State.InVoid then return end
@@ -2147,39 +2165,27 @@ function F.hcSurfaceAbove(plr)
     local my = F.getHRP()
     if not my or not their then return end
     local now = tick()
-    if now - _lastHcMoveAt < 0.20 then return end
+    if now - _lastHcMoveAt < 0.35 then return end
+
+    -- Snap behind using their CFrame — consistent position, no orbit jitter
+    local behindCF = their.CFrame * CFrame.new(0, 1.6, 2.2)
+    local behindPos = behindCF.Position
+    local floorY = their.Position.Y + 1.0
+    local mapFloor = (Workspace.FallenPartsDestroyHeight or -500) + 30
+    if behindPos.Y < floorY then behindPos = Vector3.new(behindPos.X, floorY, behindPos.Z) end
+    if behindPos.Y < mapFloor then behindPos = Vector3.new(behindPos.X, mapFloor, behindPos.Z) end
+
+    local dist = (behindPos - my.Position).Magnitude
+    if dist <= 3.5 then return end  -- already there
+
     _lastHcMoveAt = now
-
     local aim = F.getAimPos(plr) or (their.Position + Vector3.new(0, 1.35, 0))
-    local phase = (now * 1.2) % (math.pi * 2)
-    local r = 2.6
-    local pos = their.Position + Vector3.new(math.cos(phase) * r, 2.4, math.sin(phase) * r)
-    -- never sink below target
-    if pos.Y < their.Position.Y + 1.0 then
-        pos = Vector3.new(pos.X, their.Position.Y + 2.2, pos.Z)
-    end
     local look = Vector3.new(aim.X, their.Position.Y + 1.15, aim.Z)
-    local flat = Vector3.new(look.X - pos.X, 0, look.Z - pos.Z)
-    if flat.Magnitude < 0.7 then
-        look = look + Vector3.new(0.8, 0, 0.6)
+    local toLook = look - behindPos
+    if Vector3.new(toLook.X, 0, toLook.Z).Magnitude < 0.5 then
+        look = look + Vector3.new(0.5, 0, 0.5)
     end
-
-    local dest = CFrame.new(pos, look)
-    local dist = (pos - my.Position).Magnitude
-    if dist > 12 then
-        -- step partway, never hard-snap full distance
-        local mid = my.Position:Lerp(pos, 0.45)
-        if mid.Y < their.Position.Y + 1.0 then
-            mid = Vector3.new(mid.X, their.Position.Y + 2.0, mid.Z)
-        end
-        F.hcSetCF(CFrame.new(mid, look), Vector3.zero)
-    elseif dist > 2.5 then
-        local mid = my.Position:Lerp(pos, 0.35)
-        F.hcSetCF(CFrame.new(mid, look), Vector3.zero)
-    else
-        -- close: rotate only + tiny drift (avoids micro-teleport spam)
-        F.hcSetCF(CFrame.new(my.Position, look), Vector3.zero)
-    end
+    F.hcSetCF(CFrame.new(behindPos, look), Vector3.zero)
 end
 
 -- COMBAT: SHOOT
@@ -3634,40 +3640,31 @@ function F.moonCloseHover(plr)
     if not my or not their then return end
     local aim = F.getAimPos(plr) or (their.Position + Vector3.new(0, 1.4, 0))
 
-    -- HC: throttle position updates + never PivotTo (desyncs gun client ↔ server)
+    -- HC: snap directly behind target, throttled. No orbit = no jitter between shots.
     if IsHoodCustoms then
         local now = tick()
-        if now - _lastMoonPosAt < 0.20 then return end
+        if now - _lastMoonPosAt < 0.35 then return end
+
+        -- Behind position relative to where they face
+        local behindCF = their.CFrame * CFrame.new(0, 1.6, 2.2)
+        local behindPos = behindCF.Position
+        local floorY2 = their.Position.Y + 1.0
+        local mapFloor2 = (Workspace.FallenPartsDestroyHeight or -500) + 30
+        if behindPos.Y < floorY2 then behindPos = Vector3.new(behindPos.X, floorY2, behindPos.Z) end
+        if behindPos.Y < mapFloor2 then behindPos = Vector3.new(behindPos.X, mapFloor2, behindPos.Z) end
+
+        local dist = (behindPos - my.Position).Magnitude
+        if dist <= 3.5 then return end  -- already behind them, don't move
+
         _lastMoonPosAt = now
-        local phase = (now * 1.2) % (math.pi * 2)
-        local r = 2.8
-        local pos = their.Position + Vector3.new(math.cos(phase) * r, 2.5, math.sin(phase) * r)
-        if pos.Y < their.Position.Y + 1.2 then
-            pos = Vector3.new(pos.X, their.Position.Y + 2.3, pos.Z)
-        end
         local look = Vector3.new(aim.X, their.Position.Y + 1.1, aim.Z)
-        local toLook = look - pos
-        local flat = Vector3.new(toLook.X, 0, toLook.Z)
-        if flat.Magnitude < 0.8 then
-            look = look + Vector3.new(0.6, 0, 0.6)
+        local toLook = look - behindPos
+        if Vector3.new(toLook.X, 0, toLook.Z).Magnitude < 0.5 then
+            look = look + Vector3.new(0.5, 0, 0.5)
         end
         pcall(function()
-            local dist = (pos - my.Position).Magnitude
-            if dist > 10 then
-                local mid = my.Position:Lerp(pos, 0.40)
-                if mid.Y < their.Position.Y + 1.2 then
-                    mid = Vector3.new(mid.X, their.Position.Y + 2.2, mid.Z)
-                end
-                my.CFrame = CFrame.new(mid, look)
-            elseif dist > 2.5 then
-                my.CFrame = CFrame.new(my.Position:Lerp(pos, 0.30), look)
-            else
-                my.CFrame = CFrame.new(my.Position, look)
-            end
-            local d = pos - my.Position
-            local hx = math.clamp(d.X * 0.7, -10, 10)
-            local hz = math.clamp(d.Z * 0.7, -10, 10)
-            my.AssemblyLinearVelocity = Vector3.new(hx, 0, hz)
+            my.CFrame = CFrame.new(behindPos, look)
+            my.AssemblyLinearVelocity = Vector3.zero
             my.AssemblyAngularVelocity = Vector3.zero
         end)
         return
