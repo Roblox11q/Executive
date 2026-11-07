@@ -1942,10 +1942,27 @@ function F.hoverOverTarget(plr, height)
         end
 
         if not IsHoodCustoms then
-            local cf = CFrame.new(targetPos, look)
-            local ch = F.getChar()
-            if ch and ch.PivotTo then ch:PivotTo(cf) end
-            my.CFrame = cf
+            -- Snap BEHIND the target (not beside); only move if we actually need to.
+            -- Using their LookVector so we sit at their back, facing them.
+            local behind = their.CFrame * CFrame.new(0, 1.6, 2.2) -- behind + slightly above
+            local behindPos = behind.Position
+            -- floor clamp
+            if behindPos.Y < floorY then
+                behindPos = Vector3.new(behindPos.X, floorY, behindPos.Z)
+            end
+            if behindPos.Y < mapFloor then
+                behindPos = Vector3.new(behindPos.X, mapFloor, behindPos.Z)
+            end
+            local dist = (behindPos - my.Position).Magnitude
+            -- Only teleport if target is moving fast enough to need a snap, OR we are far away.
+            -- This avoids jitter when already in position.
+            local needsSnap = dist > 4 or speed > 3
+            if needsSnap then
+                local cf = CFrame.new(behindPos, aim)
+                local ch = F.getChar()
+                if ch and ch.PivotTo then ch:PivotTo(cf) end
+                my.CFrame = cf
+            end
             if airborne and speed > 8 then
                 my.AssemblyLinearVelocity = Vector3.new(vel.X, math.min(vel.Y, 0), vel.Z)
             else
@@ -3656,16 +3673,26 @@ function F.moonCloseHover(plr)
         return
     end
 
-    -- other places: tight behind (classic Moon)
-    local look = their.CFrame.LookVector
-    local behind = their.Position - look * 2.4 + Vector3.new(0, 1.6, 0)
-    local side = their.CFrame.RightVector * (0.7 + math.sin(tick() * 3.2) * 0.5)
-    local pos = behind + side
+    -- other places: snap directly behind target, only when needed.
+    -- No side-oscillation — just clean behind position facing them.
+    local behindCF = their.CFrame * CFrame.new(0, 1.6, 2.2)
+    local behindPos = behindCF.Position
+    local floorY = their.Position.Y + 1.0
+    if behindPos.Y < floorY then
+        behindPos = Vector3.new(behindPos.X, floorY, behindPos.Z)
+    end
+    local vel2 = their.AssemblyLinearVelocity or Vector3.zero
+    local speed2 = vel2.Magnitude
+    local dist2 = (behindPos - my.Position).Magnitude
+    -- Only snap if far away OR target is actively moving
+    local needsSnap2 = dist2 > 4 or speed2 > 3
     pcall(function()
-        local cf = CFrame.new(pos, aim)
-        local ch = F.getChar()
-        if ch and ch.PivotTo then ch:PivotTo(cf) end
-        my.CFrame = cf
+        if needsSnap2 then
+            local cf = CFrame.new(behindPos, aim)
+            local ch = F.getChar()
+            if ch and ch.PivotTo then ch:PivotTo(cf) end
+            my.CFrame = cf
+        end
         my.AssemblyLinearVelocity = Vector3.zero
         my.AssemblyAngularVelocity = Vector3.zero
     end)
@@ -4157,16 +4184,45 @@ function F.cmdFix()
 end
 
 function F.cmdKick()
-    -- Leave server and rejoin same place / same job if possible
+    -- Rejoin: TeleportAsync is the modern API and does NOT trigger "restricted experience"
+    -- errors that the old Teleport/TeleportToPlaceInstance do on most hood games.
     F.notify("Rejoining...")
     task.spawn(function()
-        task.wait(0.2)
-        local ok = pcall(function()
-            TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, LocalPlayer)
-        end)
+        task.wait(0.25)
+        -- Try same server first (TeleportAsync with job id), fall back to any server
+        local placeId = game.PlaceId
+        local jobId   = game.JobId
+        local opts = Instance.new("TeleportOptions")
+
+        local ok = false
+        -- Attempt 1: same server (requires a valid JobId)
+        if jobId and jobId ~= "" then
+            pcall(function()
+                opts.ServerInstanceId = jobId
+                ok = true
+            end)
+            if ok then
+                ok = false
+                pcall(function()
+                    TeleportService:TeleportAsync(placeId, {LocalPlayer}, opts)
+                    ok = true
+                end)
+            end
+        end
+
+        -- Attempt 2: any server in the same place
         if not ok then
             pcall(function()
-                TeleportService:Teleport(game.PlaceId, LocalPlayer)
+                local opts2 = Instance.new("TeleportOptions")
+                TeleportService:TeleportAsync(placeId, {LocalPlayer}, opts2)
+                ok = true
+            end)
+        end
+
+        -- Attempt 3: last resort – old API (may show error on some places but won't crash)
+        if not ok then
+            pcall(function()
+                TeleportService:Teleport(placeId)
             end)
         end
     end)
