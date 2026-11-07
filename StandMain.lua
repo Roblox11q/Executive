@@ -217,7 +217,7 @@ local State = {
     AutoHeal      = true,  -- auto buy food + eat when hurt (HC: EatFood / BuyItem)
     Sweep         = false,
     Air           = true,  -- floating summon formation (toggle with .air)
-    FakePos       = false, -- stay in formation; gun kills still work via silent aim + mouse remotes
+    FakePos       = false, -- PhysicsRep fake position (server pos desync) + stay in formation
     Sentry        = false, -- .sentry — knock whoever shoots the OWNER
     Sentry2       = false, -- .sentry2 — knock+stomp whoever shoots the OWNER
     BSentry       = false, -- .bsentry — knock+stomp whoever shoots THIS stand
@@ -247,6 +247,102 @@ local function getHRP(p)
     local c = getChar(p)
     return c and c:FindFirstChild("HumanoidRootPart")
 end
+
+----------------------------------------------------------------------
+-- FAKE POSITION (PhysicsRep desync — from NeverLarp / PolSec style)
+-- Server keeps reporting an old HRP position while the client moves freely.
+-- Requires executor support for sethiddenproperty.
+----------------------------------------------------------------------
+local FakePosServerPos = nil
+local _fpBusy = false
+local _fpCounter = 0
+local _fpConn = nil
+local FP_TICK = 1 / 240
+local FP_PULSE_EVERY = 20 -- every N ticks: drop PhysicsRep briefly
+local FP_PULSE_WAIT = 0.1
+
+local function fpSetRep(hrp, val)
+    if not hrp or not sethiddenproperty then return end
+    pcall(sethiddenproperty, hrp, "PhysicsRepRootPart", val)
+end
+
+local function stopPhysicsFakePos()
+    if _fpConn then
+        pcall(function() task.cancel(_fpConn) end)
+        _fpConn = nil
+    end
+    _fpBusy = false
+    _fpCounter = 0
+    local hrp = getHRP()
+    if hrp then
+        fpSetRep(hrp, hrp) -- restore normal replication
+    end
+    FakePosServerPos = nil
+end
+
+local function startPhysicsFakePos()
+    stopPhysicsFakePos()
+    if type(sethiddenproperty) ~= "function" then
+        notify("FakePos: sethiddenproperty missing (executor)")
+        return false
+    end
+    pcall(function()
+        if setfflag then setfflag("S2PhysicsSenderRate", "1000") end
+    end)
+    local hrp = getHRP()
+    if hrp then
+        FakePosServerPos = hrp.Position
+        fpSetRep(hrp, hrp)
+    end
+    _fpCounter = FP_PULSE_EVERY
+    _fpConn = task.spawn(function()
+        while State.FakePos do
+            task.wait(FP_TICK)
+            if not State.FakePos then break end
+            if _fpBusy then continue end
+            local char = getChar()
+            local root = char and char:FindFirstChild("HumanoidRootPart")
+            if not root then continue end
+
+            if _fpCounter <= 0 then
+                _fpBusy = true
+                local before = root.Position
+                fpSetRep(root, nil)
+                task.wait(FP_PULSE_WAIT)
+                local after = root.Position
+                fpSetRep(root, root)
+                if (after - before).Magnitude > 10 then
+                    FakePosServerPos = after
+                elseif not FakePosServerPos then
+                    FakePosServerPos = before
+                end
+                _fpBusy = false
+                _fpCounter = FP_PULSE_EVERY
+            else
+                _fpCounter -= 1
+                fpSetRep(root, root)
+            end
+        end
+        -- cleanup when loop exits
+        local root = getHRP()
+        if root then fpSetRep(root, root) end
+        _fpBusy = false
+        FakePosServerPos = nil
+        _fpConn = nil
+    end)
+    return true
+end
+
+-- Re-arm fake pos after respawn
+LocalPlayer.CharacterAdded:Connect(function()
+    if not State.FakePos then return end
+    task.wait(0.25)
+    local hrp = getHRP()
+    if hrp then
+        FakePosServerPos = hrp.Position
+        fpSetRep(hrp, hrp)
+    end
+end)
 
 local function getHum(p)
     local c = getChar(p)
@@ -2853,8 +2949,8 @@ local function cmdAir(arg)
     notify("Air " .. (State.Air and "ON (floating)" or "OFF (ground)"))
 end
 
--- .fake / .fp — stay in formation (fake position). Gun kills still work via silent aim + mouse remotes.
--- Character does not hover/TP onto targets. Knife/stomp still need proximity (brief leave).
+-- .fake / .fp / .fakepos — PhysicsRep fake position (server thinks you're elsewhere)
+-- + stay in formation on client. Gun kills via silent aim. From NeverLarp-style desync.
 local function cmdFake(arg)
     if arg == "on" or arg == "1" or arg == "true" then
         State.FakePos = true
@@ -2864,15 +2960,22 @@ local function cmdFake(arg)
         State.FakePos = not State.FakePos
     end
     if State.FakePos then
+        local ok = startPhysicsFakePos()
         if not IsOwner and not State.InVoid then
             State.Tracking = true
             returnToOwner()
             pinFakeFreeze()
         end
-        notify("FakePos ON — freeze in slot, gun aim only (no TP)")
+        if ok then
+            notify("FakePos ON — physics desync + formation")
+        else
+            State.FakePos = false
+            notify("FakePos failed (no sethiddenproperty)")
+        end
     else
+        stopPhysicsFakePos()
         clearFakeFreeze()
-        notify("FakePos OFF — slow TP to targets")
+        notify("FakePos OFF")
     end
 end
 
@@ -4253,7 +4356,7 @@ local function cmdHelp()
     notify("See F9 for command list")
     print("[Stand] Commands:")
     print("  " .. Prefix .. "void / call / track / air [on|off] / pos <1-6>")
-    print("  " .. Prefix .. "fake [on|off] / fp  -- stay in formation; gun kills still work")
+    print("  " .. Prefix .. "fake [on|off] / fp / fakepos  -- physics FakePos (server desync)")
     print("  " .. Prefix .. "arm / unarm")
     print("  " .. Prefix .. "d <user>   -- knock")
     print("  " .. Prefix .. "b <user>   -- bring")
