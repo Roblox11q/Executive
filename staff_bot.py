@@ -10,9 +10,12 @@ import io
 import json
 import os
 import re
+import urllib.parse
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
+
+import aiohttp
 
 import discord
 from discord import app_commands
@@ -38,11 +41,23 @@ BLACKLIST_TABLE = "stand_blacklist"
 TABLE = "stand_configs"
 KEY_STOCK_TABLE = "key_stock"
 ROBLOX_KEYS_TABLE = "roblox_keys"
+MEMBERS_TABLE = "verified_members"
 
 # Verification roles
 VERIFY_ROLE_ID = int(os.getenv("VERIFY_ROLE_ID", "1554782511781908600") or "1554782511781908600")
 UNVERIFIED_ROLE_ID = int(os.getenv("UNVERIFIED_ROLE_ID", "1554782544950726746") or "1554782544950726746")
 MEMBER_ROLE_ID = int(os.getenv("MEMBER_ROLE_ID", "1553595287896072192") or "1553595287896072192")
+
+# OAuth2 — needed for silent guild restore
+# DISCORD_CLIENT_ID   : your bot's application ID
+# DISCORD_CLIENT_SECRET: OAuth2 secret from Discord Developer Portal → OAuth2
+# OAUTH_REDIRECT_URI  : must match exactly what you set in Discord Dev Portal
+#                       e.g. https://your-render-service.onrender.com/callback
+# GUILD_ID            : the server you want members restored to
+DISCORD_CLIENT_ID     = os.getenv("DISCORD_CLIENT_ID", "")
+DISCORD_CLIENT_SECRET = os.getenv("DISCORD_CLIENT_SECRET", "")
+OAUTH_REDIRECT_URI    = os.getenv("OAUTH_REDIRECT_URI", "")
+GUILD_ID              = int(os.getenv("GUILD_ID", "0") or "0")
 
 # Tickets
 TRANSCRIPT_CHANNEL_ID = int(os.getenv("TRANSCRIPT_CHANNEL_ID", "1554783241750188112") or "1554783241750188112")
@@ -237,6 +252,184 @@ def set_user_cfg(discord_id, cfg: dict) -> None:
         print("set_user_cfg error:", e)
 
 
+# ── Verified member registry ──────────────────────────────────────────────────
+# Supabase table: verified_members
+# Run this SQL once in Supabase → SQL Editor:
+#
+#   create table if not exists verified_members (
+#     id              bigint primary key,   -- Discord user ID
+#     username        text,
+#     display_name    text,
+#     guild_id        bigint,
+#     verified_at     timestamptz,
+#     left_at         timestamptz,
+#     in_server       boolean default true,
+#     access_token    text,                 -- OAuth2 token for silent rejoin
+#     refresh_token   text,
+#     token_expires_at timestamptz
+#   );
+
+def log_verified_member(
+    member: discord.Member,
+    *,
+    access_token: str = "",
+    refresh_token: str = "",
+    token_expires_at: str = "",
+) -> None:
+    """
+    Upsert a verified member. On first verify (no OAuth yet) just logs identity.
+    After OAuth callback, called again with tokens to update the row.
+    """
+    if not supabase:
+        return
+    payload: dict = {
+        "id": member.id,
+        "username": str(member),
+        "display_name": member.display_name,
+        "guild_id": member.guild.id,
+        "verified_at": datetime.now(timezone.utc).isoformat(),
+        "left_at": None,
+        "in_server": True,
+    }
+    if access_token:
+        payload["access_token"] = access_token
+    if refresh_token:
+        payload["refresh_token"] = refresh_token
+    if token_expires_at:
+        payload["token_expires_at"] = token_expires_at
+    try:
+        supabase.table(MEMBERS_TABLE).upsert(payload, on_conflict="id").execute()
+    except Exception as e:
+        print(f"log_verified_member error for {member.id}:", e)
+
+
+def save_oauth_tokens(
+    user_id: int,
+    access_token: str,
+    refresh_token: str,
+    expires_in: int,
+) -> None:
+    """Persist OAuth2 tokens for a user after the callback."""
+    if not supabase:
+        return
+    expires_at = (
+        datetime.now(timezone.utc) + timedelta(seconds=expires_in)
+    ).isoformat()
+    try:
+        supabase.table(MEMBERS_TABLE).update(
+            {
+                "access_token": access_token,
+                "refresh_token": refresh_token,
+                "token_expires_at": expires_at,
+            }
+        ).eq("id", user_id).execute()
+    except Exception as e:
+        print(f"save_oauth_tokens error for {user_id}:", e)
+
+
+def mark_member_left(member: discord.Member) -> None:
+    """Mark a verified member as no longer in the server when they leave."""
+    if not supabase:
+        return
+    try:
+        supabase.table(MEMBERS_TABLE).update(
+            {
+                "in_server": False,
+                "left_at": datetime.now(timezone.utc).isoformat(),
+            }
+        ).eq("id", member.id).execute()
+    except Exception as e:
+        print(f"mark_member_left error for {member.id}:", e)
+
+
+def build_oauth_url(state: str = "") -> str:
+    """Build the Discord OAuth2 authorization URL."""
+    params = {
+        "client_id": DISCORD_CLIENT_ID,
+        "redirect_uri": OAUTH_REDIRECT_URI,
+        "response_type": "code",
+        "scope": "identify guilds.join",
+    }
+    if state:
+        params["state"] = state
+    return "https://discord.com/oauth2/authorize?" + urllib.parse.urlencode(params)
+
+
+async def exchange_code(code: str) -> Optional[dict]:
+    """Exchange an OAuth2 authorization code for tokens."""
+    async with aiohttp.ClientSession() as session:
+        resp = await session.post(
+            "https://discord.com/api/v10/oauth2/token",
+            data={
+                "client_id": DISCORD_CLIENT_ID,
+                "client_secret": DISCORD_CLIENT_SECRET,
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": OAUTH_REDIRECT_URI,
+            },
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        if resp.status != 200:
+            print(f"exchange_code HTTP {resp.status}:", await resp.text())
+            return None
+        return await resp.json()
+
+
+async def refresh_access_token(refresh_token: str) -> Optional[dict]:
+    """Refresh an expired OAuth2 access token."""
+    async with aiohttp.ClientSession() as session:
+        resp = await session.post(
+            "https://discord.com/api/v10/oauth2/token",
+            data={
+                "client_id": DISCORD_CLIENT_ID,
+                "client_secret": DISCORD_CLIENT_SECRET,
+                "grant_type": "refresh_token",
+                "refresh_token": refresh_token,
+            },
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        if resp.status != 200:
+            print(f"refresh_access_token HTTP {resp.status}:", await resp.text())
+            return None
+        return await resp.json()
+
+
+async def get_oauth_user(access_token: str) -> Optional[dict]:
+    """Fetch the Discord user object for the given access token."""
+    async with aiohttp.ClientSession() as session:
+        resp = await session.get(
+            "https://discord.com/api/v10/users/@me",
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        if resp.status != 200:
+            return None
+        return await resp.json()
+
+
+async def add_member_to_guild(user_id: int, access_token: str) -> tuple[bool, str]:
+    """
+    Use the bot token + user's OAuth2 token to silently add them to the guild.
+    Returns (success, message).
+    Discord returns 201 = added, 204 = already a member.
+    """
+    if not GUILD_ID or not TOKEN:
+        return False, "GUILD_ID or bot TOKEN not configured"
+    async with aiohttp.ClientSession() as session:
+        resp = await session.put(
+            f"https://discord.com/api/v10/guilds/{GUILD_ID}/members/{user_id}",
+            json={"access_token": access_token},
+            headers={
+                "Authorization": f"Bot {TOKEN}",
+                "Content-Type": "application/json",
+            },
+        )
+        status = resp.status
+        if status in (201, 204):
+            return True, "added" if status == 201 else "already_member"
+        body = await resp.text()
+        return False, f"HTTP {status}: {body}"
+
+
 # ── Bot setup ─────────────────────────────────────────────────────────────────
 intents = discord.Intents.default()
 intents.members = True
@@ -278,6 +471,22 @@ def _status_channel_name(status: str) -> str:
     return f"{dot}｜{label}"
 
 
+async def _update_bot_presence(status: str | None = None) -> None:
+    """Set the bot's activity/presence to reflect the current system status."""
+    if status is None:
+        status = get_system_status()
+    dot = STATUS_DOTS.get(status, "🟢")
+    label = STATUS_LABELS.get(status, status)
+    activity = discord.Activity(
+        type=discord.ActivityType.watching,
+        name=f"{dot} {label}",
+    )
+    try:
+        await bot.change_presence(activity=activity)
+    except Exception as e:
+        print("presence update error:", e)
+
+
 async def update_status_channel(
     status: str,
     *,
@@ -296,6 +505,9 @@ async def update_status_channel(
     elif status == "up":
         _status_note = ""
     _save_persisted_status()
+
+    # Keep bot presence in sync with system status
+    await _update_bot_presence(status)
 
     channel = bot.get_channel(STATUS_CHANNEL_ID)
     if channel is None:
@@ -787,10 +999,26 @@ class VerifyView(discord.ui.View):
             await interaction.response.send_message(f"Failed to update roles: {e}", ephemeral=True)
             return
 
-        await interaction.response.send_message(
-            "You have been **verified**! Welcome to the server.",
-            ephemeral=True,
-        )
+        # Log identity to Supabase immediately (tokens come after OAuth)
+        log_verified_member(member)
+
+        # Build the OAuth2 URL so we can silently restore them if the server is raided
+        oauth_configured = bool(DISCORD_CLIENT_ID and DISCORD_CLIENT_SECRET and OAUTH_REDIRECT_URI)
+        if oauth_configured:
+            oauth_url = build_oauth_url(state=str(member.id))
+            await interaction.response.send_message(
+                "✅ **Verified!** Welcome to Executive Stand.\n\n"
+                "**One more step — click below to enable auto-restore:**\n"
+                f"{oauth_url}\n\n"
+                "This lets the bot silently add you back if the server is ever raided or wiped. "
+                "It only requests `identify` and `guilds.join` — nothing else.",
+                ephemeral=True,
+            )
+        else:
+            await interaction.response.send_message(
+                "You have been **verified**! Welcome to the server.",
+                ephemeral=True,
+            )
 
 
 # ── Events ────────────────────────────────────────────────────────────────────
@@ -817,6 +1045,8 @@ async def on_ready():
         )
     except Exception as e:
         print("[Staff] on_ready status error:", e)
+    # Set bot activity to reflect current system status
+    await _update_bot_presence()
 
 
 @bot.event
@@ -831,6 +1061,14 @@ async def on_member_join(member: discord.Member):
         await member.add_roles(role, reason="Auto-role: unverified on join")
     except Exception as e:
         print(f"on_member_join role error for {member.id}:", e)
+
+
+@bot.event
+async def on_member_remove(member: discord.Member):
+    """Mark verified members as left so restore knows who is missing."""
+    if member.bot:
+        return
+    mark_member_left(member)
 
 
 # ── Staff: Stand commands ─────────────────────────────────────────────────────
@@ -935,7 +1173,6 @@ async def setrank_cmd(
         f"Set rank of **{user}** to `{rank.value}`.",
         ephemeral=True,
     )
-
 
 
 @bot.tree.command(name="addstock", description="[Staff] Add License Hub keys to Roblox shop stock")
@@ -1345,8 +1582,7 @@ async def nick_cmd(
     try:
         await member.edit(nick=nickname or None, reason=f"Nickname by {interaction.user}")
         await interaction.response.send_message(
-            f"Nickname for **{member}** set to `{nickname or '(reset)'}`."
-            ,
+            f"Nickname for **{member}** set to `{nickname or '(reset)'}`.",
             ephemeral=True,
         )
     except Exception as e:
@@ -1503,7 +1739,6 @@ async def verifypanel_cmd(interaction: discord.Interaction):
     await interaction.channel.send(embed=embed, view=VerifyView())
 
 
-
 @bot.tree.command(name="rules", description="[Staff] Post the server rules panel")
 @app_commands.describe(channel="Channel to post rules in (defaults to current)")
 async def rules_cmd(
@@ -1641,22 +1876,270 @@ async def say_cmd(
     )
 
 
-# ── Minimal HTTP for Render (optional second service) ─────────────────────────
+# ── Restore command ───────────────────────────────────────────────────────────
+@bot.tree.command(
+    name="restoremembers",
+    description="[Staff] Silently re-add all verified members who left (requires OAuth2 setup)",
+)
+async def restoremembers_cmd(interaction: discord.Interaction):
+    if not await staff_check(interaction):
+        return
+    if not supabase:
+        await interaction.response.send_message("Database unavailable.", ephemeral=True)
+        return
+    if not GUILD_ID:
+        await interaction.response.send_message(
+            "GUILD_ID env var is not set.", ephemeral=True
+        )
+        return
+
+    await interaction.response.defer(ephemeral=True)
+
+    # Fetch all members who left and have an OAuth token
+    try:
+        res = (
+            supabase.table(MEMBERS_TABLE)
+            .select("id, username, access_token, refresh_token, token_expires_at")
+            .eq("in_server", False)
+            .eq("guild_id", GUILD_ID)
+            .execute()
+        )
+        rows = res.data or []
+    except Exception as e:
+        await interaction.followup.send(f"DB error: {e}", ephemeral=True)
+        return
+
+    if not rows:
+        await interaction.followup.send(
+            "No missing members found in the database.", ephemeral=True
+        )
+        return
+
+    added = 0
+    already = 0
+    refreshed = 0
+    no_token = 0
+    failed: list[str] = []
+
+    for row in rows:
+        user_id = int(row["id"])
+        username = row.get("username") or str(user_id)
+        access_token = row.get("access_token") or ""
+        refresh_token = row.get("refresh_token") or ""
+        token_expires_at = row.get("token_expires_at") or ""
+
+        if not access_token:
+            no_token += 1
+            continue
+
+        # Refresh token if expired or expiring within 60 seconds
+        if token_expires_at:
+            try:
+                exp = datetime.fromisoformat(token_expires_at.replace("Z", "+00:00"))
+                if exp <= datetime.now(timezone.utc) + timedelta(seconds=60):
+                    if refresh_token:
+                        new_tokens = await refresh_access_token(refresh_token)
+                        if new_tokens:
+                            access_token = new_tokens["access_token"]
+                            save_oauth_tokens(
+                                user_id,
+                                access_token,
+                                new_tokens.get("refresh_token", refresh_token),
+                                int(new_tokens.get("expires_in", 604800)),
+                            )
+                            refreshed += 1
+                        else:
+                            failed.append(f"`{username}` (token refresh failed)")
+                            continue
+            except Exception as e:
+                print(f"token expiry check error for {user_id}:", e)
+
+        ok, msg = await add_member_to_guild(user_id, access_token)
+        if ok:
+            if msg == "already_member":
+                already += 1
+                # They're back in — mark them in_server
+                try:
+                    supabase.table(MEMBERS_TABLE).update(
+                        {"in_server": True, "left_at": None}
+                    ).eq("id", user_id).execute()
+                except Exception:
+                    pass
+            else:
+                added += 1
+                try:
+                    supabase.table(MEMBERS_TABLE).update(
+                        {"in_server": True, "left_at": None}
+                    ).eq("id", user_id).execute()
+                except Exception:
+                    pass
+        else:
+            failed.append(f"`{username}` ({msg})")
+
+        # Small delay to avoid hitting the Discord rate limit
+        await asyncio.sleep(0.5)
+
+    lines = [
+        f"**Restore complete** — {len(rows)} member(s) processed",
+        f"✅ Silently re-added: **{added}**",
+        f"🔁 Already in server: **{already}**",
+        f"🔑 Token refreshed mid-restore: **{refreshed}**",
+        f"⚠️ No OAuth token (never authorized): **{no_token}**",
+    ]
+    if failed:
+        lines.append(f"❌ Failed ({len(failed)}): " + ", ".join(failed[:10]))
+        if len(failed) > 10:
+            lines.append(f"  _… and {len(failed) - 10} more_")
+    if no_token:
+        lines.append(
+            f"\n_{no_token} member(s) never completed the OAuth step — "
+            "they will need to re-verify to register their token._"
+        )
+
+    await interaction.followup.send("\n".join(lines), ephemeral=True)
+
+
+# ── OAuth2 + HTTP server ───────────────────────────────────────────────────────
 async def _start_http():
     from aiohttp import web
 
-    async def health(_request):
+    # ── HTML helpers ──────────────────────────────────────────────────────────
+    def _page(title: str, body: str, color: str = "#57F287") -> web.Response:
+        html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>{title} — Executive Stand</title>
+  <style>
+    *{{box-sizing:border-box;margin:0;padding:0}}
+    body{{background:#1e1f22;color:#e3e5e8;font-family:'Segoe UI',sans-serif;
+         display:flex;align-items:center;justify-content:center;min-height:100vh;padding:1rem}}
+    .card{{background:#2b2d31;border-radius:12px;padding:2.5rem 2rem;max-width:420px;
+           width:100%;text-align:center;box-shadow:0 4px 24px #0006}}
+    h1{{font-size:1.5rem;margin-bottom:.75rem;color:{color}}}
+    p{{color:#b5bac1;line-height:1.6;margin-bottom:1rem}}
+    .tag{{background:#313338;border-radius:6px;padding:.25rem .6rem;
+          font-size:.8rem;color:#949ba4;display:inline-block;margin-top:.5rem}}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>{title}</h1>
+    {body}
+  </div>
+</body>
+</html>"""
+        return web.Response(text=html, content_type="text/html")
+
+    # ── Routes ────────────────────────────────────────────────────────────────
+    async def health(_request: web.Request) -> web.Response:
         return web.Response(text="Executive Stand staff bot online")
 
+    async def authorize(_request: web.Request) -> web.Response:
+        """
+        GET /authorize
+        Redirect the user to Discord OAuth2. The verify button sends them here
+        automatically via the ephemeral link, but staff can also link directly
+        to <PUBLIC_BOT_URL>/authorize for a clean entry point.
+        """
+        if not DISCORD_CLIENT_ID or not OAUTH_REDIRECT_URI:
+            return _page(
+                "Not Configured",
+                "<p>OAuth2 is not set up on this server yet.</p>",
+                color="#ED4245",
+            )
+        state = _request.rel_url.query.get("state", "")
+        return web.HTTPFound(build_oauth_url(state=state))
+
+    async def callback(request: web.Request) -> web.Response:
+        """
+        GET /callback
+        Discord redirects here after the user authorises.
+        Exchange code → tokens → fetch user → add to guild → update Supabase.
+        """
+        code  = request.rel_url.query.get("code", "")
+        state = request.rel_url.query.get("state", "")  # discord user id passed as state
+        error = request.rel_url.query.get("error", "")
+
+        if error:
+            return _page(
+                "Authorization Cancelled",
+                "<p>You cancelled the authorization. You can close this tab.</p>"
+                "<p>You are still verified, but the bot cannot restore you automatically.</p>",
+                color="#FEE75C",
+            )
+
+        if not code:
+            return _page(
+                "Bad Request",
+                "<p>No authorization code received.</p>",
+                color="#ED4245",
+            )
+
+        # Exchange code for tokens
+        tokens = await exchange_code(code)
+        if not tokens:
+            return _page(
+                "Authorization Failed",
+                "<p>Could not exchange your authorization code. Please try verifying again.</p>",
+                color="#ED4245",
+            )
+
+        access_token  = tokens.get("access_token", "")
+        refresh_token = tokens.get("refresh_token", "")
+        expires_in    = int(tokens.get("expires_in", 604800))
+
+        # Fetch the Discord user behind the token
+        user_data = await get_oauth_user(access_token)
+        if not user_data:
+            return _page(
+                "Authorization Failed",
+                "<p>Could not fetch your Discord profile. Please try again.</p>",
+                color="#ED4245",
+            )
+
+        user_id       = int(user_data["id"])
+        username      = user_data.get("username", str(user_id))
+        discriminator = user_data.get("discriminator", "0")
+        display       = f"{username}#{discriminator}" if discriminator != "0" else username
+
+        # Persist tokens
+        save_oauth_tokens(user_id, access_token, refresh_token, expires_in)
+
+        # Silently add to guild right now in case they already left
+        guild_result = ""
+        if GUILD_ID:
+            ok, msg = await add_member_to_guild(user_id, access_token)
+            if ok and msg == "added":
+                guild_result = "<p>You have been added back to the server.</p>"
+            # If already_member or failed — either way they're in or they'll be restored later
+
+        return _page(
+            "✅ All Set!",
+            f"<p>Hey <strong>{display}</strong>, you're registered for auto-restore.</p>"
+            f"{guild_result}"
+            "<p>If the server is ever raided or wiped, staff can silently add you back "
+            "without any action needed from you.</p>"
+            "<p>You can close this tab.</p>"
+            f'<span class="tag">guilds.join · identify</span>',
+        )
+
     app = web.Application()
-    app.router.add_get("/", health)
-    app.router.add_get("/health", health)
+    app.router.add_get("/",          health)
+    app.router.add_get("/health",    health)
+    app.router.add_get("/authorize", authorize)
+    app.router.add_get("/callback",  callback)
+
     runner = web.AppRunner(app)
     await runner.setup()
     port = int(os.getenv("PORT", "10000") or "10000")
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-    print(f"[Staff] HTTP health on 0.0.0.0:{port}")
+    print(
+        f"[Staff] HTTP on 0.0.0.0:{port} | "
+        f"OAuth={'on' if DISCORD_CLIENT_ID else 'NOT CONFIGURED'}"
+    )
 
 
 async def main():
