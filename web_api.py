@@ -35,14 +35,37 @@ SESSION_SECRET = (
     or os.getenv("DISCORD_CLIENT_SECRET")
     or "dev-insecure-change-me"
 ).strip()
-# Comma-separated Discord user IDs that get is_admin on the site
+# Comma-separated Discord user IDs that get is_admin on the site (fallback)
 ADMIN_DISCORD_IDS = {
     x.strip()
     for x in (os.getenv("ADMIN_DISCORD_IDS") or "").split(",")
     if x.strip()
 }
+# Discord role IDs required for admin panel access (user needs ANY of these)
+ADMIN_ROLE_IDS = {
+    x.strip()
+    for x in (
+        os.getenv("ADMIN_ROLE_IDS")
+        or "1550996904790200361,1553595331516694569"
+    ).split(",")
+    if x.strip()
+}
+GUILD_ID = (os.getenv("GUILD_ID") or "").strip()
+# Bot token used to look up member roles (prefer staff bot, fall back to user bot)
+DISCORD_BOT_TOKEN = (
+    os.getenv("STAFF_DISCORD_TOKEN") or os.getenv("DISCORD_TOKEN") or ""
+).strip()
 TOKEN_TTL_SEC = int(os.getenv("SESSION_TTL_SEC", "604800"))  # 7 days
 OAUTH_SCOPES = "identify"
+
+# Stripe
+STRIPE_SECRET_KEY = (os.getenv("STRIPE_SECRET_KEY") or "").strip()
+STRIPE_WEBHOOK_SECRET = (os.getenv("STRIPE_WEBHOOK_SECRET") or "").strip()
+STRIPE_PRICE_PREMIUM = (os.getenv("STRIPE_PRICE_PREMIUM") or "").strip()
+STRIPE_PRICE_BYPASS = (os.getenv("STRIPE_PRICE_BYPASS") or "").strip()
+PUBLIC_URL = (
+    os.getenv("PUBLIC_BOT_URL") or os.getenv("RENDER_EXTERNAL_URL") or ""
+).rstrip("/")
 
 
 def oauth_configured() -> bool:
@@ -142,11 +165,50 @@ async def require_user(request: web.Request) -> dict:
     return payload
 
 
+# Cache of admin role checks: discord_id -> (is_admin, expires_at)
+_admin_cache: dict[str, tuple[bool, float]] = {}
+_ADMIN_CACHE_TTL = 120.0  # seconds
+
+
+async def check_member_has_admin_role(discord_id: str) -> bool:
+    """True if the member has any ADMIN_ROLE_IDS in GUILD_ID (via bot token)."""
+    if not GUILD_ID or not DISCORD_BOT_TOKEN or not ADMIN_ROLE_IDS:
+        return False
+    now = time.time()
+    cached = _admin_cache.get(str(discord_id))
+    if cached and cached[1] > now:
+        return cached[0]
+    url = f"https://discord.com/api/v10/guilds/{GUILD_ID}/members/{discord_id}"
+    headers = {"Authorization": f"Bot {DISCORD_BOT_TOKEN}"}
+    try:
+        async with ClientSession() as session:
+            async with session.get(url, headers=headers, timeout=8) as resp:
+                if resp.status != 200:
+                    _admin_cache[str(discord_id)] = (False, now + 30)
+                    return False
+                data = await resp.json()
+                roles = {str(r) for r in (data.get("roles") or [])}
+                ok = bool(roles & ADMIN_ROLE_IDS)
+                _admin_cache[str(discord_id)] = (ok, now + _ADMIN_CACHE_TTL)
+                return ok
+    except Exception as e:
+        print(f"[admin-role-check] {e}")
+        return False
+
+
 def is_admin_id(discord_id: str) -> bool:
+    """Synchronous fallback: explicit user ID allowlist only."""
     return str(discord_id) in ADMIN_DISCORD_IDS
 
 
-def user_public(payload: dict, cfg: dict) -> dict:
+async def is_admin_user(discord_id: str) -> bool:
+    """Admin if listed in ADMIN_DISCORD_IDS or has one of the required roles."""
+    if is_admin_id(discord_id):
+        return True
+    return await check_member_has_admin_role(discord_id)
+
+
+def user_public(payload: dict, cfg: dict, *, is_admin: bool | None = None) -> dict:
     did = str(payload["sub"])
     rank = str(cfg.get("rank") or "free").lower()
     if rank not in ("free", "premium", "bypass"):
@@ -156,6 +218,7 @@ def user_public(payload: dict, cfg: dict) -> dict:
     if avatar:
         ext = "gif" if str(avatar).startswith("a_") else "png"
         avatar_url = f"https://cdn.discordapp.com/avatars/{did}/{avatar}.{ext}?size=128"
+    admin_flag = is_admin if is_admin is not None else is_admin_id(did)
     return {
         "id": did,
         "discord_id": did,
@@ -168,7 +231,7 @@ def user_public(payload: dict, cfg: dict) -> dict:
         "rank": rank,
         "owner": cfg.get("owner") or "",
         "alts": cfg.get("alts") or {},
-        "is_admin": is_admin_id(did),
+        "is_admin": admin_flag,
     }
 
 
@@ -271,7 +334,8 @@ async def auth_callback(request: web.Request) -> web.Response:
 async def api_me(request: web.Request) -> web.Response:
     payload = await require_user(request)
     cfg = deps.get_user_cfg(payload["sub"])
-    return web.json_response({"ok": True, "user": user_public(payload, cfg)})
+    admin = await is_admin_user(str(payload["sub"]))
+    return web.json_response({"ok": True, "user": user_public(payload, cfg, is_admin=admin)})
 
 
 async def api_logout(_request: web.Request) -> web.Response:
@@ -283,9 +347,9 @@ async def api_logout(_request: web.Request) -> web.Response:
 async def api_get_config(request: web.Request) -> web.Response:
     payload = await require_user(request)
     cfg = deps.get_user_cfg(payload["sub"])
-    # Never expose nothing sensitive beyond what the user owns
+    admin = await is_admin_user(str(payload["sub"]))
     safe = dict(cfg)
-    return web.json_response({"ok": True, "config": safe, "user": user_public(payload, cfg)})
+    return web.json_response({"ok": True, "config": safe, "user": user_public(payload, cfg, is_admin=admin)})
 
 
 ALLOWED_CONFIG_KEYS = {
@@ -375,7 +439,8 @@ async def api_save_config(request: web.Request) -> web.Response:
 
     cfg = deps.merge_defaults(cfg)
     deps.set_user_cfg(did, cfg)
-    return web.json_response({"ok": True, "config": cfg, "user": user_public(payload, cfg)})
+    admin = await is_admin_user(str(payload["sub"]))
+    return web.json_response({"ok": True, "config": cfg, "user": user_public(payload, cfg, is_admin=admin)})
 
 
 async def api_loader(request: web.Request) -> web.Response:
@@ -434,8 +499,8 @@ async def api_status_public(_request: web.Request) -> web.Response:
 # ── Admin ────────────────────────────────────────────────────────────
 async def require_admin(request: web.Request) -> dict:
     payload = await require_user(request)
-    if not is_admin_id(str(payload["sub"])):
-        raise web.HTTPForbidden(text=json.dumps({"ok": False, "error": "admin only"}), content_type="application/json")
+    if not await is_admin_user(str(payload["sub"])):
+        raise web.HTTPForbidden(text=json.dumps({"ok": False, "error": "admin only — requires staff role"}), content_type="application/json")
     return payload
 
 
@@ -573,6 +638,213 @@ async def api_admin_analytics(request: web.Request) -> web.Response:
     )
 
 
+# ── Admin: Key stock CRUD ────────────────────────────────────────────
+async def api_admin_keys_list(request: web.Request) -> web.Response:
+    await require_admin(request)
+    rows = []
+    if deps.supabase:
+        try:
+            res = (
+                deps.supabase.table(deps.KEY_STOCK_TABLE)
+                .select("*")
+                .order("created_at", desc=True)
+                .limit(500)
+                .execute()
+            )
+            for r in res.data or []:
+                rows.append(
+                    {
+                        "id": r.get("id"),
+                        "key": r.get("key"),
+                        "product": r.get("product") or "stand",
+                        "reserved": bool(r.get("reserved")),
+                        "assigned_to_roblox_username": r.get("assigned_to_roblox_username") or "",
+                        "assigned_to_roblox_user_id": r.get("assigned_to_roblox_user_id"),
+                        "claimed_by_discord_id": r.get("claimed_by_discord_id") or "",
+                        "created_at": r.get("created_at") or "",
+                    }
+                )
+        except Exception as e:
+            print("[api/admin/keys]", e)
+            return web.json_response({"ok": False, "error": str(e)}, status=500)
+    return web.json_response({"ok": True, "keys": rows})
+
+
+async def api_admin_keys_add(request: web.Request) -> web.Response:
+    await require_admin(request)
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"ok": False, "error": "invalid json"}, status=400)
+    key = str(body.get("key") or "").strip()
+    product = str(body.get("product") or "stand").strip().lower()
+    if not key:
+        return web.json_response({"ok": False, "error": "key required"}, status=400)
+    if product not in ("stand", "premium", "bypass", "shield"):
+        return web.json_response({"ok": False, "error": "invalid product"}, status=400)
+    if not deps.supabase:
+        return web.json_response({"ok": False, "error": "database unavailable"}, status=503)
+    try:
+        res = (
+            deps.supabase.table(deps.KEY_STOCK_TABLE)
+            .insert({"key": key, "product": product, "reserved": False})
+            .execute()
+        )
+        row = (res.data or [None])[0]
+        if not row:
+            return web.json_response({"ok": False, "error": "insert failed"}, status=500)
+        return web.json_response(
+            {
+                "ok": True,
+                "key": {
+                    "id": row.get("id"),
+                    "key": row.get("key"),
+                    "product": row.get("product"),
+                    "reserved": False,
+                    "assigned_to_roblox_username": "",
+                },
+            }
+        )
+    except Exception as e:
+        msg = str(e)
+        if "duplicate" in msg.lower() or "unique" in msg.lower():
+            return web.json_response({"ok": False, "error": "key already exists"}, status=409)
+        print("[api/admin/keys add]", e)
+        return web.json_response({"ok": False, "error": msg}, status=500)
+
+
+async def api_admin_keys_delete(request: web.Request) -> web.Response:
+    await require_admin(request)
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"ok": False, "error": "invalid json"}, status=400)
+    key_id = body.get("id")
+    key_val = str(body.get("key") or "").strip()
+    if key_id is None and not key_val:
+        return web.json_response({"ok": False, "error": "id or key required"}, status=400)
+    if not deps.supabase:
+        return web.json_response({"ok": False, "error": "database unavailable"}, status=503)
+    try:
+        q = deps.supabase.table(deps.KEY_STOCK_TABLE).delete()
+        if key_id is not None:
+            q = q.eq("id", int(key_id))
+        else:
+            q = q.eq("key", key_val)
+        q.execute()
+        return web.json_response({"ok": True})
+    except Exception as e:
+        print("[api/admin/keys delete]", e)
+        return web.json_response({"ok": False, "error": str(e)}, status=500)
+
+
+# ── Stripe ───────────────────────────────────────────────────────────
+async def api_create_checkout_session(request: web.Request) -> web.Response:
+    payload = await require_user(request)
+    if not STRIPE_SECRET_KEY:
+        return web.json_response(
+            {"ok": False, "error": "Stripe not configured (STRIPE_SECRET_KEY)"}, status=503
+        )
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"ok": False, "error": "invalid json"}, status=400)
+    plan = str(body.get("plan") or "").strip().lower()
+    price_id = STRIPE_PRICE_PREMIUM if plan == "premium" else STRIPE_PRICE_BYPASS if plan == "bypass" else ""
+    if not price_id:
+        return web.json_response(
+            {"ok": False, "error": f"No Stripe Price ID configured for plan '{plan}'"}, status=400
+        )
+    discord_id = str(payload["sub"])
+    success_url = f"{PUBLIC_URL}/dashboard?success=1" if PUBLIC_URL else "https://example.com/?success=1"
+    cancel_url = f"{PUBLIC_URL}/dashboard" if PUBLIC_URL else "https://example.com/"
+    form = {
+        "mode": "subscription",
+        "payment_method_types[0]": "card",
+        "line_items[0][price]": price_id,
+        "line_items[0][quantity]": "1",
+        "success_url": success_url,
+        "cancel_url": cancel_url,
+        "client_reference_id": discord_id,
+        "metadata[discord_id]": discord_id,
+        "metadata[plan]": plan,
+        "subscription_data[metadata][discord_id]": discord_id,
+        "subscription_data[metadata][plan]": plan,
+    }
+    headers = {
+        "Authorization": f"Bearer {STRIPE_SECRET_KEY}",
+        "Content-Type": "application/x-www-form-urlencoded",
+    }
+    try:
+        async with ClientSession() as session:
+            async with session.post(
+                "https://api.stripe.com/v1/checkout/sessions",
+                data=form,
+                headers=headers,
+                timeout=20,
+            ) as resp:
+                data = await resp.json()
+                if resp.status >= 400:
+                    err = (data.get("error") or {}).get("message") or str(data)
+                    return web.json_response({"ok": False, "error": err}, status=400)
+                return web.json_response({"ok": True, "url": data.get("url"), "id": data.get("id")})
+    except Exception as e:
+        print("[stripe checkout]", e)
+        return web.json_response({"ok": False, "error": str(e)}, status=500)
+
+
+async def api_stripe_webhook(request: web.Request) -> web.Response:
+    """Handle checkout.session.completed → set user plan in Supabase."""
+    raw = await request.read()
+    sig = request.headers.get("Stripe-Signature", "")
+    # Optional signature check when webhook secret is set
+    if STRIPE_WEBHOOK_SECRET:
+        try:
+            import hmac as _hmac
+            import hashlib as _hashlib
+
+            # Minimal verify: Stripe sends t=...,v1=...
+            parts = dict(p.split("=", 1) for p in sig.split(",") if "=" in p)
+            ts = parts.get("t", "")
+            v1 = parts.get("v1", "")
+            signed = f"{ts}.{raw.decode('utf-8')}"
+            expected = _hmac.new(
+                STRIPE_WEBHOOK_SECRET.encode(), signed.encode(), _hashlib.sha256
+            ).hexdigest()
+            if not _hmac.compare_digest(expected, v1):
+                return web.json_response({"ok": False, "error": "invalid signature"}, status=400)
+        except Exception as e:
+            print("[stripe webhook sig]", e)
+            # continue without hard-fail if parse issues; production should enforce
+
+    try:
+        event = json.loads(raw.decode("utf-8"))
+    except Exception:
+        return web.json_response({"ok": False, "error": "invalid json"}, status=400)
+
+    etype = event.get("type") or ""
+    obj = (event.get("data") or {}).get("object") or {}
+    if etype == "checkout.session.completed":
+        meta = obj.get("metadata") or {}
+        discord_id = str(meta.get("discord_id") or obj.get("client_reference_id") or "").strip()
+        plan = str(meta.get("plan") or "").strip().lower()
+        if not plan:
+            # Fallback: infer from amount or leave
+            plan = "premium"
+        if plan not in ("premium", "bypass"):
+            plan = "premium"
+        if discord_id:
+            try:
+                cfg = deps.get_user_cfg(discord_id)
+                cfg["rank"] = plan
+                deps.set_user_cfg(discord_id, cfg)
+                print(f"[stripe webhook] set plan={plan} for discord_id={discord_id}")
+            except Exception as e:
+                print(f"[stripe webhook] update failed: {e}")
+                return web.json_response({"ok": False, "error": str(e)}, status=500)
+    return web.json_response({"ok": True})
+
+
 def register_routes(app: web.Application) -> None:
     """Attach all web dashboard routes to the aiohttp app."""
     app.router.add_get("/auth/discord", auth_discord)
@@ -592,8 +864,17 @@ def register_routes(app: web.Application) -> None:
     app.router.add_get("/api/admin/blacklist", api_admin_blacklist_list)
     app.router.add_post("/api/admin/blacklist", api_admin_blacklist)
     app.router.add_get("/api/admin/analytics", api_admin_analytics)
+    app.router.add_get("/api/admin/keys", api_admin_keys_list)
+    app.router.add_post("/api/admin/keys", api_admin_keys_add)
+    app.router.add_delete("/api/admin/keys", api_admin_keys_delete)
+    app.router.add_post("/api/admin/keys/delete", api_admin_keys_delete)
+    # Stripe
+    app.router.add_post("/api/create-checkout-session", api_create_checkout_session)
+    app.router.add_post("/api/stripe-webhook", api_stripe_webhook)
 
     print(
         f"[web] OAuth={'ON' if oauth_configured() else 'OFF'} "
-        f"admins={len(ADMIN_DISCORD_IDS)} redirect={DISCORD_REDIRECT_URI or '(unset)'}"
+        f"admin_ids={len(ADMIN_DISCORD_IDS)} admin_roles={len(ADMIN_ROLE_IDS)} "
+        f"guild={GUILD_ID or '(unset)'} stripe={'ON' if STRIPE_SECRET_KEY else 'OFF'} "
+        f"redirect={DISCORD_REDIRECT_URI or '(unset)'}"
     )

@@ -620,7 +620,6 @@ input[type=range]::-webkit-slider-thumb {
       <a href="#pricing" class="btn btn-outline btn-lg" onclick="scrollToSection('pricing')">View Plans</a>
     </div>
     <div class="hero-stats">
-      <div class="stat"><div class="stat-num">2,400+</div><div class="stat-label">Active Users</div></div>
       <div class="stat"><div class="stat-num">99.9%</div><div class="stat-label">Uptime</div></div>
       <div class="stat"><div class="stat-num">4</div><div class="stat-label">Supported Games</div></div>
       <div class="stat"><div class="stat-num">&lt;100ms</div><div class="stat-label">Response Time</div></div>
@@ -2216,9 +2215,6 @@ if IsFriend(target.Name) then return end</code></pre>
     <div style="background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:20px;font-size:14px;color:var(--text2);">
       <strong style="color:var(--text);display:block;margin-bottom:8px;">💳 Payment via Stripe</strong>
       You'll be redirected to Stripe's secure checkout. Add your card, and your plan activates instantly after payment confirmation.
-      <br><br>
-      <strong style="color:var(--text);">Integration note for deployment:</strong><br>
-      In production, replace <code style="font-size:12px;background:var(--bg2);padding:2px 6px;border-radius:4px;">STRIPE_PUBLIC_KEY</code> and create Stripe Price IDs for each plan. The backend webhook at <code style="font-size:12px;background:var(--bg2);padding:2px 6px;border-radius:4px;">/api/stripe-webhook</code> updates the user's plan in Supabase on <code style="font-size:12px;background:var(--bg2);padding:2px 6px;border-radius:4px;">checkout.session.completed</code>.
     </div>
     <div class="modal-actions">
       <button class="btn btn-outline" onclick="closeModal('checkoutModal')">Cancel</button>
@@ -2823,37 +2819,26 @@ function initiateCheckout(plan) {
   openModal('checkoutModal');
 }
 
-function goToStripe() {
-  /* PRODUCTION:
-   * 1. POST /api/create-checkout-session with { plan: _pendingPlan, discord_id }
-   * 2. Backend creates Stripe Checkout Session with the right Price ID
-   * 3. Redirect to session.url
-   *
-   * Example backend (Node/Express):
-   * const session = await stripe.checkout.sessions.create({
-   *   payment_method_types: ['card'],
-   *   mode: 'subscription',
-   *   line_items: [{ price: PRICE_IDS[plan], quantity: 1 }],
-   *   metadata: { discord_id },
-   *   success_url: 'https://yourdomain.com/dashboard?success=1',
-   *   cancel_url: 'https://yourdomain.com/dashboard',
-   * });
-   * res.json({ url: session.url });
-   *
-   * Webhook handler at /api/stripe-webhook listens for
-   * checkout.session.completed and updates Supabase:
-   * supabase.from('stand_configs').upsert({ discord_id, config: { rank: plan } })
-   */
-  closeModal('checkoutModal');
-  // Demo: apply plan immediately
-  if (_pendingPlan && state.user) {
-    state.user.plan = _pendingPlan;
-    if (state.config) state.config.rank = _pendingPlan;
-    updateSidebar();
-    renderOverview();
-    renderSubscriptionPage();
-    setCurrentUser(state.user); // re-evaluate permissions
-    showToast(`Plan upgraded to ${_pendingPlan}! ✓ (Demo)`, 'success');
+async function goToStripe() {
+  if (!_pendingPlan) {
+    showToast('No plan selected', 'error');
+    return;
+  }
+  const btn = document.getElementById('checkoutBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Redirecting…'; }
+  try {
+    const data = await api('/api/create-checkout-session', {
+      method: 'POST',
+      body: { plan: _pendingPlan },
+    });
+    if (data && data.url) {
+      window.location.href = data.url;
+      return;
+    }
+    throw new Error((data && data.error) || 'No checkout URL returned');
+  } catch (e) {
+    showToast('Checkout failed: ' + (e.message || e), 'error');
+    if (btn) { btn.disabled = false; btn.textContent = 'Go to Checkout →'; }
   }
 }
 
@@ -2994,23 +2979,47 @@ function renderAdminKeys() {
   `).join('');
 }
 
-function addKey() {
+async function addKey() {
   const key = document.getElementById('newKeyVal').value.trim();
   const product = document.getElementById('newKeyProduct').value;
   if (!key) { showToast('Enter a key value', 'error'); return; }
-  if (state.keys.find(k => k.key === key)) { showToast('Key already exists', 'error'); return; }
-  state.keys.push({ id: Date.now(), key, product, reserved: false, assigned_to_roblox_username: null });
-  document.getElementById('newKeyVal').value = '';
-  renderAdminKeys();
-  renderAnalytics();
-  showToast('Key added to stock', 'success');
+  try {
+    const data = await api('/api/admin/keys', { method: 'POST', body: { key, product } });
+    if (data && data.key) {
+      state.keys.unshift(data.key);
+    } else {
+      await loadAdminKeys();
+    }
+    document.getElementById('newKeyVal').value = '';
+    renderAdminKeys();
+    renderAnalytics();
+    showToast('Key added to stock', 'success');
+  } catch (e) {
+    showToast('Failed to add key: ' + (e.message || e), 'error');
+  }
 }
 
-function removeKey(id) {
-  state.keys = state.keys.filter(k => k.id !== id);
-  renderAdminKeys();
-  renderAnalytics();
-  showToast('Key deleted', 'info');
+async function removeKey(id) {
+  if (!confirm('Delete this key from stock?')) return;
+  try {
+    await api('/api/admin/keys/delete', { method: 'POST', body: { id } });
+    state.keys = state.keys.filter(k => k.id !== id);
+    renderAdminKeys();
+    renderAnalytics();
+    showToast('Key deleted', 'info');
+  } catch (e) {
+    showToast('Failed to delete key: ' + (e.message || e), 'error');
+  }
+}
+
+async function loadAdminKeys() {
+  try {
+    const data = await api('/api/admin/keys');
+    state.keys = data.keys || [];
+    renderAdminKeys();
+  } catch (e) {
+    console.warn('loadAdminKeys', e);
+  }
 }
 
 // ═══════════════════════════════════════════════════════
@@ -3401,6 +3410,9 @@ async function loadAdminData() {
     const bl = await api('/api/admin/blacklist');
     state.blacklist = bl.blacklist || [];
     renderAdminBlacklist();
+  } catch (e) { console.warn(e); }
+  try {
+    await loadAdminKeys();
   } catch (e) { console.warn(e); }
   try {
     const a = await api('/api/admin/analytics');

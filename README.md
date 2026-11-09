@@ -199,9 +199,20 @@ The user bot serves the SPA and REST API on the same Render service.
 | `DISCORD_REDIRECT_URI` | Yes | Exact callback URL above |
 | `PUBLIC_BOT_URL` | Yes | `https://YOUR-SERVICE.onrender.com` (no trailing slash) |
 | `SESSION_SECRET` | Recommended | Random string for signing session tokens |
-| `ADMIN_DISCORD_IDS` | Optional | Comma-separated Discord user IDs with admin panel access |
+| `ADMIN_DISCORD_IDS` | Optional | Comma-separated Discord user IDs (fallback allowlist) |
+| `ADMIN_ROLE_IDS` | Recommended | Comma-separated Discord **role** IDs required for admin panel. Default: `1550996904790200361,1553595331516694569` |
+| `GUILD_ID` | Required for role admin | Server ID used to look up member roles |
+| `STAFF_DISCORD_TOKEN` or `DISCORD_TOKEN` | Required for role admin | Bot token used to fetch guild member roles |
+| `STRIPE_SECRET_KEY` | For payments | Stripe secret key (`sk_…`) |
+| `STRIPE_WEBHOOK_SECRET` | Recommended | Stripe webhook signing secret (`whsec_…`) |
+| `STRIPE_PRICE_PREMIUM` | For Premium | Stripe Price ID for Premium plan |
+| `STRIPE_PRICE_BYPASS` | For Bypass | Stripe Price ID for Bypass plan |
 
 Also keep existing `SUPABASE_URL`, `SUPABASE_KEY`, `DISCORD_TOKEN`, etc.
+
+**Admin access:** a user sees the Admin panel if they are in `ADMIN_DISCORD_IDS` **or** they have any role listed in `ADMIN_ROLE_IDS` in the configured `GUILD_ID`.
+
+**Stripe:** create Products/Prices in Stripe Dashboard, put the Price IDs in env, point a webhook to `https://YOUR-SERVICE.onrender.com/api/stripe-webhook` for event `checkout.session.completed`.
 
 ### Routes
 
@@ -215,7 +226,9 @@ Also keep existing `SUPABASE_URL`, `SUPABASE_KEY`, `DISCORD_TOKEN`, etc.
 | `/api/loader` | Download real `StandLoader.lua` (same as Discord `/loader`) |
 | `/api/loader/preview` | JSON `{ source }` |
 | `/api/changelog` | Recent changelog entries |
-| `/api/admin/*` | Admin users / set-plan / blacklist / analytics |
+| `/api/admin/*` | Admin users / set-plan / blacklist / analytics / **keys** |
+| `/api/create-checkout-session` | Stripe Checkout session (auth required) |
+| `/api/stripe-webhook` | Stripe webhook → updates plan on payment |
 | `/health` | Health check |
 | `/api/status` | Loader maintenance gate |
 
