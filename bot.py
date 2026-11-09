@@ -215,6 +215,8 @@ def default_config() -> dict:
         "muscle_size": 15000,
         "inf": True,
         "armor_max": True,
+        "anti_staff": False,
+        "anti_staff_mode": "notify",  # notify | kick | both
     }
 
 
@@ -367,6 +369,11 @@ def generate_loader(cfg: dict) -> str:
     a(f"    MuscleSize = {int(cfg.get('muscle_size') or 15000)},")
     a(f"    Inf = {lua_bool(bool(cfg.get('inf', True)))},")
     a(f"    ArmorMax = {lua_bool(bool(cfg.get('armor_max', True)))},")
+    a(f"    AntiStaff = {lua_bool(bool(cfg.get('anti_staff', False)))},")
+    mode = str(cfg.get("anti_staff_mode") or "notify").lower()
+    if mode not in ("notify", "kick", "both"):
+        mode = "notify"
+    a(f"    AntiStaffMode = {lua_str(mode)},")
     rank = str(cfg.get("rank") or "free").lower()
     if rank not in ("free", "premium", "bypass"):
         rank = "free"
@@ -1180,6 +1187,8 @@ async def removealt(interaction: discord.Interaction, username: str):
     anim="Idle anim asset id (e.g. 125405104081365 or rbxassetid://...)",
     char_user="Avatar userId",
     char_random="Random avatar",
+    anti_staff="Leave/notify when game staff joins",
+    anti_staff_mode="notify | kick | both",
 )
 async def config_cmd(
     interaction: discord.Interaction,
@@ -1196,6 +1205,8 @@ async def config_cmd(
     anim: Optional[str] = None,
     char_user: Optional[int] = None,
     char_random: Optional[bool] = None,
+    anti_staff: Optional[bool] = None,
+    anti_staff_mode: Optional[str] = None,
 ):
     if not await buyer_check(interaction):
         return
@@ -1226,6 +1237,16 @@ async def config_cmd(
         changes.append(f"Anim: `{a}`")
     set_field("char_user", char_user, "Char.User")
     set_field("char_random", char_random, "Char.Random")
+    set_field("anti_staff", anti_staff, "AntiStaff")
+    if anti_staff_mode is not None:
+        m = str(anti_staff_mode).strip().lower()
+        if m in ("notify", "kick", "both", "leave", "rejoin"):
+            if m in ("leave", "rejoin"):
+                m = "kick"
+            cfg["anti_staff_mode"] = m
+            changes.append(f"AntiStaffMode: `{m}`")
+        else:
+            changes.append("AntiStaffMode: invalid (use notify|kick|both)")
     set_user_cfg(interaction.user.id, cfg)
 
     if not changes:
@@ -1239,6 +1260,11 @@ async def config_cmd(
         embed.add_field(name="Muscle", value=f"{cfg.get('muscle')} ({cfg.get('muscle_size')})", inline=True)
         embed.add_field(name="Inf / ArmorMax", value=f"{cfg.get('inf')} / {cfg.get('armor_max')}", inline=True)
         embed.add_field(name="Fallback slot", value=str(cfg.get("slot")), inline=True)
+        embed.add_field(
+            name="AntiStaff",
+            value=f"`{cfg.get('anti_staff')}` / mode `{cfg.get('anti_staff_mode') or 'notify'}`",
+            inline=True,
+        )
         embed.add_field(name="Anim", value=f"`{cfg.get('anim') or 'none'}`", inline=False)
         embed.add_field(name="Char", value=f"User `{cfg.get('char_user')}` / Random `{cfg.get('char_random')}`", inline=False)
         await interaction.response.send_message(embed=embed, ephemeral=True)
@@ -1246,6 +1272,61 @@ async def config_cmd(
 
     await interaction.response.send_message(
         "**Updated:**\n" + "\n".join(f"- {c}" for c in changes),
+        ephemeral=True,
+    )
+
+
+@bot.tree.command(name="antistaff", description="Anti-staff when a game mod joins (notify / kick / both)")
+@app_commands.describe(
+    enabled="Turn anti-staff on or off",
+    mode="notify = alert only | kick = leave server | both = alert then leave",
+)
+@app_commands.choices(mode=[
+    app_commands.Choice(name="notify", value="notify"),
+    app_commands.Choice(name="kick", value="kick"),
+    app_commands.Choice(name="both", value="both"),
+])
+async def antistaff_cmd(
+    interaction: discord.Interaction,
+    enabled: Optional[bool] = None,
+    mode: Optional[app_commands.Choice[str]] = None,
+):
+    if not await buyer_check(interaction):
+        return
+    cfg = get_user_cfg(interaction.user.id)
+    changes = []
+    if enabled is not None:
+        cfg["anti_staff"] = bool(enabled)
+        changes.append(f"AntiStaff: `{cfg['anti_staff']}`")
+    if mode is not None:
+        cfg["anti_staff_mode"] = mode.value
+        changes.append(f"AntiStaffMode: `{mode.value}`")
+        # enabling mode implies feature on unless explicitly disabled this call
+        if enabled is None and not cfg.get("anti_staff"):
+            cfg["anti_staff"] = True
+            changes.append("AntiStaff: `True` (auto-enabled with mode)")
+    set_user_cfg(interaction.user.id, cfg)
+    if not changes:
+        embed = discord.Embed(title="Anti-Staff", color=0xB45AFF)
+        embed.add_field(name="Enabled", value=f"`{cfg.get('anti_staff')}`", inline=True)
+        embed.add_field(name="Mode", value=f"`{cfg.get('anti_staff_mode') or 'notify'}`", inline=True)
+        embed.add_field(
+            name="How it works",
+            value=(
+                "Detects Hood Customs `IS_MOD`, staff group ranks, and optional staff lists.\n"
+                "**notify** — in-game notification only\n"
+                "**kick** — alt leaves / rejoins the place\n"
+                "**both** — notify then leave\n\n"
+                "Re-run `/loader` and re-inject alts after changing."
+            ),
+            inline=False,
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+        return
+    await interaction.response.send_message(
+        "**Anti-Staff updated:**\n"
+        + "\n".join(f"- {c}" for c in changes)
+        + "\n\nRe-run `/loader` and re-inject alts for changes to apply.",
         ephemeral=True,
     )
 

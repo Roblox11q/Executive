@@ -228,7 +228,31 @@ local State = {
     CombatActive  = false, -- true during knock/stomp/loop/etc
     HoverHeight   = 3.2,   -- studs above target while attacking (lower = more reliable hits)
     VoidEat       = false, -- void + eat while combat to avoid dying
+    AntiStaff     = false, -- detect game staff / mods
+    AntiStaffMode = "notify", -- notify | kick | both
 }
+
+-- Anti-staff runtime (filled from Config below)
+local AntiStaffBusy = false
+local AntiStaffSeen = {} -- [userId] = true already handled this session
+
+do
+    local as = Config.AntiStaff
+    if as == true or as == "on" or as == "true" or as == 1 then
+        State.AntiStaff = true
+    elseif as == false or as == "off" or as == "false" or as == 0 then
+        State.AntiStaff = false
+    end
+    local mode = string.lower(tostring(Config.AntiStaffMode or Config.AntiStaffAction or "notify"))
+    if mode == "kick" or mode == "leave" or mode == "rejoin" then
+        State.AntiStaffMode = "kick"
+    elseif mode == "both" or mode == "notify+kick" or mode == "notify_kick" then
+        State.AntiStaffMode = "both"
+    else
+        State.AntiStaffMode = "notify"
+    end
+end
+
 
 local Whitelist    = {}
 local Connections  = {}
@@ -2821,7 +2845,6 @@ function F.applyMuscle()
 end
 
 function F.startAutoPerks()
-pcall(F.ensureSilentAim)
     if IsOwner then return end
     task.spawn(function()
         local t0 = tick()
@@ -4345,6 +4368,251 @@ function F.cmdHelp()
     print("  " .. Prefix .. "armor / mask / buyfood / heal")
     print("  " .. Prefix .. "autoheal [on|off]  -- auto buy+eat when hurt (HC: BuyItem/EatFood)")
     print("  " .. Prefix .. "reload / autoreload / fix / kick / help")
+    print("  " .. Prefix .. "antistaff [on|off|notify|kick|both]")
+    print("  " .. Prefix .. "antistaffmode notify|kick|both")
+end
+
+
+----------------------------------------------------------------------
+-- ANTI-STAFF (game mods / IS_MOD / group ranks)
+----------------------------------------------------------------------
+-- Hood Customs: Player.IS_MOD (NumberValue) tier >= 1
+-- Da Hood family: common admin groups + optional Config.StaffUserIds / StaffNames / StaffGroups
+local STAFF_GROUP_MIN = {
+    -- [groupId] = minRank considered staff (tune per place)
+    [4889341] = 200,   -- classic Da Hood staff ranks (high)
+    [32080247] = 10,   -- common hood staff groups (best-effort)
+}
+
+function F.isGameStaff(plr)
+    if not plr or plr == LocalPlayer then return false, nil end
+    -- never treat stand team / owner / controllers as staff targets for leave
+    if F.isStandTeam(plr) then return false, nil end
+    if string.lower(plr.Name) == string.lower(OwnerName) then return false, nil end
+    if Controllers[string.lower(plr.Name)] then return false, nil end
+
+    -- 1) Hood Customs / modern hood: IS_MOD under player
+    local ok, isMod = pcall(function()
+        local v = plr:FindFirstChild("IS_MOD")
+        if v and (v:IsA("NumberValue") or v:IsA("IntValue") or v:IsA("BoolValue")) then
+            if typeof(v.Value) == "boolean" then return v.Value end
+            return (tonumber(v.Value) or 0) >= 1
+        end
+        -- sometimes nested under folders
+        for _, d in ipairs(plr:GetDescendants()) do
+            if d.Name == "IS_MOD" and (d:IsA("NumberValue") or d:IsA("IntValue") or d:IsA("BoolValue")) then
+                if typeof(d.Value) == "boolean" then return d.Value end
+                if (tonumber(d.Value) or 0) >= 1 then return true end
+            end
+        end
+        return false
+    end)
+    if ok and isMod then
+        local tier = 0
+        pcall(function()
+            local v = plr:FindFirstChild("IS_MOD")
+            if v then tier = tonumber(v.Value) or 1 end
+        end)
+        return true, "IS_MOD tier " .. tostring(tier)
+    end
+
+    -- 2) Explicit config lists
+    local ids = Config.StaffUserIds or Config.StaffIds or {}
+    if type(ids) == "table" then
+        for _, id in pairs(ids) do
+            if tonumber(id) and tonumber(id) == plr.UserId then
+                return true, "config StaffUserIds"
+            end
+        end
+    end
+    local names = Config.StaffNames or {}
+    if type(names) == "table" then
+        local ln = string.lower(plr.Name)
+        local ld = string.lower(plr.DisplayName or "")
+        for _, n in pairs(names) do
+            if type(n) == "string" then
+                local nn = string.lower(n)
+                if nn == ln or nn == ld then
+                    return true, "config StaffNames"
+                end
+            end
+        end
+    end
+
+    -- 3) Group ranks (built-in + Config.StaffGroups = { [id]=minRank } or list of ids)
+    local groups = {}
+    for gid, minr in pairs(STAFF_GROUP_MIN) do
+        groups[gid] = minr
+    end
+    local cg = Config.StaffGroups or {}
+    if type(cg) == "table" then
+        for k, v in pairs(cg) do
+            if type(k) == "number" and type(v) == "number" then
+                groups[k] = v
+            elseif type(k) == "string" and tonumber(k) and type(v) == "number" then
+                groups[tonumber(k)] = v
+            elseif type(k) == "number" and type(v) == "boolean" and v then
+                groups[k] = groups[k] or 1
+            elseif type(v) == "number" and type(k) == "number" == false and tonumber(v) then
+                -- array of group ids
+                groups[tonumber(v)] = groups[tonumber(v)] or 1
+            end
+        end
+    end
+    for gid, minRank in pairs(groups) do
+        local rok, rank = pcall(function()
+            return plr:GetRankInGroup(gid)
+        end)
+        if rok and type(rank) == "number" and rank >= (minRank or 1) then
+            return true, ("group %s rank %s"):format(tostring(gid), tostring(rank))
+        end
+    end
+
+    -- 4) Team name hints
+    pcall(function()
+        local team = plr.Team
+        if team then
+            local tn = string.lower(team.Name or "")
+            if tn:find("staff", 1, true) or tn:find("mod", 1, true) or tn:find("admin", 1, true) then
+                -- only if not a generic combat team name collision
+                if tn == "staff" or tn == "mods" or tn == "moderators" or tn == "admins" or tn:find("game staff", 1, true) then
+                    return true
+                end
+            end
+        end
+    end)
+
+    return false, nil
+end
+
+function F.antiStaffKick()
+    -- Leave / rejoin so the alt is not sitting in a staffed server
+    F.notify("AntiStaff: leaving server...")
+    task.spawn(function()
+        task.wait(0.35)
+        local placeId = game.PlaceId
+        local ok = false
+        pcall(function()
+            local opts = Instance.new("TeleportOptions")
+            TeleportService:TeleportAsync(placeId, {LocalPlayer}, opts)
+            ok = true
+        end)
+        if not ok then
+            pcall(function() TeleportService:Teleport(placeId) end)
+        end
+        task.wait(2)
+        pcall(function()
+            LocalPlayer:Kick("Stand AntiStaff: game staff detected")
+        end)
+    end)
+end
+
+function F.onStaffDetected(plr, reason)
+    if not plr then return end
+    if AntiStaffSeen[plr.UserId] then return end
+    AntiStaffSeen[plr.UserId] = true
+
+    local mode = State.AntiStaffMode or "notify"
+    local msg = ("STAFF DETECTED: %s (@%s) — %s"):format(
+        plr.DisplayName or plr.Name, plr.Name, tostring(reason or "unknown"))
+    print("[Stand]", msg)
+    F.notify(msg)
+
+    if mode == "kick" or mode == "both" then
+        if AntiStaffBusy then return end
+        AntiStaffBusy = true
+        F.antiStaffKick()
+    end
+end
+
+function F.scanStaffNow()
+    if not State.AntiStaff then return end
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer then
+            local yes, why = F.isGameStaff(plr)
+            if yes then
+                F.onStaffDetected(plr, why)
+            end
+        end
+    end
+end
+
+function F.hookAntiStaff()
+    -- PlayerAdded
+    Players.PlayerAdded:Connect(function(plr)
+        if not State.AntiStaff then return end
+        -- IS_MOD can appear a moment after join
+        task.spawn(function()
+            for i = 1, 12 do
+                if not State.AntiStaff then return end
+                local yes, why = F.isGameStaff(plr)
+                if yes then
+                    F.onStaffDetected(plr, why)
+                    return
+                end
+                task.wait(0.5)
+            end
+        end)
+        -- watch for IS_MOD value added later
+        pcall(function()
+            plr.ChildAdded:Connect(function(child)
+                if not State.AntiStaff then return end
+                if child.Name == "IS_MOD" then
+                    local yes, why = F.isGameStaff(plr)
+                    if yes then F.onStaffDetected(plr, why) end
+                end
+            end)
+        end)
+    end)
+
+    -- periodic re-scan (IS_MOD sometimes replicates late)
+    task.spawn(function()
+        while true do
+            task.wait(4)
+            pcall(F.scanStaffNow)
+        end
+    end)
+
+    -- initial scan
+    task.defer(function()
+        task.wait(1.2)
+        pcall(F.scanStaffNow)
+    end)
+end
+
+function F.cmdAntiStaff(arg)
+    local a = string.lower(tostring(arg or ""))
+    if a == "on" or a == "1" or a == "true" then
+        State.AntiStaff = true
+    elseif a == "off" or a == "0" or a == "false" then
+        State.AntiStaff = false
+    elseif a == "notify" or a == "kick" or a == "both" then
+        State.AntiStaffMode = a
+        State.AntiStaff = true
+        F.notify("AntiStaff ON | mode " .. a)
+        pcall(F.scanStaffNow)
+        return
+    else
+        State.AntiStaff = not State.AntiStaff
+    end
+    F.notify("AntiStaff " .. (State.AntiStaff and ("ON (" .. State.AntiStaffMode .. ")") or "OFF"))
+    if State.AntiStaff then pcall(F.scanStaffNow) end
+end
+
+function F.cmdAntiStaffMode(arg)
+    local a = string.lower(tostring(arg or ""))
+    if a == "kick" or a == "leave" or a == "rejoin" then
+        State.AntiStaffMode = "kick"
+    elseif a == "both" then
+        State.AntiStaffMode = "both"
+    elseif a == "notify" or a == "warn" then
+        State.AntiStaffMode = "notify"
+    else
+        F.notify("Usage: " .. Prefix .. "antistaffmode notify|kick|both")
+        return
+    end
+    F.notify("AntiStaff mode = " .. State.AntiStaffMode)
+    if State.AntiStaff then pcall(F.scanStaffNow) end
 end
 
 ----------------------------------------------------------------------
@@ -4432,6 +4700,8 @@ function F.onControlChat(msg, speaker)
         F.notify("AutoHeal " .. (State.AutoHeal and "ON" or "OFF"))
     elseif cmd == "fix" then F.cmdFix()
     elseif cmd == "kick" or cmd == "rejoin" then F.cmdKick()
+    elseif cmd == "antistaff" or cmd == "as" then F.cmdAntiStaff(a1)
+    elseif cmd == "antistaffmode" or cmd == "asmode" then F.cmdAntiStaffMode(a1)
     elseif cmd == "help" or cmd == "cmds" then F.cmdHelp()
     end
 end
@@ -4637,6 +4907,7 @@ end
 
 F.startAutoPerks()
 pcall(F.ensureSilentAim)
+pcall(F.hookAntiStaff)
 
 do
     local n = 0
@@ -4645,6 +4916,7 @@ do
 end
 print("[Stand] AutoHeal", State.AutoHeal and "ON" or "OFF",
     "| HC remotes:", IsHoodCustoms and "EatFood/BuyItem/ACTION" or "classic")
+print("[Stand] AntiStaff", State.AntiStaff and ("ON mode=" .. State.AntiStaffMode) or "OFF")
 
 print("[Stand] Main v2 loaded |", IsOwner and "OWNER" or ("ALT slot " .. tostring(MySlot)),
     "| prefix", Prefix, "| owner", OwnerName, "| anim", tostring(Config.Anim or "none"))

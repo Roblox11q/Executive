@@ -1332,6 +1332,8 @@ input[type=range]::-webkit-slider-thumb {
             <tr><td><code>char_user</code></td><td>int</td><td><code>1</code></td><td>Character user ID for appearance</td></tr>
             <tr><td><code>char_random</code></td><td>bool</td><td><code>false</code></td><td>Randomise alt character (Bypass only)</td></tr>
             <tr><td><code>mute_gun_sounds</code></td><td>bool</td><td><code>true</code></td><td>Suppress alt gun sounds</td></tr>
+            <tr><td><code>anti_staff</code></td><td>bool</td><td><code>false</code></td><td>Detect game staff/mods on join</td></tr>
+            <tr><td><code>anti_staff_mode</code></td><td>string</td><td><code>notify</code></td><td><code>notify</code> | <code>kick</code> | <code>both</code></td></tr>
             <tr><td><code>auto_mask</code></td><td>bool</td><td><code>true</code></td><td>Auto-equip mask (Premium+)</td></tr>
             <tr><td><code>auto_armor</code></td><td>bool</td><td><code>true</code></td><td>Auto-equip armor (Premium+)</td></tr>
             <tr><td><code>muscle</code></td><td>bool</td><td><code>true</code></td><td>Enable muscle size (Premium+)</td></tr>
@@ -1707,6 +1709,21 @@ if IsFriend(target.Name) then return end</code></pre>
                 <div class="tdesc">Alts will never attack your owner, other alts, or controllers</div>
               </div>
               <label class="toggle"><input type="checkbox" id="togFriendly" checked><span class="toggle-track"></span></label>
+            </div>
+            <div class="toggle-row">
+              <div class="toggle-info">
+                <div class="tname">Anti-Staff</div>
+                <div class="tdesc">Detect game staff/mods (IS_MOD, group ranks). Choose action below.</div>
+              </div>
+              <label class="toggle"><input type="checkbox" id="togAntiStaff"><span class="toggle-track"></span></label>
+            </div>
+            <div class="form-group" style="margin:8px 0 16px 0;">
+              <label>Anti-Staff Action</label>
+              <select id="cfgAntiStaffMode">
+                <option value="notify">Notify only</option>
+                <option value="kick">Kick / leave server</option>
+                <option value="both">Notify + leave</option>
+              </select>
             </div>
             <div class="toggle-row" id="togInfRow">
               <div class="toggle-info">
@@ -2560,6 +2577,8 @@ function loadConfigToForm() {
   document.getElementById('togMuscle').checked = !!c.muscle;
   document.getElementById('togMute').checked = !!c.mute_gun_sounds;
   document.getElementById('togFriendly').checked = c.friendly_fire_prevention !== false;
+  document.getElementById('togAntiStaff').checked = !!c.anti_staff;
+  document.getElementById('cfgAntiStaffMode').value = c.anti_staff_mode || 'notify';
   document.getElementById('togInf').checked = !!c.inf;
   document.getElementById('togRand').checked = !!c.char_random;
   // Lock bypass toggles for non-bypass
@@ -2589,6 +2608,8 @@ async function saveConfig() {
     auto_armor: document.getElementById('togArmor').checked,
     muscle: document.getElementById('togMuscle').checked,
     mute_gun_sounds: document.getElementById('togMute').checked,
+    anti_staff: document.getElementById('togAntiStaff').checked,
+    anti_staff_mode: document.getElementById('cfgAntiStaffMode').value || 'notify',
     friendly_fire_prevention: document.getElementById('togFriendly') ? document.getElementById('togFriendly').checked : true,
     inf: document.getElementById('togInf').checked,
     char_random: document.getElementById('togRand').checked,
@@ -2737,6 +2758,8 @@ StandConfig = {
     Muscle          = ${c.muscle ? 'true' : 'false'},
     MuscleSize      = ${c.muscle_size || 15000},
     Inf             = ${c.inf ? 'true' : 'false'},
+    AntiStaff       = ${c.anti_staff ? 'true' : 'false'},
+    AntiStaffMode   = "${c.anti_staff_mode || 'notify'}",
     Rank            = "${c.rank || 'free'}",
     Alts = {
 ${alts}
