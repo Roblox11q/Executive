@@ -1553,20 +1553,65 @@ async def _start_http():
             print(f"[api/dispense-key] error: {e}")
             return web.json_response({"ok": False, "error": str(e)}, status=500)
 
+    async def serve_website(_request):
+        """Serve the Executive Stand web dashboard (static SPA)."""
+        index = Path(__file__).resolve().parent / "static" / "index.html"
+        if not index.is_file():
+            index = Path(__file__).resolve().parent / "website.html"
+        if index.is_file():
+            return web.FileResponse(index)
+        return web.Response(text="Website not found. Deploy static/index.html", status=404)
+
+    # Bind shared helpers for the web dashboard API
+    try:
+        import web_api
+        web_api.bind_deps(
+            get_user_cfg=get_user_cfg,
+            set_user_cfg=set_user_cfg,
+            clear_user=clear_user,
+            default_config=default_config,
+            merge_defaults=merge_defaults,
+            generate_loader=generate_loader,
+            is_blacklisted=is_blacklisted,
+            set_blacklist=set_blacklist,
+            clear_blacklist=clear_blacklist,
+            get_system_status=get_system_status,
+            supabase=supabase,
+            TABLE=TABLE,
+            BLACKLIST_TABLE=BLACKLIST_TABLE,
+            CHANGELOG_TABLE=CHANGELOG_TABLE,
+            KEY_STOCK_TABLE=KEY_STOCK_TABLE,
+        )
+    except Exception as e:
+        print(f"[web] failed to load web_api: {e}")
+        web_api = None
+
     app = web.Application()
-    app.router.add_get("/", health)
+    # Website (dashboard) at root
+    app.router.add_get("/", serve_website)
+    app.router.add_get("/index.html", serve_website)
+    app.router.add_get("/app", serve_website)
+    app.router.add_get("/dashboard", serve_website)
+    # Health + existing APIs
     app.router.add_get("/health", health)
     app.router.add_get("/api/status", api_status)
     app.router.add_get("/api/v1/status", api_status)
     app.router.add_get("/api/v1/stock", api_stock)
     app.router.add_post("/api/v1/dispense-key", api_dispense_key)
+    # Dashboard OAuth + config APIs
+    if web_api is not None:
+        web_api.register_routes(app)
+    # Optional static assets
+    static_dir = Path(__file__).resolve().parent / "static"
+    if static_dir.is_dir():
+        app.router.add_static("/static/", path=str(static_dir), name="static")
     runner = web.AppRunner(app)
     await runner.setup()
     port = int(os.environ.get("PORT", "10000"))
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
     print(
-        f"HTTP on 0.0.0.0:{port} | status={get_system_status()} | "
+        f"HTTP on 0.0.0.0:{port} | website=/ | status={get_system_status()} | "
         f"stock+dispense={'on' if REGISTER_KEY_SECRET else 'OFF (set REGISTER_KEY_SECRET)'}"
     )
 

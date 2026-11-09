@@ -52,3 +52,54 @@ drop trigger if exists roblox_keys_set_updated_at on roblox_keys;
 create trigger roblox_keys_set_updated_at
 before update on roblox_keys
 for each row execute function set_roblox_keys_updated_at();
+
+-- ============================================================
+-- Core stand configs + web dashboard tables
+-- ============================================================
+
+create table if not exists stand_configs (
+  discord_id  text primary key,
+  config      jsonb not null default '{}'::jsonb,
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now()
+);
+
+create or replace function set_stand_configs_updated_at()
+returns trigger language plpgsql as $$
+begin
+  new.updated_at = now();
+  return new;
+end;
+$$;
+
+drop trigger if exists stand_configs_set_updated_at on stand_configs;
+create trigger stand_configs_set_updated_at
+before update on stand_configs
+for each row execute function set_stand_configs_updated_at();
+
+create table if not exists stand_blacklist (
+  discord_id  text primary key,
+  reason      text not null default '',
+  "by"        text,
+  created_at  timestamptz not null default now()
+);
+
+create table if not exists stand_status (
+  id          int primary key default 1,
+  status      text not null default 'up',
+  note        text default '',
+  updated_at  timestamptz not null default now()
+);
+
+insert into stand_status (id, status) values (1, 'up')
+on conflict (id) do nothing;
+
+create table if not exists stand_changelog (
+  id          bigserial primary key,
+  title       text not null default 'Update',
+  notes       text not null default '',
+  version     text not null default '',
+  "by"        text not null default '',
+  automatic   boolean not null default false,
+  created_at  timestamptz not null default now()
+);

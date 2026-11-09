@@ -1,0 +1,3442 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Executive Stand</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>">
+<style>
+:root {
+  --bg: #07080d;
+  --bg2: #0d0f18;
+  --bg3: #131622;
+  --border: #1e2235;
+  --border2: #252a40;
+  --accent: #5b6af5;
+  --accent2: #7b8bff;
+  --accent-glow: rgba(91,106,245,0.25);
+  --gold: #f0b429;
+  --gold2: #ffd060;
+  --green: #22c55e;
+  --red: #ef4444;
+  --text: #e8eaf5;
+  --text2: #9099b8;
+  --text3: #565f7e;
+  --card: #0f1120;
+  --radius: 10px;
+  --font: 'Inter', system-ui, sans-serif;
+}
+@media (prefers-color-scheme: light) { :root { --bg: #07080d; } }
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html { scroll-behavior: smooth; }
+body {
+  font-family: var(--font);
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.6;
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+/* ── UTILS ── */
+.hidden { display: none !important; }
+.flex { display: flex; }
+.flex-col { flex-direction: column; }
+.items-center { align-items: center; }
+.justify-center { justify-content: center; }
+.justify-between { justify-content: space-between; }
+.gap-2 { gap: 8px; }
+.gap-3 { gap: 12px; }
+.gap-4 { gap: 16px; }
+.w-full { width: 100%; }
+.text-center { text-align: center; }
+.mt-2 { margin-top: 8px; }
+.mt-4 { margin-top: 16px; }
+.mb-4 { margin-bottom: 16px; }
+
+/* ── NAV ── */
+nav {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 32px; height: 60px;
+  background: rgba(7,8,13,0.85);
+  backdrop-filter: blur(16px);
+  border-bottom: 1px solid var(--border);
+}
+.nav-logo {
+  display: flex; align-items: center; gap: 10px;
+  font-weight: 700; font-size: 17px; color: var(--text); text-decoration: none;
+  letter-spacing: -0.3px;
+}
+.nav-logo .logo-icon {
+  width: 30px; height: 30px; background: var(--accent); border-radius: 7px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 15px;
+}
+.nav-links { display: flex; align-items: center; gap: 8px; }
+.nav-link {
+  color: var(--text2); text-decoration: none; font-size: 14px;
+  padding: 6px 12px; border-radius: 6px; transition: color .15s, background .15s;
+}
+.nav-link:hover { color: var(--text); background: var(--bg3); }
+.btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 8px 18px; border-radius: 8px; font-size: 14px; font-weight: 600;
+  cursor: pointer; border: none; text-decoration: none; transition: all .15s;
+  white-space: nowrap;
+}
+.btn-primary { background: var(--accent); color: #fff; }
+.btn-primary:hover { background: var(--accent2); transform: translateY(-1px); box-shadow: 0 4px 20px var(--accent-glow); }
+.btn-outline { background: transparent; color: var(--text); border: 1px solid var(--border2); }
+.btn-outline:hover { background: var(--bg3); border-color: var(--accent); color: var(--accent2); }
+.btn-discord { background: #5865f2; color: #fff; }
+.btn-discord:hover { background: #6e78f0; transform: translateY(-1px); }
+.btn-gold { background: var(--gold); color: #000; }
+.btn-gold:hover { background: var(--gold2); transform: translateY(-1px); }
+.btn-sm { padding: 6px 14px; font-size: 13px; }
+.btn-lg { padding: 13px 28px; font-size: 16px; }
+.btn-danger { background: var(--red); color: #fff; }
+.btn-danger:hover { background: #dc2626; }
+.btn-green { background: var(--green); color: #fff; }
+.btn-green:hover { background: #16a34a; }
+
+/* ── PAGES ── */
+.page { display: none; }
+.page.active { display: block; }
+
+/* ── LANDING ── */
+#landing { padding-top: 60px; }
+.hero {
+  min-height: calc(100vh - 60px);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  text-align: center; padding: 60px 24px;
+  position: relative; overflow: hidden;
+}
+.hero-bg {
+  position: absolute; inset: 0; pointer-events: none;
+  background: radial-gradient(ellipse 80% 60% at 50% 10%, rgba(91,106,245,.13) 0%, transparent 70%);
+}
+.hero-grid {
+  position: absolute; inset: 0; pointer-events: none; opacity: .04;
+  background-image: linear-gradient(var(--border) 1px, transparent 1px), linear-gradient(90deg, var(--border) 1px, transparent 1px);
+  background-size: 40px 40px;
+}
+.status-pill {
+  display: inline-flex; align-items: center; gap: 8px;
+  background: var(--bg3); border: 1px solid var(--border2);
+  border-radius: 100px; padding: 5px 14px; font-size: 13px; color: var(--text2);
+  margin-bottom: 28px;
+}
+.status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); animation: pulse 2s infinite; }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+.hero h1 {
+  font-size: clamp(38px, 7vw, 76px); font-weight: 800; letter-spacing: -2px;
+  line-height: 1.08; margin-bottom: 20px; max-width: 820px;
+}
+.hero h1 span { color: var(--accent2); }
+.hero p {
+  font-size: clamp(15px, 2vw, 18px); color: var(--text2); max-width: 520px;
+  margin: 0 auto 36px; line-height: 1.65;
+}
+.hero-actions { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
+.hero-stats {
+  display: flex; gap: 48px; margin-top: 72px; justify-content: center; flex-wrap: wrap;
+}
+.stat { text-align: center; }
+.stat-num { font-size: 28px; font-weight: 800; color: var(--text); letter-spacing: -1px; }
+.stat-label { font-size: 13px; color: var(--text3); margin-top: 2px; }
+
+/* SECTION */
+section { padding: 90px 24px; max-width: 1120px; margin: 0 auto; }
+.section-label {
+  font-size: 12px; font-weight: 600; color: var(--accent2); letter-spacing: 1.5px;
+  text-transform: uppercase; margin-bottom: 10px;
+}
+.section-title { font-size: clamp(28px, 4vw, 42px); font-weight: 800; letter-spacing: -1px; margin-bottom: 14px; }
+.section-sub { font-size: 16px; color: var(--text2); max-width: 540px; }
+.section-head { margin-bottom: 52px; }
+
+/* FEATURES */
+.features-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 2px; border: 1px solid var(--border); border-radius: 14px; overflow: hidden; }
+.feature-card {
+  background: var(--bg2); padding: 28px; transition: background .2s;
+}
+.feature-card:hover { background: var(--bg3); }
+.feature-icon {
+  width: 42px; height: 42px; border-radius: 10px; background: rgba(91,106,245,.12);
+  display: flex; align-items: center; justify-content: center; font-size: 20px; margin-bottom: 14px;
+}
+.feature-card h3 { font-size: 16px; font-weight: 700; margin-bottom: 6px; }
+.feature-card p { font-size: 14px; color: var(--text2); line-height: 1.6; }
+
+/* PRICING */
+.pricing-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+.price-card {
+  background: var(--card); border: 1px solid var(--border); border-radius: 16px;
+  padding: 32px; position: relative; transition: border-color .2s, transform .2s;
+}
+.price-card:hover { border-color: var(--border2); transform: translateY(-2px); }
+.price-card.featured {
+  border-color: var(--accent); background: linear-gradient(160deg, rgba(91,106,245,.07) 0%, var(--card) 60%);
+}
+.price-card.featured::before {
+  content: 'MOST POPULAR'; position: absolute; top: -11px; left: 50%; transform: translateX(-50%);
+  background: var(--accent); color: #fff; font-size: 11px; font-weight: 700;
+  padding: 3px 12px; border-radius: 100px; letter-spacing: 1px;
+}
+.price-name { font-size: 13px; font-weight: 600; color: var(--text2); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 10px; }
+.price-amount { font-size: 44px; font-weight: 800; letter-spacing: -2px; margin-bottom: 4px; }
+.price-amount sup { font-size: 22px; vertical-align: super; letter-spacing: 0; }
+.price-period { font-size: 13px; color: var(--text3); margin-bottom: 24px; }
+.price-feats { list-style: none; display: flex; flex-direction: column; gap: 10px; margin-bottom: 28px; }
+.price-feats li { font-size: 14px; color: var(--text2); display: flex; align-items: center; gap: 10px; }
+.price-feats li::before { content: '✓'; color: var(--green); font-weight: 700; flex-shrink: 0; }
+.price-feats li.no::before { content: '✗'; color: var(--text3); }
+.price-feats li.no { color: var(--text3); }
+
+/* FOOTER */
+footer {
+  border-top: 1px solid var(--border); padding: 36px 32px;
+  display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16px;
+  color: var(--text3); font-size: 13px;
+}
+footer a { color: var(--text3); text-decoration: none; }
+footer a:hover { color: var(--text2); }
+
+/* ── AUTH PAGE ── */
+#auth { padding-top: 60px; }
+.auth-wrap {
+  min-height: calc(100vh - 60px); display: flex; align-items: center; justify-content: center; padding: 24px;
+}
+.auth-card {
+  background: var(--card); border: 1px solid var(--border); border-radius: 20px;
+  padding: 48px; max-width: 420px; width: 100%; text-align: center;
+}
+.auth-card .logo-icon { width: 56px; height: 56px; border-radius: 14px; font-size: 26px; background: var(--accent); margin: 0 auto 20px; display: flex; align-items: center; justify-content: center; }
+.auth-card h2 { font-size: 24px; font-weight: 800; margin-bottom: 8px; }
+.auth-card p { color: var(--text2); font-size: 15px; margin-bottom: 32px; }
+.discord-btn { width: 100%; justify-content: center; padding: 14px; font-size: 16px; }
+.auth-note { font-size: 12px; color: var(--text3); margin-top: 20px; }
+
+/* ── DASHBOARD ── */
+#dashboard { padding-top: 60px; }
+.dash-layout { display: flex; min-height: calc(100vh - 60px); }
+.sidebar {
+  width: 220px; flex-shrink: 0; border-right: 1px solid var(--border);
+  background: var(--bg2); padding: 20px 12px; display: flex; flex-direction: column; gap: 4px;
+}
+.sidebar-label { font-size: 11px; font-weight: 600; color: var(--text3); text-transform: uppercase; letter-spacing: 1px; padding: 10px 12px 4px; }
+.sidebar-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 12px; border-radius: 8px; cursor: pointer;
+  color: var(--text2); font-size: 14px; font-weight: 500;
+  transition: all .15s; border: none; background: none; width: 100%; text-align: left;
+}
+.sidebar-item:hover { background: var(--bg3); color: var(--text); }
+.sidebar-item.active { background: rgba(91,106,245,.15); color: var(--accent2); }
+.sidebar-icon { font-size: 16px; }
+.sidebar-spacer { flex: 1; }
+.user-pill {
+  display: flex; align-items: center; gap: 10px; padding: 10px 12px;
+  background: var(--bg3); border-radius: 10px; margin-top: 8px;
+}
+.user-avatar { width: 32px; height: 32px; border-radius: 50%; background: var(--accent); display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 700; flex-shrink: 0; }
+.user-info { flex: 1; min-width: 0; }
+.user-name { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.user-plan { font-size: 11px; color: var(--text3); }
+.plan-badge { font-size: 11px; font-weight: 700; padding: 2px 7px; border-radius: 4px; }
+.plan-free { background: rgba(86,95,126,.2); color: var(--text3); }
+.plan-premium { background: rgba(91,106,245,.2); color: var(--accent2); }
+.plan-bypass { background: rgba(240,180,41,.2); color: var(--gold); }
+
+.dash-content { flex: 1; padding: 32px; overflow-y: auto; }
+.dash-section { display: none; }
+.dash-section.active { display: block; }
+
+/* DASH HEADER */
+.dash-header { margin-bottom: 28px; }
+.dash-header h2 { font-size: 22px; font-weight: 800; letter-spacing: -0.5px; }
+.dash-header p { color: var(--text2); font-size: 14px; margin-top: 4px; }
+
+/* CARDS */
+.card {
+  background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 20px;
+}
+.card-title { font-size: 15px; font-weight: 700; margin-bottom: 16px; display: flex; align-items: center; gap: 8px; }
+.stats-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 24px; }
+.stat-card { background: var(--bg3); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px; }
+.stat-card .label { font-size: 12px; color: var(--text3); margin-bottom: 6px; }
+.stat-card .val { font-size: 24px; font-weight: 800; letter-spacing: -1px; }
+.stat-card .sub { font-size: 12px; color: var(--text3); margin-top: 2px; }
+
+/* FORM */
+.form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; }
+.form-group { display: flex; flex-direction: column; gap: 6px; }
+.form-group label { font-size: 13px; font-weight: 600; color: var(--text2); }
+.form-group input, .form-group select {
+  background: var(--bg3); border: 1px solid var(--border); border-radius: 8px;
+  padding: 9px 12px; color: var(--text); font-size: 14px; font-family: var(--font);
+  outline: none; transition: border-color .15s;
+}
+.form-group input:focus, .form-group select:focus { border-color: var(--accent); }
+.form-group input::placeholder { color: var(--text3); }
+.form-group select option { background: var(--bg3); }
+
+/* TOGGLE */
+.toggle-row { display: flex; align-items: center; justify-content: space-between; padding: 12px 0; border-bottom: 1px solid var(--border); }
+.toggle-row:last-child { border-bottom: none; }
+.toggle-info { }
+.toggle-info .tname { font-size: 14px; font-weight: 600; }
+.toggle-info .tdesc { font-size: 12px; color: var(--text3); margin-top: 2px; }
+.toggle {
+  position: relative; width: 40px; height: 22px; flex-shrink: 0;
+}
+.toggle input { opacity: 0; width: 0; height: 0; position: absolute; }
+.toggle-track {
+  position: absolute; inset: 0; background: var(--bg3); border: 1px solid var(--border2);
+  border-radius: 100px; cursor: pointer; transition: background .2s;
+}
+.toggle-track::after {
+  content: ''; position: absolute; top: 2px; left: 2px;
+  width: 16px; height: 16px; border-radius: 50%; background: var(--text3);
+  transition: transform .2s, background .2s;
+}
+.toggle input:checked ~ .toggle-track { background: rgba(91,106,245,.3); border-color: var(--accent); }
+.toggle input:checked ~ .toggle-track::after { transform: translateX(18px); background: var(--accent2); }
+
+/* ALTS TABLE */
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+th { font-size: 12px; font-weight: 600; color: var(--text3); text-transform: uppercase; letter-spacing: .8px; padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--border); }
+td { padding: 11px 12px; border-bottom: 1px solid rgba(30,34,53,.6); color: var(--text2); }
+tr:last-child td { border-bottom: none; }
+tr:hover td { background: rgba(13,15,24,.5); }
+.tag { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+.tag-blue { background: rgba(91,106,245,.15); color: var(--accent2); }
+.tag-green { background: rgba(34,197,94,.15); color: var(--green); }
+.tag-yellow { background: rgba(240,180,41,.15); color: var(--gold); }
+.tag-red { background: rgba(239,68,68,.15); color: var(--red); }
+.tag-gray { background: rgba(86,95,126,.15); color: var(--text3); }
+
+/* SAVE BAR */
+.save-bar {
+  position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+  background: var(--bg3); border: 1px solid var(--accent);
+  border-radius: 100px; padding: 10px 24px;
+  display: flex; align-items: center; gap: 12px; font-size: 14px;
+  box-shadow: 0 8px 32px rgba(0,0,0,.5);
+  transition: opacity .3s; opacity: 0; pointer-events: none; z-index: 50;
+}
+.save-bar.visible { opacity: 1; pointer-events: all; }
+
+/* ADMIN */
+.admin-tabs { display: flex; gap: 4px; margin-bottom: 24px; border-bottom: 1px solid var(--border); padding-bottom: 0; }
+.admin-tab {
+  padding: 8px 16px; font-size: 14px; font-weight: 500; cursor: pointer;
+  color: var(--text2); border-bottom: 2px solid transparent; margin-bottom: -1px;
+  background: none; border-top: none; border-left: none; border-right: none;
+  transition: color .15s, border-color .15s;
+}
+.admin-tab:hover { color: var(--text); }
+.admin-tab.active { color: var(--accent2); border-bottom-color: var(--accent); }
+.admin-panel { display: none; }
+.admin-panel.active { display: block; }
+
+/* TOAST */
+.toast {
+  position: fixed; bottom: 24px; right: 24px; z-index: 999;
+  background: var(--bg3); border: 1px solid var(--border2); border-radius: 10px;
+  padding: 12px 20px; font-size: 14px; display: flex; align-items: center; gap: 10px;
+  transform: translateY(80px); opacity: 0; transition: all .3s;
+  box-shadow: 0 8px 32px rgba(0,0,0,.4);
+}
+.toast.show { transform: translateY(0); opacity: 1; }
+.toast.success { border-color: var(--green); }
+.toast.error { border-color: var(--red); }
+
+/* PLAN UPGRADE */
+.upgrade-banner {
+  background: linear-gradient(135deg, rgba(91,106,245,.1) 0%, rgba(123,139,255,.05) 100%);
+  border: 1px solid var(--accent); border-radius: 14px; padding: 24px 28px;
+  display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+  margin-bottom: 24px;
+}
+.upgrade-banner h3 { font-size: 16px; font-weight: 700; margin-bottom: 4px; }
+.upgrade-banner p { font-size: 14px; color: var(--text2); }
+
+/* STATUS BADGE */
+.status-badge { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
+.dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.dot-green { background: var(--green); }
+.dot-red { background: var(--red); }
+.dot-yellow { background: var(--gold); }
+.dot-blue { background: var(--accent2); }
+
+/* MODAL */
+.modal-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,.7); z-index: 200;
+  display: flex; align-items: center; justify-content: center; padding: 24px;
+  opacity: 0; pointer-events: none; transition: opacity .2s;
+}
+.modal-overlay.show { opacity: 1; pointer-events: all; }
+.modal {
+  background: var(--bg2); border: 1px solid var(--border2); border-radius: 16px;
+  padding: 32px; max-width: 500px; width: 100%;
+  transform: scale(.95); transition: transform .2s;
+}
+.modal-overlay.show .modal { transform: scale(1); }
+.modal h3 { font-size: 18px; font-weight: 800; margin-bottom: 8px; }
+.modal p { font-size: 14px; color: var(--text2); margin-bottom: 20px; }
+.modal-actions { display: flex; gap: 10px; justify-content: flex-end; }
+
+/* MOBILE NAV COLLAPSE */
+@media(max-width:768px) {
+  nav { padding: 0 16px; }
+  .nav-links .nav-link { display: none; }
+  .dash-layout { flex-direction: column; }
+  .sidebar { width: 100%; border-right: none; border-bottom: 1px solid var(--border); flex-direction: row; overflow-x: auto; padding: 8px; gap: 2px; }
+  .sidebar-label { display: none; }
+  .sidebar-spacer { display: none; }
+  .user-pill { display: none; }
+  .dash-content { padding: 20px 16px; }
+}
+
+/* SCROLL */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 3px; }
+
+/* INPUT RANGE */
+input[type=range] {
+  -webkit-appearance: none; height: 4px; background: var(--border2);
+  border-radius: 2px; outline: none;
+}
+input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%;
+  background: var(--accent); cursor: pointer;
+}
+
+/* NOTIFICATION DOT */
+.notif { width: 7px; height: 7px; background: var(--red); border-radius: 50%; }
+
+/* OVERVIEW GRID */
+.overview-bottom-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@media(max-width:680px) { .overview-bottom-grid { grid-template-columns: 1fr; } }
+
+/* ACTIVITY FEED */
+.activity-item { display: flex; align-items: flex-start; gap: 10px; font-size: 13px; }
+.activity-icon { font-size: 16px; flex-shrink: 0; margin-top: 1px; }
+.activity-text { color: var(--text2); line-height: 1.5; flex: 1; }
+.activity-time { font-size: 11px; color: var(--text3); white-space: nowrap; }
+
+/* CHANGELOG */
+.changelog-entry { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 22px 24px; }
+.changelog-entry:hover { border-color: var(--border2); }
+.changelog-meta { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+.changelog-version { font-size: 13px; font-weight: 700; color: var(--accent2); background: rgba(91,106,245,.12); padding: 2px 10px; border-radius: 6px; }
+.changelog-date { font-size: 12px; color: var(--text3); }
+.changelog-new { font-size: 11px; font-weight: 700; background: rgba(34,197,94,.15); color: var(--green); padding: 2px 8px; border-radius: 4px; }
+.changelog-entry h3 { font-size: 16px; font-weight: 700; margin-bottom: 8px; }
+.changelog-entry ul { padding-left: 18px; display: flex; flex-direction: column; gap: 5px; }
+.changelog-entry li { font-size: 14px; color: var(--text2); }
+
+/* TICKET STATUS */
+.ticket-status { display: inline-block; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 4px; }
+.ts-open { background: rgba(91,106,245,.15); color: var(--accent2); }
+.ts-inprog { background: rgba(240,180,41,.15); color: var(--gold); }
+.ts-closed { background: rgba(86,95,126,.15); color: var(--text3); }
+.ts-resolved { background: rgba(34,197,94,.15); color: var(--green); }
+
+/* STATUS DISPLAY */
+.status-display { display: flex; align-items: center; gap: 12px; }
+.status-display .dot-pulse { width: 10px; height: 10px; border-radius: 50%; animation: pulse 2s infinite; }
+.status-display .status-name { font-size: 16px; font-weight: 700; }
+.status-display .status-desc { font-size: 13px; color: var(--text3); }
+
+/* ── LEGAL / DOCS PAGES ── */
+.legal-page { padding-top: 60px; }
+.legal-wrap {
+  max-width: 820px; margin: 0 auto; padding: 60px 24px 100px;
+}
+.legal-hero {
+  text-align: center; padding: 56px 0 48px;
+  border-bottom: 1px solid var(--border); margin-bottom: 52px;
+}
+.legal-hero .legal-badge {
+  display: inline-block; background: rgba(91,106,245,.12); border: 1px solid rgba(91,106,245,.25);
+  color: var(--accent2); font-size: 12px; font-weight: 600; letter-spacing: 1px;
+  text-transform: uppercase; padding: 4px 14px; border-radius: 100px; margin-bottom: 18px;
+}
+.legal-hero h1 { font-size: clamp(28px, 5vw, 44px); font-weight: 800; letter-spacing: -1.5px; margin-bottom: 10px; }
+.legal-hero p { font-size: 15px; color: var(--text3); }
+.legal-toc {
+  background: var(--bg2); border: 1px solid var(--border); border-radius: 12px;
+  padding: 20px 24px; margin-bottom: 48px;
+}
+.legal-toc h4 { font-size: 12px; font-weight: 700; color: var(--text3); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 12px; }
+.legal-toc ol { padding-left: 18px; display: flex; flex-direction: column; gap: 6px; }
+.legal-toc a { font-size: 14px; color: var(--accent2); text-decoration: none; }
+.legal-toc a:hover { text-decoration: underline; }
+.legal-section { margin-bottom: 44px; }
+.legal-section h2 { font-size: 20px; font-weight: 800; margin-bottom: 14px; padding-top: 8px; letter-spacing: -0.4px; }
+.legal-section h3 { font-size: 15px; font-weight: 700; color: var(--text2); margin: 18px 0 8px; }
+.legal-section p { font-size: 15px; color: var(--text2); line-height: 1.75; margin-bottom: 12px; }
+.legal-section ul, .legal-section ol { padding-left: 20px; display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
+.legal-section li { font-size: 15px; color: var(--text2); line-height: 1.65; }
+.legal-section .highlight {
+  background: rgba(91,106,245,.07); border-left: 3px solid var(--accent);
+  border-radius: 0 8px 8px 0; padding: 14px 18px; margin: 18px 0;
+  font-size: 14px; color: var(--text2);
+}
+.legal-section .warn {
+  background: rgba(240,180,41,.07); border-left: 3px solid var(--gold);
+  border-radius: 0 8px 8px 0; padding: 14px 18px; margin: 18px 0;
+  font-size: 14px; color: var(--text2);
+}
+.legal-divider { border: none; border-top: 1px solid var(--border); margin: 40px 0; }
+.legal-back { margin-bottom: 32px; }
+
+/* DOCS */
+.docs-layout { display: flex; gap: 0; min-height: calc(100vh - 60px); }
+.docs-sidebar {
+  width: 240px; flex-shrink: 0; border-right: 1px solid var(--border);
+  background: var(--bg2); padding: 32px 16px; position: sticky; top: 60px;
+  height: calc(100vh - 60px); overflow-y: auto; align-self: flex-start;
+}
+.docs-sidebar-label { font-size: 11px; font-weight: 700; color: var(--text3); text-transform: uppercase; letter-spacing: 1px; padding: 10px 12px 4px; }
+.docs-nav-item {
+  display: block; padding: 7px 12px; border-radius: 7px; font-size: 14px;
+  color: var(--text2); text-decoration: none; cursor: pointer;
+  background: none; border: none; width: 100%; text-align: left;
+  transition: color .15s, background .15s;
+}
+.docs-nav-item:hover { color: var(--text); background: var(--bg3); }
+.docs-nav-item.active { color: var(--accent2); background: rgba(91,106,245,.12); }
+.docs-nav-sub { padding-left: 20px; }
+.docs-content { flex: 1; padding: 48px 56px 100px; max-width: 780px; }
+.docs-content h1 { font-size: 34px; font-weight: 800; letter-spacing: -1px; margin-bottom: 10px; }
+.docs-content .doc-meta { font-size: 13px; color: var(--text3); margin-bottom: 36px; display: flex; gap: 16px; }
+.docs-content h2 { font-size: 22px; font-weight: 800; letter-spacing: -0.5px; margin: 40px 0 12px; padding-top: 8px; border-top: 1px solid var(--border); }
+.docs-content h3 { font-size: 16px; font-weight: 700; margin: 24px 0 8px; color: var(--text); }
+.docs-content p { font-size: 15px; color: var(--text2); line-height: 1.75; margin-bottom: 14px; }
+.docs-content ul, .docs-content ol { padding-left: 22px; margin-bottom: 14px; display: flex; flex-direction: column; gap: 7px; }
+.docs-content li { font-size: 15px; color: var(--text2); line-height: 1.65; }
+.docs-content code {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 13px;
+  background: var(--bg3); border: 1px solid var(--border); border-radius: 5px;
+  padding: 2px 7px; color: var(--accent2);
+}
+.docs-content pre {
+  background: var(--bg2); border: 1px solid var(--border); border-radius: 10px;
+  padding: 18px 20px; overflow-x: auto; margin: 16px 0;
+}
+.docs-content pre code {
+  background: none; border: none; padding: 0; font-size: 13px; color: var(--text2); display: block; white-space: pre;
+}
+.docs-content .callout {
+  background: rgba(91,106,245,.07); border: 1px solid rgba(91,106,245,.2);
+  border-radius: 10px; padding: 14px 18px; margin: 18px 0; font-size: 14px; color: var(--text2);
+}
+.docs-content .callout.warn {
+  background: rgba(240,180,41,.07); border-color: rgba(240,180,41,.25);
+}
+.docs-content .callout.danger {
+  background: rgba(239,68,68,.07); border-color: rgba(239,68,68,.25);
+}
+.docs-content .callout strong { color: var(--text); }
+.docs-content table { width: 100%; border-collapse: collapse; font-size: 14px; margin: 16px 0; }
+.docs-content th { background: var(--bg3); font-size: 12px; font-weight: 600; color: var(--text3); text-transform: uppercase; letter-spacing: .7px; padding: 10px 14px; text-align: left; border: 1px solid var(--border); }
+.docs-content td { padding: 10px 14px; border: 1px solid var(--border); color: var(--text2); }
+.docs-content .doc-section { display: none; }
+.docs-content .doc-section.active { display: block; }
+.doc-nav-row { display: flex; justify-content: space-between; margin-top: 56px; padding-top: 24px; border-top: 1px solid var(--border); gap: 12px; flex-wrap: wrap; }
+.doc-nav-btn {
+  display: flex; flex-direction: column; padding: 14px 20px; border-radius: 10px;
+  border: 1px solid var(--border); text-decoration: none; cursor: pointer; background: var(--bg2);
+  transition: border-color .15s; max-width: 220px;
+}
+.doc-nav-btn:hover { border-color: var(--accent); }
+.doc-nav-btn .dir { font-size: 11px; color: var(--text3); margin-bottom: 4px; }
+.doc-nav-btn .title { font-size: 14px; font-weight: 600; color: var(--accent2); }
+@media(max-width:768px) {
+  .docs-layout { flex-direction: column; }
+  .docs-sidebar { width: 100%; position: static; height: auto; border-right: none; border-bottom: 1px solid var(--border); padding: 16px; display: flex; flex-wrap: wrap; gap: 4px; }
+  .docs-sidebar-label { width: 100%; }
+  .docs-content { padding: 28px 20px 60px; }
+}
+
+</style>
+</head>
+<body>
+
+<!-- ══════════════════════════════════════════
+     NAV
+══════════════════════════════════════════ -->
+<nav id="mainNav">
+  <a class="nav-logo" href="#" onclick="showPage('landing')">
+    <div class="logo-icon">⚡</div>
+    Executive Stand
+  </a>
+  <div class="nav-links" id="navLinks">
+    <a class="nav-link" href="#" onclick="showPage('landing')">Home</a>
+    <a class="nav-link" href="#features" onclick="scrollToSection('features')">Features</a>
+    <a class="nav-link" href="#pricing" onclick="scrollToSection('pricing')">Pricing</a>
+    <a class="nav-link" href="#" onclick="showPage('docs')">Docs</a>
+    <div id="navGuest">
+      <button class="btn btn-discord btn-sm" onclick="showPage('auth')">
+        <svg width="16" height="12" viewBox="0 0 71 55" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M60.1 4.9A58.5 58.5 0 0 0 45.6.4a40.9 40.9 0 0 0-1.9 3.8 54.2 54.2 0 0 0-16.2 0A40.1 40.1 0 0 0 25.6.4 58.3 58.3 0 0 0 11 4.9C1.6 18.7-1 32.2.3 45.5a58.9 58.9 0 0 0 17.9 9 44.4 44.4 0 0 0 3.8-6.2 38.3 38.3 0 0 1-6-2.9l1.5-1.1a42 42 0 0 0 36 0l1.5 1.1a38.4 38.4 0 0 1-6 2.9 44 44 0 0 0 3.8 6.2 58.7 58.7 0 0 0 17.9-9C72 30.1 68.6 16.7 60.1 4.9ZM23.8 37.5c-3.5 0-6.4-3.2-6.4-7.1s2.8-7.1 6.4-7.1c3.5 0 6.4 3.1 6.3 7.1 0 3.9-2.8 7.1-6.3 7.1Zm23.5 0c-3.5 0-6.4-3.2-6.4-7.1s2.9-7.1 6.4-7.1c3.6 0 6.4 3.1 6.4 7.1 0 3.9-2.8 7.1-6.4 7.1Z"/></svg>
+        Login with Discord
+      </button>
+    </div>
+    <div id="navUser" class="hidden" style="display:flex;align-items:center;gap:8px;">
+      <span id="navUserName" style="font-size:14px;color:var(--text2);"></span>
+      <button class="btn btn-primary btn-sm" onclick="showPage('dashboard')">Dashboard</button>
+      <button class="btn btn-outline btn-sm" onclick="logout()">Logout</button>
+    </div>
+  </div>
+</nav>
+
+<!-- ══════════════════════════════════════════
+     LANDING PAGE
+══════════════════════════════════════════ -->
+<div id="landing" class="page active">
+  <!-- HERO -->
+  <div class="hero">
+    <div class="hero-bg"></div>
+    <div class="hero-grid"></div>
+    <div class="status-pill">
+      <span class="status-dot"></span>
+      <span>System Operational — Da Hood, DERS Hood, Hood Customs</span>
+    </div>
+    <h1>The <span>Executive</span><br>Stand Suite</h1>
+    <p>Premium Stand configuration for Roblox Da Hood. Set up your alts, configure your loadout, and dominate — all from one sleek dashboard.</p>
+    <div class="hero-actions">
+      <button class="btn btn-primary btn-lg" onclick="showPage('auth')">
+        <svg width="16" height="12" viewBox="0 0 71 55" fill="currentColor"><path d="M60.1 4.9A58.5 58.5 0 0 0 45.6.4a40.9 40.9 0 0 0-1.9 3.8 54.2 54.2 0 0 0-16.2 0A40.1 40.1 0 0 0 25.6.4 58.3 58.3 0 0 0 11 4.9C1.6 18.7-1 32.2.3 45.5a58.9 58.9 0 0 0 17.9 9 44.4 44.4 0 0 0 3.8-6.2 38.3 38.3 0 0 1-6-2.9l1.5-1.1a42 42 0 0 0 36 0l1.5 1.1a38.4 38.4 0 0 1-6 2.9 44 44 0 0 0 3.8 6.2 58.7 58.7 0 0 0 17.9-9C72 30.1 68.6 16.7 60.1 4.9ZM23.8 37.5c-3.5 0-6.4-3.2-6.4-7.1s2.8-7.1 6.4-7.1c3.5 0 6.4 3.1 6.3 7.1 0 3.9-2.8 7.1-6.3 7.1Zm23.5 0c-3.5 0-6.4-3.2-6.4-7.1s2.9-7.1 6.4-7.1c3.6 0 6.4 3.1 6.4 7.1 0 3.9-2.8 7.1-6.4 7.1Z"/></svg>
+        Get Started Free
+      </button>
+      <a href="#pricing" class="btn btn-outline btn-lg" onclick="scrollToSection('pricing')">View Plans</a>
+    </div>
+    <div class="hero-stats">
+      <div class="stat"><div class="stat-num">2,400+</div><div class="stat-label">Active Users</div></div>
+      <div class="stat"><div class="stat-num">99.9%</div><div class="stat-label">Uptime</div></div>
+      <div class="stat"><div class="stat-num">4</div><div class="stat-label">Supported Games</div></div>
+      <div class="stat"><div class="stat-num">&lt;100ms</div><div class="stat-label">Response Time</div></div>
+    </div>
+  </div>
+
+  <!-- FEATURES -->
+  <section id="features">
+    <div class="section-head">
+      <div class="section-label">Features</div>
+      <h2 class="section-title">Everything you need to run</h2>
+      <p class="section-sub">From alt management to full loadout config — all in one place.</p>
+    </div>
+    <div class="features-grid">
+      <div class="feature-card">
+        <div class="feature-icon">🤖</div>
+        <h3>Alt Management</h3>
+        <p>Link and configure multiple Roblox alt accounts with custom formation slots and controllers.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">🔧</div>
+        <h3>Live Config Editor</h3>
+        <p>Adjust your gun, prefix, animations, and all toggles from the web — no Discord commands needed.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">🛡️</div>
+        <h3>Auto Features</h3>
+        <p>Auto mask, auto armor, infinite ammo, and muscle size — all configurable per-user.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">🔑</div>
+        <h3>Key System</h3>
+        <p>License Hub integration with per-user keys. Manage and rotate your key directly from the dashboard.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">📦</div>
+        <h3>Instant Loader</h3>
+        <p>Download your personal StandLoader.lua straight from the dashboard. Ready to inject in seconds.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">⭐</div>
+        <h3>Premium Ranks</h3>
+        <p>Unlock Premium and Bypass ranks for exclusive in-script features unavailable to free users.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- PRICING -->
+  <section id="pricing">
+    <div class="section-head text-center" style="text-align:center;">
+      <div class="section-label" style="text-align:center;">Pricing</div>
+      <h2 class="section-title">Pick your plan</h2>
+      <p class="section-sub" style="margin:0 auto;">Start free or unlock the full power of Executive Stand.</p>
+    </div>
+    <div class="pricing-grid">
+      <!-- FREE -->
+      <div class="price-card">
+        <div class="price-name">Free</div>
+        <div class="price-amount"><sup>$</sup>0</div>
+        <div class="price-period">forever free</div>
+        <ul class="price-feats">
+          <li>Discord bot access</li>
+          <li>Basic stand config</li>
+          <li>Up to 2 alts</li>
+          <li>Standard gun & prefix</li>
+          <li class="no">Web dashboard</li>
+          <li class="no">Premium rank in-game</li>
+          <li class="no">Bypass features</li>
+          <li class="no">Priority support</li>
+        </ul>
+        <button class="btn btn-outline w-full" onclick="showPage('auth')">Get Started</button>
+      </div>
+
+      <!-- PREMIUM -->
+      <div class="price-card featured">
+        <div class="price-name">Premium</div>
+        <div class="price-amount"><sup>$</sup>8</div>
+        <div class="price-period">per month</div>
+        <ul class="price-feats">
+          <li>Everything in Free</li>
+          <li>Web dashboard access</li>
+          <li>Up to 10 alts</li>
+          <li>Premium rank in-game</li>
+          <li>Auto mask & armor</li>
+          <li>Muscle size control</li>
+          <li>Priority support</li>
+          <li class="no">Bypass features</li>
+        </ul>
+        <button class="btn btn-primary w-full" onclick="initiateCheckout('premium')">Subscribe — $8/mo</button>
+      </div>
+
+      <!-- BYPASS -->
+      <div class="price-card">
+        <div class="price-name" style="color:var(--gold);">Bypass</div>
+        <div class="price-amount" style="color:var(--gold);"><sup>$</sup>18</div>
+        <div class="price-period">per month</div>
+        <ul class="price-feats">
+          <li>Everything in Premium</li>
+          <li>Bypass rank in-game</li>
+          <li>Unlimited alts</li>
+          <li>Exclusive bypass scripts</li>
+          <li>Infinite ammo (Inf)</li>
+          <li>Character randomizer</li>
+          <li>VIP Discord channel</li>
+          <li>24/7 priority support</li>
+        </ul>
+        <button class="btn btn-gold w-full" onclick="initiateCheckout('bypass')">Subscribe — $18/mo</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- FOOTER -->
+  <footer>
+    <div>⚡ Executive Stand — &copy; 2025</div>
+    <div style="display:flex;gap:20px;">
+      <a href="#" onclick="showPage('terms')">Terms</a>
+      <a href="#" onclick="showPage('privacy')">Privacy</a>
+      <a href="#" onclick="showPage('docs')">Docs</a>
+      <a href="#">Discord</a>
+    </div>
+  </footer>
+</div>
+
+<!-- ══════════════════════════════════════════
+     TERMS OF SERVICE
+══════════════════════════════════════════ -->
+<div id="terms" class="page legal-page">
+  <div class="legal-wrap">
+    <div class="legal-back">
+      <button class="btn btn-outline btn-sm" onclick="showPage('landing')">← Back to Home</button>
+    </div>
+    <div class="legal-hero">
+      <div class="legal-badge">Legal</div>
+      <h1>Terms of Service</h1>
+      <p>Last updated: June 1, 2025 &nbsp;·&nbsp; Effective: June 1, 2025</p>
+    </div>
+
+    <div class="legal-toc">
+      <h4>Table of Contents</h4>
+      <ol>
+        <li><a href="#tos-1">Acceptance of Terms</a></li>
+        <li><a href="#tos-2">Description of Service</a></li>
+        <li><a href="#tos-3">Eligibility</a></li>
+        <li><a href="#tos-4">Accounts &amp; Discord OAuth</a></li>
+        <li><a href="#tos-5">Subscriptions &amp; Payments</a></li>
+        <li><a href="#tos-6">Refund Policy</a></li>
+        <li><a href="#tos-7">Acceptable Use</a></li>
+        <li><a href="#tos-8">Intellectual Property</a></li>
+        <li><a href="#tos-9">Termination &amp; Bans</a></li>
+        <li><a href="#tos-10">Disclaimers &amp; Limitation of Liability</a></li>
+        <li><a href="#tos-11">Changes to Terms</a></li>
+        <li><a href="#tos-12">Contact</a></li>
+      </ol>
+    </div>
+
+    <div class="legal-section" id="tos-1">
+      <h2>1. Acceptance of Terms</h2>
+      <p>By accessing or using Executive Stand (the "Service"), including the website, dashboard, Discord bot, and associated scripts, you agree to be bound by these Terms of Service ("Terms"). If you do not agree, do not use the Service.</p>
+      <p>These Terms constitute a legally binding agreement between you ("User") and Executive Stand ("we", "us", or "our"). Your use of the Service following any updates to these Terms constitutes acceptance of those changes.</p>
+    </div>
+
+    <div class="legal-section" id="tos-2">
+      <h2>2. Description of Service</h2>
+      <p>Executive Stand provides a subscription-based configuration platform for Roblox Stand scripts. The Service includes:</p>
+      <ul>
+        <li>A web dashboard for configuring stand settings, managing alt accounts, and downloading personalised loader scripts.</li>
+        <li>A Discord bot for receiving commands, managing keys, and accessing support.</li>
+        <li>Tiered subscription plans (Free, Premium, Bypass) unlocking different levels of functionality.</li>
+      </ul>
+      <div class="warn">⚠️ Executive Stand is an independent tool. We are not affiliated with, endorsed by, or officially connected to Roblox Corporation or any Roblox game developer.</div>
+    </div>
+
+    <div class="legal-section" id="tos-3">
+      <h2>3. Eligibility</h2>
+      <p>You must be at least 13 years of age to use the Service. By using the Service you represent that you meet this requirement. If you are under 18, you represent that a parent or guardian has consented to your use.</p>
+      <p>Users who have been previously banned or blacklisted from the Service may not create new accounts or attempt to circumvent any imposed restrictions.</p>
+    </div>
+
+    <div class="legal-section" id="tos-4">
+      <h2>4. Accounts &amp; Discord OAuth</h2>
+      <p>Access to the Service requires authentication through Discord's OAuth2 login. By connecting your Discord account you authorise us to read your basic Discord profile (ID, username, avatar). We do not access your messages, server list, or any other Discord data beyond the <code>identify</code> scope.</p>
+      <ul>
+        <li>You are responsible for all activity under your account.</li>
+        <li>You must not share your account with others or allow third parties to use your credentials.</li>
+        <li>You must notify us immediately of any unauthorised access to your account.</li>
+        <li>We reserve the right to suspend or terminate accounts that violate these Terms.</li>
+      </ul>
+    </div>
+
+    <div class="legal-section" id="tos-5">
+      <h2>5. Subscriptions &amp; Payments</h2>
+      <p>Paid plans (Premium and Bypass) are billed monthly on a recurring basis through Stripe. By subscribing you authorise us to charge your payment method on a recurring basis until you cancel.</p>
+      <h3>Billing</h3>
+      <ul>
+        <li>Subscriptions auto-renew at the start of each billing cycle.</li>
+        <li>You will be charged on the same date each month as your initial subscription date.</li>
+        <li>All prices are listed in USD and exclude any applicable taxes.</li>
+      </ul>
+      <h3>Cancellation</h3>
+      <p>You may cancel your subscription at any time from the Subscription page in your dashboard. Cancellation takes effect at the end of your current billing period — you retain access until then. No prorated refunds are issued for partial months.</p>
+      <h3>Plan Changes</h3>
+      <p>Upgrading your plan takes effect immediately. Downgrading takes effect at the next billing cycle. Admin-granted plans do not carry a Stripe subscription and must be managed manually.</p>
+    </div>
+
+    <div class="legal-section" id="tos-6">
+      <h2>6. Refund Policy</h2>
+      <div class="highlight">We offer a <strong>72-hour refund window</strong> for new subscribers only. If you have not downloaded your loader or used your plan's features within 72 hours of your first payment, you may request a refund by opening a Billing ticket in our Discord server.</div>
+      <p>Refunds are not available for:</p>
+      <ul>
+        <li>Accounts that have already downloaded a loader or made configuration changes.</li>
+        <li>Renewals after the first billing cycle.</li>
+        <li>Accounts that have been banned or blacklisted for violations of these Terms.</li>
+        <li>Partial months after cancellation.</li>
+      </ul>
+      <p>Chargebacks filed with your bank or card issuer without first contacting us will result in an immediate permanent ban and possible debt collection proceedings.</p>
+    </div>
+
+    <div class="legal-section" id="tos-7">
+      <h2>7. Acceptable Use</h2>
+      <p>You agree not to use the Service to:</p>
+      <ul>
+        <li>Violate any applicable law or regulation.</li>
+        <li>Harass, abuse, threaten, or harm any other person.</li>
+        <li>Attempt to gain unauthorised access to other users' accounts or data.</li>
+        <li>Reverse engineer, decompile, or redistribute any part of our scripts or platform.</li>
+        <li>Share, resell, or redistribute your license key or loader to third parties.</li>
+        <li>Use automation to create multiple accounts or abuse the Service.</li>
+        <li>Circumvent any usage limits, plan restrictions, or bans imposed by us.</li>
+      </ul>
+      <div class="warn">⚠️ Users found sharing keys or loaders will be permanently banned without refund.</div>
+    </div>
+
+    <div class="legal-section" id="tos-8">
+      <h2>8. Intellectual Property</h2>
+      <p>All content, scripts, branding, and software comprising Executive Stand are the intellectual property of Executive Stand and its contributors. Your subscription grants you a limited, non-exclusive, non-transferable license to use the Service for personal purposes only.</p>
+      <p>You may not copy, modify, distribute, sell, or lease any part of the Service, nor may you reverse-engineer or extract source code from our scripts.</p>
+    </div>
+
+    <div class="legal-section" id="tos-9">
+      <h2>9. Termination &amp; Bans</h2>
+      <p>We reserve the right to suspend or terminate your access to the Service at any time, with or without notice, for any reason including but not limited to:</p>
+      <ul>
+        <li>Violation of these Terms.</li>
+        <li>Fraudulent payment activity (chargebacks, stolen cards).</li>
+        <li>Harassment of staff or other users.</li>
+        <li>Key or loader sharing.</li>
+        <li>At our sole discretion.</li>
+      </ul>
+      <p>Terminated users are not entitled to a refund. If you believe a ban was issued in error, you may appeal via a ticket in our Discord server.</p>
+    </div>
+
+    <div class="legal-section" id="tos-10">
+      <h2>10. Disclaimers &amp; Limitation of Liability</h2>
+      <p>The Service is provided "as is" and "as available" without warranties of any kind, either express or implied. We do not warrant that the Service will be uninterrupted, error-free, or free from harmful components.</p>
+      <p>To the maximum extent permitted by applicable law, we shall not be liable for any indirect, incidental, special, consequential, or punitive damages, including loss of profits, data, or goodwill, arising out of or in connection with your use of the Service.</p>
+      <p>Our total liability to you for any claims arising under these Terms shall not exceed the amount you paid us in the three months preceding the claim.</p>
+    </div>
+
+    <div class="legal-section" id="tos-11">
+      <h2>11. Changes to Terms</h2>
+      <p>We may update these Terms at any time. We will notify users of material changes via our Discord server and by updating the "Last updated" date above. Continued use of the Service after changes become effective constitutes your acceptance of the revised Terms.</p>
+    </div>
+
+    <div class="legal-section" id="tos-12">
+      <h2>12. Contact</h2>
+      <p>For questions about these Terms, open a support ticket in our Discord server or email us at <code>support@executivestand.gg</code>.</p>
+    </div>
+
+    <hr class="legal-divider">
+    <div style="display:flex;gap:12px;flex-wrap:wrap;">
+      <button class="btn btn-outline btn-sm" onclick="showPage('privacy')">Privacy Policy →</button>
+      <button class="btn btn-outline btn-sm" onclick="showPage('docs')">Documentation →</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════
+     PRIVACY POLICY
+══════════════════════════════════════════ -->
+<div id="privacy" class="page legal-page">
+  <div class="legal-wrap">
+    <div class="legal-back">
+      <button class="btn btn-outline btn-sm" onclick="showPage('landing')">← Back to Home</button>
+    </div>
+    <div class="legal-hero">
+      <div class="legal-badge">Legal</div>
+      <h1>Privacy Policy</h1>
+      <p>Last updated: June 1, 2025 &nbsp;·&nbsp; Effective: June 1, 2025</p>
+    </div>
+
+    <div class="legal-toc">
+      <h4>Table of Contents</h4>
+      <ol>
+        <li><a href="#pp-1">Information We Collect</a></li>
+        <li><a href="#pp-2">How We Use Your Information</a></li>
+        <li><a href="#pp-3">Data Storage &amp; Security</a></li>
+        <li><a href="#pp-4">Third-Party Services</a></li>
+        <li><a href="#pp-5">Data Retention</a></li>
+        <li><a href="#pp-6">Your Rights</a></li>
+        <li><a href="#pp-7">Children's Privacy</a></li>
+        <li><a href="#pp-8">Changes to This Policy</a></li>
+        <li><a href="#pp-9">Contact</a></li>
+      </ol>
+    </div>
+
+    <div class="legal-section" id="pp-1">
+      <h2>1. Information We Collect</h2>
+      <h3>Information you provide directly</h3>
+      <ul>
+        <li><strong>Roblox username</strong> — entered when configuring your stand owner account.</li>
+        <li><strong>Alt account usernames</strong> — entered when linking alt accounts.</li>
+        <li><strong>License key</strong> — provided during setup to authenticate your stand.</li>
+        <li><strong>Configuration preferences</strong> — gun choice, prefix, toggles, animation ID, etc.</li>
+      </ul>
+      <h3>Information collected automatically via Discord OAuth</h3>
+      <ul>
+        <li><strong>Discord User ID</strong> — your unique Discord snowflake, used as your account identifier.</li>
+        <li><strong>Discord username &amp; discriminator</strong> — displayed in the dashboard and admin panel.</li>
+        <li><strong>Discord avatar hash</strong> — used to display your profile picture.</li>
+      </ul>
+      <p>We request only the <code>identify</code> OAuth scope. We do <strong>not</strong> access your Discord messages, servers, friends, or any other data.</p>
+      <h3>Payment information</h3>
+      <p>Payments are processed entirely by <strong>Stripe</strong>. We never see or store your card number, CVV, or full billing address. We receive only a Stripe customer ID, subscription status, and plan type upon successful payment.</p>
+      <h3>Usage data</h3>
+      <p>We may log basic technical information such as timestamps of configuration saves and loader downloads for debugging and abuse prevention. We do not use third-party analytics trackers.</p>
+    </div>
+
+    <div class="legal-section" id="pp-2">
+      <h2>2. How We Use Your Information</h2>
+      <p>We use the information we collect to:</p>
+      <ul>
+        <li>Authenticate you and maintain your session.</li>
+        <li>Store and serve your stand configuration.</li>
+        <li>Generate your personalised StandLoader.lua.</li>
+        <li>Manage your subscription and enforce plan limits.</li>
+        <li>Provide customer support.</li>
+        <li>Detect and prevent fraud, abuse, and ToS violations.</li>
+        <li>Send important service notifications (plan changes, bans, maintenance) via Discord DM where possible.</li>
+      </ul>
+      <p>We do <strong>not</strong> sell, rent, or share your personal data with third parties for marketing purposes.</p>
+    </div>
+
+    <div class="legal-section" id="pp-3">
+      <h2>3. Data Storage &amp; Security</h2>
+      <p>Your configuration data is stored in <strong>Supabase</strong>, a managed PostgreSQL platform hosted on AWS infrastructure. All data is encrypted in transit (TLS 1.2+) and at rest.</p>
+      <p>Access to the database is restricted to our backend service using a service-role key. Row-level security is configured to prevent cross-user data access.</p>
+      <div class="highlight">🔒 We take reasonable technical and organisational measures to protect your data, but no system is 100% secure. Please use a strong Discord password and enable two-factor authentication on your Discord account.</div>
+    </div>
+
+    <div class="legal-section" id="pp-4">
+      <h2>4. Third-Party Services</h2>
+      <p>The Service integrates with the following third-party providers:</p>
+      <ul>
+        <li><strong>Discord</strong> — authentication. <a href="https://discord.com/privacy" style="color:var(--accent2);">Discord Privacy Policy</a></li>
+        <li><strong>Stripe</strong> — payment processing. <a href="https://stripe.com/privacy" style="color:var(--accent2);">Stripe Privacy Policy</a></li>
+        <li><strong>Supabase</strong> — database hosting. <a href="https://supabase.com/privacy" style="color:var(--accent2);">Supabase Privacy Policy</a></li>
+        <li><strong>Render</strong> — backend hosting. <a href="https://render.com/privacy" style="color:var(--accent2);">Render Privacy Policy</a></li>
+      </ul>
+      <p>Each provider operates under their own privacy policy. We only share the minimum data necessary with each provider to deliver the Service.</p>
+    </div>
+
+    <div class="legal-section" id="pp-5">
+      <h2>5. Data Retention</h2>
+      <p>We retain your data for as long as your account is active. If you request account deletion:</p>
+      <ul>
+        <li>Your Discord ID, username, Roblox usernames, and configuration data are deleted within 30 days.</li>
+        <li>Payment records are retained for up to 7 years as required by financial regulations; this data is held by Stripe, not by us.</li>
+        <li>Blacklist entries (Discord ID + reason) may be retained indefinitely to prevent re-registration by banned users.</li>
+      </ul>
+    </div>
+
+    <div class="legal-section" id="pp-6">
+      <h2>6. Your Rights</h2>
+      <p>Depending on your jurisdiction you may have the right to:</p>
+      <ul>
+        <li><strong>Access</strong> — request a copy of the personal data we hold about you.</li>
+        <li><strong>Rectification</strong> — correct inaccurate data (most config data can be changed directly in the dashboard).</li>
+        <li><strong>Deletion</strong> — request that we delete your account and associated data.</li>
+        <li><strong>Portability</strong> — request your data in a machine-readable format.</li>
+        <li><strong>Objection</strong> — object to certain processing activities.</li>
+      </ul>
+      <p>To exercise any of these rights, open a Billing ticket in our Discord server or email <code>privacy@executivestand.gg</code>. We will respond within 30 days.</p>
+    </div>
+
+    <div class="legal-section" id="pp-7">
+      <h2>7. Children's Privacy</h2>
+      <p>The Service is not directed at children under 13. We do not knowingly collect personal data from children under 13. If you believe a child under 13 has provided us with personal data, please contact us and we will delete it promptly.</p>
+    </div>
+
+    <div class="legal-section" id="pp-8">
+      <h2>8. Changes to This Policy</h2>
+      <p>We may update this Privacy Policy from time to time. We will notify users of material changes via our Discord server and by updating the "Last updated" date. Your continued use of the Service after changes become effective constitutes acceptance.</p>
+    </div>
+
+    <div class="legal-section" id="pp-9">
+      <h2>9. Contact</h2>
+      <p>For privacy-related questions or requests, contact us at <code>privacy@executivestand.gg</code> or open a ticket in our Discord server.</p>
+    </div>
+
+    <hr class="legal-divider">
+    <div style="display:flex;gap:12px;flex-wrap:wrap;">
+      <button class="btn btn-outline btn-sm" onclick="showPage('terms')">Terms of Service →</button>
+      <button class="btn btn-outline btn-sm" onclick="showPage('docs')">Documentation →</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════
+     DOCUMENTATION
+══════════════════════════════════════════ -->
+<div id="docs" class="page legal-page" style="padding-top:60px;">
+  <div class="docs-layout">
+    <!-- DOCS SIDEBAR -->
+    <div class="docs-sidebar">
+      <div class="docs-sidebar-label">Getting Started</div>
+      <button class="docs-nav-item active" onclick="switchDoc('intro', this)">Introduction</button>
+      <button class="docs-nav-item" onclick="switchDoc('quickstart', this)">Quick Start</button>
+      <button class="docs-nav-item" onclick="switchDoc('plans', this)">Plans &amp; Features</button>
+
+      <div class="docs-sidebar-label" style="margin-top:10px;">Setup</div>
+      <button class="docs-nav-item" onclick="switchDoc('config', this)">Stand Config</button>
+      <button class="docs-nav-item" onclick="switchDoc('alts', this)">Alt Accounts</button>
+      <button class="docs-nav-item" onclick="switchDoc('loader', this)">Loader &amp; Inject</button>
+      <button class="docs-nav-item" onclick="switchDoc('key', this)">License Keys</button>
+
+      <div class="docs-sidebar-label" style="margin-top:10px;">Reference</div>
+      <button class="docs-nav-item" onclick="switchDoc('commands', this)">Bot Commands</button>
+      <button class="docs-nav-item" onclick="switchDoc('config-ref', this)">Config Reference</button>
+      <button class="docs-nav-item" onclick="switchDoc('friendly-fire', this)">Friendly Fire</button>
+      <button class="docs-nav-item" onclick="switchDoc('games', this)">Supported Games</button>
+      <button class="docs-nav-item" onclick="switchDoc('faq', this)">FAQ</button>
+    </div>
+
+    <!-- DOCS CONTENT -->
+    <div class="docs-content">
+
+      <!-- INTRO -->
+      <div class="doc-section active" id="doc-intro">
+        <h1>Executive Stand Docs</h1>
+        <div class="doc-meta">
+          <span>📅 Updated June 2025</span>
+          <span>⚡ v2.0</span>
+        </div>
+        <p>Welcome to the official Executive Stand documentation. This guide covers everything from first-time setup to advanced configuration and deployment.</p>
+        <div class="callout"><strong>What is Executive Stand?</strong> A subscription-based platform for configuring Roblox Stand scripts across Da Hood and related games. You set up your config once via the web dashboard or Discord bot — your alt accounts pull the config automatically on inject.</div>
+        <h2>How it works</h2>
+        <p>Executive Stand has three layers:</p>
+        <ol>
+          <li><strong>Web Dashboard</strong> — configure your stand, manage alts, download your loader (Premium/Bypass only).</li>
+          <li><strong>Discord Bot</strong> — alternative interface for all plans; run commands to configure, add alts, and get your loader.</li>
+          <li><strong>Lua Scripts</strong> — <code>StandLoader.lua</code> (inject on alts) and <code>StandMain.lua</code> (fetched securely at runtime).</li>
+        </ol>
+        <h2>Architecture overview</h2>
+        <pre><code>Your Browser / Discord
+       │
+       ▼
+  Web Dashboard ──► Supabase DB (stand_configs table)
+  Discord Bot   ──►     │
+                        ▼
+                  StandLoader.lua (generated per-user)
+                        │
+                   inject on Alt
+                        │
+                        ▼
+            StandMain.lua fetched from Render
+            (uses your stored config)</code></pre>
+        <div class="doc-nav-row">
+          <div></div>
+          <button class="doc-nav-btn" onclick="switchDoc('quickstart', null)">
+            <span class="dir">Next →</span>
+            <span class="title">Quick Start</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- QUICKSTART -->
+      <div class="doc-section" id="doc-quickstart">
+        <h1>Quick Start</h1>
+        <div class="doc-meta"><span>⏱ ~5 minutes</span></div>
+        <p>Get from zero to injected in five steps.</p>
+        <h2>Step 1 — Log in</h2>
+        <p>Click <strong>Login with Discord</strong> in the top nav. Authorise the OAuth prompt — we only request your basic profile (<code>identify</code> scope).</p>
+        <h2>Step 2 — Set your Roblox owner</h2>
+        <p>Go to <strong>Stand Config</strong> in the dashboard. Enter your main Roblox username in the <em>Roblox Owner Username</em> field. This is the account that types commands in public chat — <strong>never inject on this account</strong>.</p>
+        <h2>Step 3 — Add your alts</h2>
+        <p>Go to <strong>Alt Accounts</strong>. Enter each alt's Roblox username and assign it a formation slot. Free users can add up to 2 alts; Premium up to 10; Bypass unlimited.</p>
+        <h2>Step 4 — Download your loader</h2>
+        <p>Go to <strong>Loader</strong> and click <em>Download StandLoader.lua</em>. This file contains your personal config embedded and is unique to your account.</p>
+        <h2>Step 5 — Inject &amp; play</h2>
+        <p>Open your executor on an <strong>alt account</strong> in a Da Hood server. Execute <code>StandLoader.lua</code>. Switch to your main and type commands in public chat using your prefix (default: <code>.</code>).</p>
+        <div class="callout danger"><strong>⛔ Never inject on your main account.</strong> The main account controls alts via public chat. Injecting on your main will cause unexpected behaviour.</div>
+        <div class="doc-nav-row">
+          <button class="doc-nav-btn" onclick="switchDoc('intro', null)">
+            <span class="dir">← Previous</span><span class="title">Introduction</span>
+          </button>
+          <button class="doc-nav-btn" onclick="switchDoc('plans', null)">
+            <span class="dir">Next →</span><span class="title">Plans &amp; Features</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- PLANS -->
+      <div class="doc-section" id="doc-plans">
+        <h1>Plans &amp; Features</h1>
+        <div class="doc-meta"><span>💳 Billing via Stripe</span></div>
+        <table>
+          <thead><tr><th>Feature</th><th>Free</th><th>Premium ($8/mo)</th><th>Bypass ($18/mo)</th></tr></thead>
+          <tbody>
+            <tr><td>Discord bot access</td><td>✓</td><td>✓</td><td>✓</td></tr>
+            <tr><td>Basic stand config</td><td>✓</td><td>✓</td><td>✓</td></tr>
+            <tr><td>Web dashboard editor</td><td>✗</td><td>✓</td><td>✓</td></tr>
+            <tr><td>Alt accounts</td><td>Up to 2</td><td>Up to 10</td><td>Unlimited</td></tr>
+            <tr><td>In-game rank</td><td>free</td><td>premium</td><td>bypass</td></tr>
+            <tr><td>Auto mask &amp; armor</td><td>✗</td><td>✓</td><td>✓</td></tr>
+            <tr><td>Muscle size control</td><td>✗</td><td>✓</td><td>✓</td></tr>
+            <tr><td>Infinite ammo (Inf)</td><td>✗</td><td>✗</td><td>✓</td></tr>
+            <tr><td>Character randomizer</td><td>✗</td><td>✗</td><td>✓</td></tr>
+            <tr><td>VIP Discord channel</td><td>✗</td><td>✗</td><td>✓</td></tr>
+            <tr><td>Priority support</td><td>✗</td><td>✓</td><td>✓</td></tr>
+          </tbody>
+        </table>
+        <h2>Admin-granted plans</h2>
+        <p>Staff can assign plans via the Admin Panel without a Stripe subscription. This is used for testers, partners, and comped accounts. Admin-granted plans don't auto-renew and persist until manually changed.</p>
+        <div class="doc-nav-row">
+          <button class="doc-nav-btn" onclick="switchDoc('quickstart', null)">
+            <span class="dir">← Previous</span><span class="title">Quick Start</span>
+          </button>
+          <button class="doc-nav-btn" onclick="switchDoc('config', null)">
+            <span class="dir">Next →</span><span class="title">Stand Config</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- CONFIG -->
+      <div class="doc-section" id="doc-config">
+        <h1>Stand Config</h1>
+        <p>The Stand Config page (Premium/Bypass only) lets you edit all settings that get embedded into your loader. Free users configure via Discord bot commands.</p>
+        <h2>Basic settings</h2>
+        <ul>
+          <li><strong>Owner</strong> — your main Roblox username. Commands typed in public chat with your prefix by this user will control your alts.</li>
+          <li><strong>Key</strong> — your License Hub key. Required for secure loader delivery.</li>
+          <li><strong>Prefix</strong> — the character your main types before commands (default: <code>.</code>). Keep it short and unique.</li>
+          <li><strong>Gun</strong> — the Da Hood item name for your preferred weapon. Must match the exact in-game name.</li>
+          <li><strong>Slot</strong> — the default formation slot alts join when they spawn.</li>
+          <li><strong>Animation ID</strong> — Roblox asset ID for your alt's idle animation.</li>
+        </ul>
+        <h2>Toggles</h2>
+        <ul>
+          <li><strong>Auto Mask</strong> — alts automatically equip a mask when available.</li>
+          <li><strong>Auto Armor</strong> — alts automatically equip armor on spawn.</li>
+          <li><strong>Muscle</strong> — enables custom muscle size for alts.</li>
+          <li><strong>Mute Gun Sounds</strong> — suppresses gun sound effects from alts.</li>
+          <li><strong>Infinite Ammo</strong> — Bypass only. Alts never run out of ammo.</li>
+          <li><strong>Character Randomizer</strong> — Bypass only. Alts get random appearances each spawn.</li>
+        </ul>
+        <div class="callout warn"><strong>⚠️</strong> After saving config, download a fresh loader from the Loader page. Already-injected alts will not pick up config changes until re-injected.</div>
+        <div class="doc-nav-row">
+          <button class="doc-nav-btn" onclick="switchDoc('plans', null)">
+            <span class="dir">← Previous</span><span class="title">Plans &amp; Features</span>
+          </button>
+          <button class="doc-nav-btn" onclick="switchDoc('alts', null)">
+            <span class="dir">Next →</span><span class="title">Alt Accounts</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- ALTS -->
+      <div class="doc-section" id="doc-alts">
+        <h1>Alt Accounts</h1>
+        <p>Alts are the Roblox accounts you inject on. Your main account never needs to be injected — it controls alts through public chat commands.</p>
+        <h2>Formation slots</h2>
+        <table>
+          <thead><tr><th>Slot</th><th>Name</th><th>Behaviour</th></tr></thead>
+          <tbody>
+            <tr><td>1</td><td>Follow</td><td>Alt follows the owner around the map.</td></tr>
+            <tr><td>2</td><td>Surround</td><td>Alts surround the owner in a formation.</td></tr>
+            <tr><td>3</td><td>Line</td><td>Alts line up behind the owner.</td></tr>
+            <tr><td>4</td><td>Free</td><td>Alt acts freely / independently.</td></tr>
+          </tbody>
+        </table>
+        <h2>Alt limits</h2>
+        <ul>
+          <li><strong>Free</strong> — 2 alts maximum.</li>
+          <li><strong>Premium</strong> — 10 alts maximum.</li>
+          <li><strong>Bypass</strong> — Unlimited.</li>
+        </ul>
+        <h2>Controllers</h2>
+        <p>Controllers are additional Roblox usernames (besides your owner) that can command your alts. Add them via the Discord bot with <code>/addcontroller</code> or via the config form. Useful if you share control with a friend.</p>
+        <div class="doc-nav-row">
+          <button class="doc-nav-btn" onclick="switchDoc('config', null)">
+            <span class="dir">← Previous</span><span class="title">Stand Config</span>
+          </button>
+          <button class="doc-nav-btn" onclick="switchDoc('loader', null)">
+            <span class="dir">Next →</span><span class="title">Loader &amp; Inject</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- LOADER -->
+      <div class="doc-section" id="doc-loader">
+        <h1>Loader &amp; Inject</h1>
+        <p>The loader is a personalised Lua script generated from your config. It bootstraps <code>StandMain.lua</code> securely at runtime — your config and key are never stored in plaintext on disk.</p>
+        <h2>Downloading your loader</h2>
+        <ol>
+          <li>Go to the <strong>Loader</strong> tab in the dashboard.</li>
+          <li>Review the preview — confirm your owner name and alts look correct.</li>
+          <li>Click <strong>Download StandLoader.lua</strong>.</li>
+          <li>Re-download after every config change.</li>
+        </ol>
+        <h2>Injection steps</h2>
+        <ol>
+          <li>Join a supported game on your <strong>alt account</strong>.</li>
+          <li>Open your Roblox executor.</li>
+          <li>Load <code>StandLoader.lua</code> and execute it.</li>
+          <li>Wait for the confirmation output in your executor console.</li>
+          <li>Switch to your main account and issue commands using your prefix.</li>
+        </ol>
+        <div class="callout danger"><strong>⛔ NEVER inject the loader on your main account.</strong></div>
+        <h2>Secure delivery</h2>
+        <p>The loader makes an authenticated request to the Render backend to fetch <code>StandMain.lua</code> at runtime. Your license key is verified server-side before the script is returned. This means the full stand source is never embedded in a file sitting on your disk.</p>
+        <div class="doc-nav-row">
+          <button class="doc-nav-btn" onclick="switchDoc('alts', null)">
+            <span class="dir">← Previous</span><span class="title">Alt Accounts</span>
+          </button>
+          <button class="doc-nav-btn" onclick="switchDoc('key', null)">
+            <span class="dir">Next →</span><span class="title">License Keys</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- KEYS -->
+      <div class="doc-section" id="doc-key">
+        <h1>License Keys</h1>
+        <p>License keys authenticate your stand against the backend. Each user has one key tied to their Discord ID.</p>
+        <h2>Getting a key</h2>
+        <p>Keys are assigned automatically when you subscribe via Stripe, or manually by staff after purchase. You can view your current key in <strong>Stand Config → License Key</strong>.</p>
+        <h2>Updating your key</h2>
+        <p>If your key is compromised or needs rotation, use the Discord bot command <code>/setkey</code> or update it in the Config page and re-download your loader.</p>
+        <h2>Key sharing</h2>
+        <div class="callout danger"><strong>⛔ Never share your key.</strong> Keys are tied to your Discord ID. Sharing a key with another user may result in both accounts being permanently banned without refund.</div>
+        <div class="doc-nav-row">
+          <button class="doc-nav-btn" onclick="switchDoc('loader', null)">
+            <span class="dir">← Previous</span><span class="title">Loader &amp; Inject</span>
+          </button>
+          <button class="doc-nav-btn" onclick="switchDoc('commands', null)">
+            <span class="dir">Next →</span><span class="title">Bot Commands</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- COMMANDS -->
+      <div class="doc-section" id="doc-commands">
+        <h1>Bot Commands</h1>
+        <p>All slash commands are available in the Discord server. The user bot handles buyer commands; the staff bot handles moderation and system commands.</p>
+        <h2>User bot — buyer commands</h2>
+        <table>
+          <thead><tr><th>Command</th><th>Description</th><th>Plan</th></tr></thead>
+          <tbody>
+            <tr><td><code>/setuploader</code></td><td>Set your owner username and license key</td><td>All</td></tr>
+            <tr><td><code>/loader</code></td><td>Download your personal StandLoader.lua</td><td>All</td></tr>
+            <tr><td><code>/config</code></td><td>Edit gun, prefix, toggles interactively</td><td>All</td></tr>
+            <tr><td><code>/addalt &lt;username&gt; &lt;slot&gt;</code></td><td>Link a Roblox alt with a formation slot</td><td>All</td></tr>
+            <tr><td><code>/removealt &lt;username&gt;</code></td><td>Unlink an alt</td><td>All</td></tr>
+            <tr><td><code>/mylinks</code></td><td>List all linked alts</td><td>All</td></tr>
+            <tr><td><code>/unlink</code></td><td>Wipe your entire config</td><td>All</td></tr>
+            <tr><td><code>/setkey &lt;key&gt;</code></td><td>Update your license key</td><td>All</td></tr>
+            <tr><td><code>/addcontroller &lt;username&gt;</code></td><td>Add a controller Roblox user</td><td>All</td></tr>
+            <tr><td><code>/removecontroller &lt;username&gt;</code></td><td>Remove a controller</td><td>All</td></tr>
+          </tbody>
+        </table>
+        <h2>Staff bot — system commands</h2>
+        <table>
+          <thead><tr><th>Command</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><code>/status &lt;state&gt;</code></td><td>Set global stand status (up/down/updating/detected)</td></tr>
+            <tr><td><code>/changelog &lt;title&gt; &lt;notes&gt;</code></td><td>Post a changelog embed</td></tr>
+            <tr><td><code>/setrank &lt;user&gt; &lt;rank&gt;</code></td><td>Set a user's in-game rank</td></tr>
+            <tr><td><code>/staffview &lt;user&gt;</code></td><td>View a user's config</td></tr>
+            <tr><td><code>/forceunlink &lt;user&gt;</code></td><td>Wipe a user's config</td></tr>
+            <tr><td><code>/blacklist &lt;user&gt; &lt;reason&gt;</code></td><td>Blacklist a Discord user</td></tr>
+            <tr><td><code>/unblacklist &lt;user&gt;</code></td><td>Remove from blacklist</td></tr>
+            <tr><td><code>/ban / /kick / /timeout</code></td><td>Standard moderation</td></tr>
+            <tr><td><code>/ticketpanel</code></td><td>Post the support ticket panel</td></tr>
+            <tr><td><code>/verifypanel</code></td><td>Post the verification panel</td></tr>
+          </tbody>
+        </table>
+        <div class="doc-nav-row">
+          <button class="doc-nav-btn" onclick="switchDoc('key', null)">
+            <span class="dir">← Previous</span><span class="title">License Keys</span>
+          </button>
+          <button class="doc-nav-btn" onclick="switchDoc('config-ref', null)">
+            <span class="dir">Next →</span><span class="title">Config Reference</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- CONFIG REF -->
+      <div class="doc-section" id="doc-config-ref">
+        <h1>Config Reference</h1>
+        <p>Full reference for all fields in the <code>stand_configs</code> Supabase table's <code>config</code> JSON object.</p>
+        <table>
+          <thead><tr><th>Field</th><th>Type</th><th>Default</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><code>owner</code></td><td>string</td><td><code>""</code></td><td>Main Roblox username that issues commands</td></tr>
+            <tr><td><code>key</code></td><td>string</td><td><code>""</code></td><td>License Hub key for secure delivery</td></tr>
+            <tr><td><code>prefix</code></td><td>string</td><td><code>"."</code></td><td>Public chat command prefix</td></tr>
+            <tr><td><code>gun</code></td><td>string</td><td><code>"[Double-Barrel SG]"</code></td><td>Da Hood item name for preferred weapon</td></tr>
+            <tr><td><code>slot</code></td><td>int 1–4</td><td><code>2</code></td><td>Default formation slot</td></tr>
+            <tr><td><code>anim</code></td><td>string</td><td><code>"rbxassetid://..."</code></td><td>Idle animation asset ID</td></tr>
+            <tr><td><code>char_user</code></td><td>int</td><td><code>1</code></td><td>Character user ID for appearance</td></tr>
+            <tr><td><code>char_random</code></td><td>bool</td><td><code>false</code></td><td>Randomise alt character (Bypass only)</td></tr>
+            <tr><td><code>mute_gun_sounds</code></td><td>bool</td><td><code>true</code></td><td>Suppress alt gun sounds</td></tr>
+            <tr><td><code>auto_mask</code></td><td>bool</td><td><code>true</code></td><td>Auto-equip mask (Premium+)</td></tr>
+            <tr><td><code>auto_armor</code></td><td>bool</td><td><code>true</code></td><td>Auto-equip armor (Premium+)</td></tr>
+            <tr><td><code>muscle</code></td><td>bool</td><td><code>true</code></td><td>Enable muscle size (Premium+)</td></tr>
+            <tr><td><code>muscle_size</code></td><td>int</td><td><code>15000</code></td><td>Muscle size value 1000–50000 (Premium+)</td></tr>
+            <tr><td><code>inf</code></td><td>bool</td><td><code>false</code></td><td>Infinite ammo (Bypass only)</td></tr>
+            <tr><td><code>rank</code></td><td>string</td><td><code>"free"</code></td><td><code>free</code> | <code>premium</code> | <code>bypass</code></td></tr>
+            <tr><td><code>alts</code></td><td>object</td><td><code>{}</code></td><td>Map of <code>{"username": slot}</code></td></tr>
+            <tr><td><code>controllers</code></td><td>array</td><td><code>[]</code></td><td>Additional usernames that can command alts</td></tr>
+          </tbody>
+        </table>
+        <div class="doc-nav-row">
+          <button class="doc-nav-btn" onclick="switchDoc('commands', null)">
+            <span class="dir">← Previous</span><span class="title">Bot Commands</span>
+          </button>
+          <button class="doc-nav-btn" onclick="switchDoc('friendly-fire', null)">
+            <span class="dir">Next →</span><span class="title">Friendly Fire</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- GAMES -->
+      <div class="doc-section" id="doc-games">
+        <h1>Supported Games</h1>
+        <table>
+          <thead><tr><th>Game</th><th>Place ID</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td>Da Hood</td><td><code>2788229376</code></td><td><span style="color:var(--green);">✓ Supported</span></td></tr>
+            <tr><td>DERS HOOD</td><td><code>96247461091106</code></td><td><span style="color:var(--green);">✓ Supported</span></td></tr>
+            <tr><td>Des Hood</td><td><code>128413479081937</code></td><td><span style="color:var(--green);">✓ Supported</span></td></tr>
+            <tr><td>Hood Customs</td><td><code>9825515356</code></td><td><span style="color:var(--green);">✓ Supported</span></td></tr>
+          </tbody>
+        </table>
+        <p>The script auto-detects the place ID on inject and applies appropriate patches. Gun name aliases (e.g. <code>DoubleBarrel</code> for Hood Customs vs <code>[Double-Barrel SG]</code> for Da Hood) are handled automatically.</p>
+        <div class="doc-nav-row">
+          <button class="doc-nav-btn" onclick="switchDoc('friendly-fire', null)">
+            <span class="dir">← Previous</span><span class="title">Friendly Fire</span>
+          </button>
+          <button class="doc-nav-btn" onclick="switchDoc('faq', null)">
+            <span class="dir">Next →</span><span class="title">FAQ</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- FAQ -->
+      <div class="doc-section" id="doc-faq">
+        <h1>Frequently Asked Questions</h1>
+        <h2>Why can't I access the dashboard editor?</h2>
+        <p>The web dashboard config editor requires a Premium or Bypass plan. Free users can configure everything via Discord bot slash commands. See <a href="#" onclick="switchDoc('commands',null)" style="color:var(--accent2);">Bot Commands</a>.</p>
+        <h2>My loader doesn't work after I changed my config.</h2>
+        <p>Config changes don't update an already-injected loader. After saving config, go to the <strong>Loader</strong> tab, re-download, and re-inject on your alt.</p>
+        <h2>The alts aren't responding to my commands.</h2>
+        <ul>
+          <li>Make sure you're typing the command on your <strong>main (owner) account</strong>, not your alts.</li>
+          <li>Confirm the owner username in config exactly matches your Roblox username (case-insensitive).</li>
+          <li>Check the Stand status in our Discord — if it's 🔴 Down or 🔵 Updating, /loader will be blocked.</li>
+          <li>Try re-injecting the loader on the alt.</li>
+        </ul>
+        <h2>My alts are killing each other / killing me.</h2>
+        <p>Make sure <strong>Friendly Fire Prevention</strong> is enabled in Stand Config → Toggles. Then re-download your loader and re-inject on all alts. The friend list is built from your owner, alts, and controllers — all must be linked in the dashboard before generating the loader. See the <a href="#" onclick="switchDoc('friendly-fire',null)" style="color:var(--accent2);">Friendly Fire</a> docs for full details.</p>
+        <h2>Can I use the same loader on multiple alts?</h2>
+        <p>Yes. The same <code>StandLoader.lua</code> can be injected on all your alts simultaneously. They each connect to the same config and obey commands from the same owner.</p>
+        <h2>I got banned — can I appeal?</h2>
+        <p>Open a Billing ticket in our Discord server. Bans for key sharing and chargebacks are generally permanent. Other bans may be appealed within 7 days.</p>
+        <h2>Does Executive Stand work on Mac / mobile?</h2>
+        <p>The web dashboard works on any device. Roblox exploit injection requires a Windows PC with a compatible executor — that is unrelated to Executive Stand itself.</p>
+        <div class="doc-nav-row">
+          <button class="doc-nav-btn" onclick="switchDoc('games', null)">
+            <span class="dir">← Previous</span><span class="title">Supported Games</span>
+          </button>
+          <div></div>
+        </div>
+      </div>
+
+      <!-- FRIENDLY FIRE -->
+      <div class="doc-section" id="doc-friendly-fire">
+        <h1>Friendly Fire Prevention</h1>
+        <div class="doc-meta"><span>⚔️ Keeping your alts from attacking each other</span></div>
+        <p>By default, Da Hood alts injected with the same stand can accidentally target and kill each other if their combat AI is active. Executive Stand prevents this using a <strong>friendly-fire ignore list</strong> built from your config.</p>
+
+        <h2>How it works</h2>
+        <p>When your loader is generated, it embeds the usernames of all your linked alts plus your owner account into a protected <code>FriendList</code> table inside the script. The combat module checks this list before firing at any player — if the target's username is in the list, the alt skips them entirely.</p>
+        <pre><code>-- Automatically generated in your StandLoader.lua:
+StandConfig.FriendList = {
+    "YourOwnerUsername",   -- always included
+    "AltOne",
+    "AltTwo",
+    "AltThree",
+    -- controllers are included too
+}
+
+-- Combat check (inside StandMain.lua):
+local function IsFriend(name)
+    for _, v in ipairs(StandConfig.FriendList) do
+        if v:lower() == name:lower() then
+            return true
+        end
+    end
+    return false
+end
+
+-- Before any attack action:
+if IsFriend(target.Name) then return end</code></pre>
+
+        <h2>What's protected</h2>
+        <ul>
+          <li>Your <strong>owner</strong> username — always added automatically.</li>
+          <li>All <strong>linked alts</strong> from the Alt Accounts tab.</li>
+          <li>All <strong>controllers</strong> from the Controllers tab.</li>
+        </ul>
+        <div class="callout">The friend list is case-insensitive. <code>AltOne</code> and <code>altone</code> are treated the same.</div>
+
+        <h2>Adding extra friends</h2>
+        <p>If you're running with a friend who has their own stand, you can add their username as a Controller so your alts ignore them too — even if they're not part of your config.</p>
+
+        <h2>Re-download after changes</h2>
+        <div class="callout warn"><strong>⚠️ Important:</strong> The friend list is embedded at loader generation time. Any time you add or remove an alt or controller, you must re-download your loader from the <strong>Loader</strong> tab and re-inject on all alts for the updated list to take effect.</div>
+
+        <h2>Troubleshooting</h2>
+        <ul>
+          <li><strong>Alts still attacking each other</strong> — you're running an old loader. Re-download and re-inject.</li>
+          <li><strong>Alt attacking owner</strong> — make sure the Owner field in Stand Config matches your exact Roblox username. Even a trailing space will break the match.</li>
+          <li><strong>Alt attacking a controller</strong> — add the controller in the Controllers tab, save, re-download loader, re-inject.</li>
+        </ul>
+
+        <div class="doc-nav-row">
+          <button class="doc-nav-btn" onclick="switchDoc('config-ref', null)">
+            <span class="dir">← Previous</span><span class="title">Config Reference</span>
+          </button>
+          <button class="doc-nav-btn" onclick="switchDoc('games', null)">
+            <span class="dir">Next →</span><span class="title">Supported Games</span>
+          </button>
+        </div>
+      </div>
+
+    </div><!-- end docs-content -->
+  </div><!-- end docs-layout -->
+</div>
+
+<!-- ══════════════════════════════════════════
+     AUTH PAGE
+══════════════════════════════════════════ -->
+<div id="auth" class="page">
+  <div class="auth-wrap">
+    <div class="auth-card">
+      <div class="logo-icon">⚡</div>
+      <h2>Sign in to Executive</h2>
+      <p>Use your Discord account to log in. Your Discord ID links your Stand config and subscription.</p>
+      <button class="btn btn-discord discord-btn" onclick="loginWithDiscord()">
+        <svg width="20" height="15" viewBox="0 0 71 55" fill="currentColor"><path d="M60.1 4.9A58.5 58.5 0 0 0 45.6.4a40.9 40.9 0 0 0-1.9 3.8 54.2 54.2 0 0 0-16.2 0A40.1 40.1 0 0 0 25.6.4 58.3 58.3 0 0 0 11 4.9C1.6 18.7-1 32.2.3 45.5a58.9 58.9 0 0 0 17.9 9 44.4 44.4 0 0 0 3.8-6.2 38.3 38.3 0 0 1-6-2.9l1.5-1.1a42 42 0 0 0 36 0l1.5 1.1a38.4 38.4 0 0 1-6 2.9 44 44 0 0 0 3.8 6.2 58.7 58.7 0 0 0 17.9-9C72 30.1 68.6 16.7 60.1 4.9ZM23.8 37.5c-3.5 0-6.4-3.2-6.4-7.1s2.8-7.1 6.4-7.1c3.5 0 6.4 3.1 6.3 7.1 0 3.9-2.8 7.1-6.3 7.1Zm23.5 0c-3.5 0-6.4-3.2-6.4-7.1s2.9-7.1 6.4-7.1c3.6 0 6.4 3.1 6.4 7.1 0 3.9-2.8 7.1-6.4 7.1Z"/></svg>
+        Continue with Discord
+      </button>
+      <p class="auth-note">By signing in you agree to our Terms of Service. We only request basic profile access.</p>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════
+     DASHBOARD
+══════════════════════════════════════════ -->
+<div id="dashboard" class="page">
+  <div class="dash-layout">
+    <!-- SIDEBAR -->
+    <div class="sidebar">
+      <div class="sidebar-label">Menu</div>
+      <button class="sidebar-item active" data-section="overview" onclick="switchSection('overview', this)">
+        <span class="sidebar-icon">📊</span> Overview
+      </button>
+      <button class="sidebar-item" data-section="config" onclick="switchSection('config', this)">
+        <span class="sidebar-icon">⚙️</span> Stand Config
+      </button>
+      <button class="sidebar-item" data-section="alts" onclick="switchSection('alts', this)">
+        <span class="sidebar-icon">👥</span> Alt Accounts
+      </button>
+      <button class="sidebar-item" data-section="loader" onclick="switchSection('loader', this)">
+        <span class="sidebar-icon">📦</span> Loader
+      </button>
+      <button class="sidebar-item" data-section="controllers" onclick="switchSection('controllers', this)">
+        <span class="sidebar-icon">🎮</span> Controllers
+      </button>
+      <button class="sidebar-item" data-section="changelog" onclick="switchSection('changelog', this)">
+        <span class="sidebar-icon">📋</span> Changelog
+      </button>
+      <button class="sidebar-item" data-section="subscription" onclick="switchSection('subscription', this)">
+        <span class="sidebar-icon">💳</span> Subscription
+      </button>
+      <button class="sidebar-item" data-section="support" onclick="switchSection('support', this)">
+        <span class="sidebar-icon">🎫</span> Support
+      </button>
+      <div id="adminSidebarItem" class="hidden">
+        <div class="sidebar-label">Staff</div>
+        <button class="sidebar-item" data-section="admin" onclick="switchSection('admin', this)">
+          <span class="sidebar-icon">🛡️</span> Admin Panel
+        </button>
+      </div>
+      <div class="sidebar-spacer"></div>
+      <div class="user-pill" id="sidebarUser">
+        <div class="user-avatar" id="sidebarAvatar">?</div>
+        <div class="user-info">
+          <div class="user-name" id="sidebarName">Loading...</div>
+          <div class="user-plan" id="sidebarPlan">Free</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- CONTENT -->
+    <div class="dash-content">
+
+      <!-- ── OVERVIEW ── -->
+      <div class="dash-section active" id="sec-overview">
+        <div class="dash-header">
+          <h2>Overview</h2>
+          <p id="overviewGreeting">Welcome back!</p>
+        </div>
+
+        <div id="upgradeBannerWrap"></div>
+
+        <div class="stats-row">
+          <div class="stat-card">
+            <div class="label">Plan</div>
+            <div class="val" id="statPlan">Free</div>
+            <div class="sub">current tier</div>
+          </div>
+          <div class="stat-card">
+            <div class="label">Alts Linked</div>
+            <div class="val" id="statAlts">0</div>
+            <div class="sub" id="statAltLimit">of 2 max</div>
+          </div>
+          <div class="stat-card">
+            <div class="label">Roblox Owner</div>
+            <div class="val" style="font-size:16px;" id="statOwner">Not set</div>
+            <div class="sub">primary account</div>
+          </div>
+          <div class="stat-card">
+            <div class="label">Stand Status</div>
+            <div class="val" style="font-size:16px;">
+              <span class="status-badge"><span class="dot dot-green"></span>Online</span>
+            </div>
+            <div class="sub">all systems go</div>
+          </div>
+        </div>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:0;" class="overview-bottom-grid">
+          <div class="card">
+            <div class="card-title">⚡ Quick Actions</div>
+            <div style="display:flex;flex-direction:column;gap:8px;">
+              <button class="btn btn-primary btn-sm w-full" style="justify-content:center;" onclick="switchSection('config', null)">⚙️ Edit Stand Config</button>
+              <button class="btn btn-outline btn-sm w-full" style="justify-content:center;" onclick="switchSection('alts', null)">👥 Manage Alts</button>
+              <button class="btn btn-outline btn-sm w-full" style="justify-content:center;" onclick="switchSection('loader', null)">📦 Download Loader</button>
+              <button class="btn btn-outline btn-sm w-full" style="justify-content:center;" onclick="switchSection('controllers', null)">🎮 Controllers</button>
+              <button class="btn btn-outline btn-sm w-full" style="justify-content:center;" onclick="switchSection('support', null)">🎫 Open a Ticket</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-title">📋 Recent Activity</div>
+            <div id="activityFeed" style="display:flex;flex-direction:column;gap:10px;"></div>
+          </div>
+        </div>
+
+        <div class="card" style="margin-top:16px;">
+          <div class="card-title">🌐 System Status</div>
+          <div id="overviewStatus" style="display:flex;align-items:center;gap:10px;padding:10px 0;"></div>
+          <div style="font-size:13px;color:var(--text3);margin-top:4px;">Join our <a href="#" style="color:var(--accent2);">Discord</a> for real-time updates and announcements.</div>
+        </div>
+      </div>
+
+      <!-- ── STAND CONFIG ── -->
+      <div class="dash-section" id="sec-config">
+        <div class="dash-header">
+          <h2>Stand Configuration</h2>
+          <p>Configure your stand settings. Changes are saved to Supabase and reflected in your loader.</p>
+        </div>
+
+        <div id="configLockedBanner" class="upgrade-banner hidden">
+          <div>
+            <h3>🔒 Dashboard requires Premium or Bypass</h3>
+            <p>Upgrade your plan to edit your config from the web. Free users use Discord bot commands.</p>
+          </div>
+          <button class="btn btn-primary" onclick="switchSection('subscription', null)">Upgrade Now</button>
+        </div>
+
+        <div id="configEditor">
+          <div class="card mb-4">
+            <div class="card-title">🔧 Basic Settings</div>
+            <div class="form-grid">
+              <div class="form-group">
+                <label>Roblox Owner Username</label>
+                <input type="text" id="cfgOwner" placeholder="YourRobloxUsername">
+              </div>
+              <div class="form-group">
+                <label>License Key</label>
+                <input type="text" id="cfgKey" placeholder="xxxx-xxxx-xxxx-xxxx">
+              </div>
+              <div class="form-group">
+                <label>Command Prefix</label>
+                <input type="text" id="cfgPrefix" placeholder="." maxlength="3">
+              </div>
+              <div class="form-group">
+                <label>Gun (Da Hood name)</label>
+                <select id="cfgGun">
+                  <option value="[Double-Barrel SG]">[Double-Barrel SG]</option>
+                  <option value="[Remington]">[Remington]</option>
+                  <option value="[Uzi]">[Uzi]</option>
+                  <option value="[AK47]">[AK47]</option>
+                  <option value="[M4A1]">[M4A1]</option>
+                  <option value="[Glock]">[Glock]</option>
+                  <option value="[Desert Eagle]">[Desert Eagle]</option>
+                  <option value="[MP5]">[MP5]</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label>Formation Slot</label>
+                <select id="cfgSlot">
+                  <option value="1">1 — Follow</option>
+                  <option value="2" selected>2 — Surround</option>
+                  <option value="3">3 — Line</option>
+                  <option value="4">4 — Free</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label>Animation ID</label>
+                <input type="text" id="cfgAnim" placeholder="rbxassetid://125405104081365">
+              </div>
+            </div>
+          </div>
+
+          <div class="card mb-4">
+            <div class="card-title">💪 Muscle & Character</div>
+            <div class="form-grid" style="margin-bottom:16px;">
+              <div class="form-group">
+                <label>Muscle Size (<span id="muscleVal">15000</span>)</label>
+                <input type="range" id="cfgMuscle" min="1000" max="50000" step="500" value="15000" oninput="document.getElementById('muscleVal').textContent=this.value">
+              </div>
+              <div class="form-group">
+                <label>Character User ID</label>
+                <input type="number" id="cfgCharUser" placeholder="1" min="1">
+              </div>
+            </div>
+          </div>
+
+          <div class="card mb-4">
+            <div class="card-title">🔄 Toggles</div>
+            <div class="toggle-row">
+              <div class="toggle-info">
+                <div class="tname">Auto Mask</div>
+                <div class="tdesc">Automatically equip mask when available</div>
+              </div>
+              <label class="toggle"><input type="checkbox" id="togMask" checked><span class="toggle-track"></span></label>
+            </div>
+            <div class="toggle-row">
+              <div class="toggle-info">
+                <div class="tname">Auto Armor</div>
+                <div class="tdesc">Automatically equip armor on spawn</div>
+              </div>
+              <label class="toggle"><input type="checkbox" id="togArmor" checked><span class="toggle-track"></span></label>
+            </div>
+            <div class="toggle-row">
+              <div class="toggle-info">
+                <div class="tname">Muscle</div>
+                <div class="tdesc">Enable custom muscle size for alts</div>
+              </div>
+              <label class="toggle"><input type="checkbox" id="togMuscle" checked><span class="toggle-track"></span></label>
+            </div>
+            <div class="toggle-row">
+              <div class="toggle-info">
+                <div class="tname">Mute Gun Sounds</div>
+                <div class="tdesc">Suppress alt gun sound effects</div>
+              </div>
+              <label class="toggle"><input type="checkbox" id="togMute" checked><span class="toggle-track"></span></label>
+            </div>
+            <div class="toggle-row">
+              <div class="toggle-info">
+                <div class="tname">Friendly Fire Prevention</div>
+                <div class="tdesc">Alts will never attack your owner, other alts, or controllers</div>
+              </div>
+              <label class="toggle"><input type="checkbox" id="togFriendly" checked><span class="toggle-track"></span></label>
+            </div>
+            <div class="toggle-row" id="togInfRow">
+              <div class="toggle-info">
+                <div class="tname">Infinite Ammo <span class="plan-badge plan-bypass">Bypass</span></div>
+                <div class="tdesc">Unlimited ammo — Bypass plan required</div>
+              </div>
+              <label class="toggle"><input type="checkbox" id="togInf"><span class="toggle-track"></span></label>
+            </div>
+            <div class="toggle-row" id="togRandRow">
+              <div class="toggle-info">
+                <div class="tname">Character Randomizer <span class="plan-badge plan-bypass">Bypass</span></div>
+                <div class="tdesc">Randomize alt character appearances</div>
+              </div>
+              <label class="toggle"><input type="checkbox" id="togRand"><span class="toggle-track"></span></label>
+            </div>
+          </div>
+
+          <button class="btn btn-primary" onclick="saveConfig()">Save Configuration</button>
+        </div>
+      </div>
+
+      <!-- ── ALTS ── -->
+      <div class="dash-section" id="sec-alts">
+        <div class="dash-header">
+          <h2>Alt Accounts</h2>
+          <p>Manage your linked Roblox alt accounts and their formation slots.</p>
+        </div>
+
+        <div class="card mb-4">
+          <div class="card-title">➕ Add Alt</div>
+          <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;">
+            <div class="form-group" style="flex:1;min-width:180px;">
+              <label>Roblox Username</label>
+              <input type="text" id="newAltName" placeholder="AltUsername123">
+            </div>
+            <div class="form-group" style="width:160px;">
+              <label>Formation Slot</label>
+              <select id="newAltSlot">
+                <option value="1">1 — Follow</option>
+                <option value="2" selected>2 — Surround</option>
+                <option value="3">3 — Line</option>
+                <option value="4">4 — Free</option>
+              </select>
+            </div>
+            <button class="btn btn-primary" onclick="addAlt()">Add Alt</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">👥 Linked Alts</div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Username</th>
+                  <th>Slot</th>
+                  <th>Slot Name</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody id="altsTableBody">
+                <tr><td colspan="4" style="color:var(--text3);text-align:center;padding:24px;">No alts linked yet. Add one above.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── LOADER ── -->
+      <div class="dash-section" id="sec-loader">
+        <div class="dash-header">
+          <h2>Loader</h2>
+          <p>Download your personalised StandLoader.lua and inject it on your alt accounts.</p>
+        </div>
+
+        <div class="card mb-4">
+          <div class="card-title">📦 Your Loader</div>
+          <p style="font-size:14px;color:var(--text2);margin-bottom:16px;">
+            Your loader is generated from your current configuration. Inject it on <strong>alts only</strong> — your main account controls via public chat using your prefix.
+          </p>
+          <div style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:16px;font-family:monospace;font-size:13px;color:var(--text2);margin-bottom:16px;white-space:pre-wrap;max-height:220px;overflow-y:auto;" id="loaderPreview">-- Loading preview...</div>
+          <button class="btn btn-primary" onclick="downloadLoader()">⬇ Download StandLoader.lua</button>
+          <button class="btn btn-outline" style="margin-left:10px;" onclick="copyLoader()">📋 Copy to Clipboard</button>
+        </div>
+
+        <div class="card">
+          <div class="card-title">ℹ️ Inject Instructions</div>
+          <ol style="font-size:14px;color:var(--text2);display:flex;flex-direction:column;gap:10px;padding-left:20px;">
+            <li>Download your StandLoader.lua above.</li>
+            <li>Open your Roblox executor on the alt account you want to control.</li>
+            <li>Load and execute the StandLoader.lua file.</li>
+            <li>Switch to your main account and type commands in public chat using your prefix (default: <code style="background:var(--bg3);padding:1px 5px;border-radius:4px;">.</code>).</li>
+            <li><strong>Never inject on your main account.</strong></li>
+          </ol>
+        </div>
+      </div>
+
+      <!-- ── SUBSCRIPTION ── -->
+      <div class="dash-section" id="sec-subscription">
+        <div class="dash-header">
+          <h2>Subscription</h2>
+          <p>Manage your plan and billing.</p>
+        </div>
+
+        <div class="card mb-4" id="currentPlanCard">
+          <div class="card-title">💳 Current Plan</div>
+          <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">
+            <div>
+              <div style="font-size:22px;font-weight:800;" id="subPlanName">Free</div>
+              <div style="font-size:14px;color:var(--text2);margin-top:4px;" id="subPlanDesc">Basic access with Discord bot</div>
+            </div>
+            <div id="subActions"></div>
+          </div>
+        </div>
+
+        <div class="pricing-grid">
+          <div class="price-card">
+            <div class="price-name">Free</div>
+            <div class="price-amount"><sup>$</sup>0</div>
+            <div class="price-period">forever</div>
+            <ul class="price-feats">
+              <li>Discord bot</li>
+              <li>Basic config</li>
+              <li>2 alts max</li>
+            </ul>
+            <button class="btn btn-outline w-full" disabled id="freePlanBtn">Current Plan</button>
+          </div>
+          <div class="price-card featured">
+            <div class="price-name">Premium</div>
+            <div class="price-amount"><sup>$</sup>8</div>
+            <div class="price-period">per month</div>
+            <ul class="price-feats">
+              <li>Web dashboard</li>
+              <li>10 alts</li>
+              <li>Premium rank</li>
+            </ul>
+            <button class="btn btn-primary w-full" id="premiumPlanBtn" onclick="initiateCheckout('premium')">Upgrade</button>
+          </div>
+          <div class="price-card">
+            <div class="price-name" style="color:var(--gold);">Bypass</div>
+            <div class="price-amount" style="color:var(--gold);"><sup>$</sup>18</div>
+            <div class="price-period">per month</div>
+            <ul class="price-feats">
+              <li>Bypass rank</li>
+              <li>Unlimited alts</li>
+              <li>All features</li>
+            </ul>
+            <button class="btn btn-gold w-full" id="bypassPlanBtn" onclick="initiateCheckout('bypass')">Upgrade</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── CONTROLLERS ── -->
+      <div class="dash-section" id="sec-controllers">
+        <div class="dash-header">
+          <h2>Controllers</h2>
+          <p>Controllers are additional Roblox usernames (besides your owner) that can command your alts in public chat.</p>
+        </div>
+        <div class="card mb-4">
+          <div class="card-title">➕ Add Controller</div>
+          <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;">
+            <div class="form-group" style="flex:1;min-width:200px;">
+              <label>Roblox Username</label>
+              <input type="text" id="newCtrlName" placeholder="FriendRobloxName">
+            </div>
+            <button class="btn btn-primary" onclick="addController()">Add Controller</button>
+          </div>
+          <p style="font-size:13px;color:var(--text3);margin-top:12px;">Controllers can type commands using your prefix in public chat, just like your main owner account. Useful for playing with a friend who also needs to control your alts.</p>
+        </div>
+        <div class="card">
+          <div class="card-title">🎮 Active Controllers</div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Roblox Username</th><th>Added</th><th>Action</th></tr></thead>
+              <tbody id="controllersTableBody">
+                <tr><td colspan="3" style="color:var(--text3);text-align:center;padding:24px;">No controllers added. Your alts only respond to your owner account.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── CHANGELOG ── -->
+      <div class="dash-section" id="sec-changelog">
+        <div class="dash-header">
+          <h2>Changelog</h2>
+          <p>Latest updates and patch notes for Executive Stand.</p>
+        </div>
+        <div id="changelogFeed" style="display:flex;flex-direction:column;gap:16px;"></div>
+      </div>
+
+      <!-- ── SUPPORT ── -->
+      <div class="dash-section" id="sec-support">
+        <div class="dash-header">
+          <h2>Support</h2>
+          <p>Get help with your stand, billing, or anything else.</p>
+        </div>
+
+        <div class="stats-row" style="margin-bottom:24px;">
+          <div class="stat-card" style="cursor:pointer;" onclick="openTicket('general')">
+            <div class="label">General Support</div>
+            <div class="val" style="font-size:18px;">💬</div>
+            <div class="sub">Questions &amp; help</div>
+          </div>
+          <div class="stat-card" style="cursor:pointer;" onclick="openTicket('billing')">
+            <div class="label">Billing</div>
+            <div class="val" style="font-size:18px;">💳</div>
+            <div class="sub">Plans &amp; payments</div>
+          </div>
+          <div class="stat-card" style="cursor:pointer;" onclick="openTicket('bug')">
+            <div class="label">Bug Report</div>
+            <div class="val" style="font-size:18px;">🐛</div>
+            <div class="sub">Something broken?</div>
+          </div>
+          <div class="stat-card" style="cursor:pointer;" onclick="openTicket('appeal')">
+            <div class="label">Appeal</div>
+            <div class="val" style="font-size:18px;">⚖️</div>
+            <div class="sub">Contest a ban</div>
+          </div>
+        </div>
+
+        <div class="card mb-4">
+          <div class="card-title">🎫 Open a Ticket</div>
+          <p style="font-size:14px;color:var(--text2);margin-bottom:16px;">Tickets are handled in our Discord server. Click a category above or fill in the form below and we'll direct you to the right channel.</p>
+          <div class="form-grid" style="margin-bottom:16px;">
+            <div class="form-group">
+              <label>Ticket Category</label>
+              <select id="ticketCategory">
+                <option value="general">General Support</option>
+                <option value="billing">Billing / Refund</option>
+                <option value="bug">Bug Report</option>
+                <option value="appeal">Ban Appeal</option>
+                <option value="feature">Feature Request</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Priority</label>
+              <select id="ticketPriority">
+                <option value="low">Low — not urgent</option>
+                <option value="medium" selected>Medium — normal</option>
+                <option value="high">High — urgent issue</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-group mb-4" style="margin-bottom:12px;">
+            <label>Subject</label>
+            <input type="text" id="ticketSubject" placeholder="Briefly describe your issue…">
+          </div>
+          <div class="form-group mb-4" style="margin-bottom:16px;">
+            <label>Details</label>
+            <textarea id="ticketBody" placeholder="Provide as much detail as possible. Include your Discord ID, Roblox username, and any error messages." style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:9px 12px;color:var(--text);font-size:14px;width:100%;min-height:120px;resize:vertical;outline:none;font-family:var(--font);"></textarea>
+          </div>
+          <button class="btn btn-primary" onclick="submitTicket()">Submit Ticket</button>
+        </div>
+
+        <div class="card mb-4">
+          <div class="card-title">📌 My Tickets</div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>#</th><th>Subject</th><th>Category</th><th>Status</th><th>Opened</th></tr></thead>
+              <tbody id="myTicketsTable">
+                <tr><td colspan="5" style="color:var(--text3);text-align:center;padding:20px;">No tickets yet.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">❓ Common Issues</div>
+          <div style="display:flex;flex-direction:column;gap:0;">
+            <div class="faq-item" onclick="toggleFaq(this)" style="border-bottom:1px solid var(--border);padding:14px 0;cursor:pointer;">
+              <div style="display:flex;justify-content:space-between;align-items:center;">
+                <span style="font-size:14px;font-weight:600;">Alts not responding to commands</span>
+                <span class="faq-arrow" style="color:var(--text3);font-size:12px;">▼</span>
+              </div>
+              <div class="faq-body" style="display:none;font-size:13px;color:var(--text2);margin-top:10px;line-height:1.65;">Make sure you are typing commands on your <strong>main/owner</strong> account, not on the alt. Confirm the owner username in config exactly matches your Roblox name. Re-inject after any config changes.</div>
+            </div>
+            <div class="faq-item" onclick="toggleFaq(this)" style="border-bottom:1px solid var(--border);padding:14px 0;cursor:pointer;">
+              <div style="display:flex;justify-content:space-between;align-items:center;">
+                <span style="font-size:14px;font-weight:600;">Loader download is blocked / 403</span>
+                <span class="faq-arrow" style="color:var(--text3);font-size:12px;">▼</span>
+              </div>
+              <div class="faq-body" style="display:none;font-size:13px;color:var(--text2);margin-top:10px;line-height:1.65;">The Stand status may be set to Down or Updating. Check the System Status card on the Overview tab or the status channel in our Discord.</div>
+            </div>
+            <div class="faq-item" onclick="toggleFaq(this)" style="border-bottom:1px solid var(--border);padding:14px 0;cursor:pointer;">
+              <div style="display:flex;justify-content:space-between;align-items:center;">
+                <span style="font-size:14px;font-weight:600;">I upgraded but my plan didn't change</span>
+                <span class="faq-arrow" style="color:var(--text3);font-size:12px;">▼</span>
+              </div>
+              <div class="faq-body" style="display:none;font-size:13px;color:var(--text2);margin-top:10px;line-height:1.65;">Log out and log back in with Discord to refresh your plan. If the issue persists after 5 minutes, open a Billing ticket with your Stripe receipt.</div>
+            </div>
+            <div class="faq-item" onclick="toggleFaq(this)" style="border-bottom:1px solid var(--border);padding:14px 0;cursor:pointer;">
+              <div style="display:flex;justify-content:space-between;align-items:center;">
+                <span style="font-size:14px;font-weight:600;">My key says "invalid" in-game</span>
+                <span class="faq-arrow" style="color:var(--text3);font-size:12px;">▼</span>
+              </div>
+              <div class="faq-body" style="display:none;font-size:13px;color:var(--text2);margin-top:10px;line-height:1.65;">Go to Stand Config, verify the license key field is filled in correctly, save config, and re-download your loader. Keys are case-sensitive.</div>
+            </div>
+            <div class="faq-item" onclick="toggleFaq(this)" style="padding:14px 0;cursor:pointer;">
+              <div style="display:flex;justify-content:space-between;align-items:center;">
+                <span style="font-size:14px;font-weight:600;">Can I get a refund?</span>
+                <span class="faq-arrow" style="color:var(--text3);font-size:12px;">▼</span>
+              </div>
+              <div class="faq-body" style="display:none;font-size:13px;color:var(--text2);margin-top:10px;line-height:1.65;">We offer a 72-hour refund window for new subscribers who have not yet downloaded their loader. See our <button onclick="showPage('terms')" style="background:none;border:none;color:var(--accent2);cursor:pointer;font-size:13px;padding:0;">Terms of Service</button> for full details. Open a Billing ticket to request one.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── ADMIN ── -->
+      <div class="dash-section" id="sec-admin">
+        <div class="dash-header">
+          <h2>Admin Panel</h2>
+          <p>Manage users, plans, keys, and system status.</p>
+        </div>
+
+        <div class="admin-tabs">
+          <button class="admin-tab active" onclick="switchAdminTab('users', this)">Users</button>
+          <button class="admin-tab" onclick="switchAdminTab('keys', this)">Keys</button>
+          <button class="admin-tab" onclick="switchAdminTab('status', this)">Status</button>
+          <button class="admin-tab" onclick="switchAdminTab('blacklist', this)">Blacklist</button>
+          <button class="admin-tab" onclick="switchAdminTab('analytics', this)">Analytics</button>
+        </div>
+
+        <!-- USERS -->
+        <div class="admin-panel active" id="ap-users">
+          <div style="display:flex;gap:12px;margin-bottom:16px;flex-wrap:wrap;">
+            <input type="text" id="userSearch" placeholder="Search by Discord ID or username…" style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:9px 14px;color:var(--text);font-size:14px;flex:1;min-width:200px;outline:none;" oninput="filterUsers()">
+            <select id="userPlanFilter" onchange="filterUsers()" style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:9px 14px;color:var(--text);font-size:14px;outline:none;">
+              <option value="">All Plans</option>
+              <option value="free">Free</option>
+              <option value="premium">Premium</option>
+              <option value="bypass">Bypass</option>
+            </select>
+          </div>
+          <div class="card">
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Discord</th>
+                    <th>Roblox Owner</th>
+                    <th>Plan</th>
+                    <th>Alts</th>
+                    <th>Joined</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="adminUsersTable"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- KEYS -->
+        <div class="admin-panel" id="ap-keys">
+          <div style="display:flex;gap:12px;margin-bottom:16px;flex-wrap:wrap;align-items:flex-end;">
+            <div class="form-group" style="flex:1;min-width:200px;">
+              <label>Add Key to Stock</label>
+              <input type="text" id="newKeyVal" placeholder="xxxx-xxxx-xxxx-xxxx">
+            </div>
+            <div class="form-group" style="width:160px;">
+              <label>Product</label>
+              <select id="newKeyProduct">
+                <option value="stand">Stand (Free)</option>
+                <option value="premium">Premium</option>
+                <option value="bypass">Bypass</option>
+              </select>
+            </div>
+            <button class="btn btn-primary" onclick="addKey()">Add Key</button>
+          </div>
+          <div class="card">
+            <div class="card-title">🔑 Key Stock</div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr><th>Key</th><th>Product</th><th>Status</th><th>Assigned To</th><th>Actions</th></tr>
+                </thead>
+                <tbody id="keysTable"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- STATUS -->
+        <div class="admin-panel" id="ap-status">
+          <div class="card mb-4">
+            <div class="card-title">🟢 System Status</div>
+            <p style="font-size:14px;color:var(--text2);margin-bottom:16px;">Set the global Stand status. Down/Updating blocks user /loader access.</p>
+            <div style="display:flex;gap:10px;flex-wrap:wrap;">
+              <button class="btn" style="background:rgba(34,197,94,.15);color:var(--green);border:1px solid var(--green);" onclick="setStatus('up')">🟢 Set Online</button>
+              <button class="btn" style="background:rgba(239,68,68,.15);color:var(--red);border:1px solid var(--red);" onclick="setStatus('down')">🔴 Set Down</button>
+              <button class="btn" style="background:rgba(91,106,245,.15);color:var(--accent2);border:1px solid var(--accent);" onclick="setStatus('updating')">🔵 Set Updating</button>
+              <button class="btn" style="background:rgba(240,180,41,.15);color:var(--gold);border:1px solid var(--gold);" onclick="setStatus('detected')">🟡 Set Detected</button>
+            </div>
+            <div style="margin-top:16px;padding:14px;background:var(--bg3);border-radius:8px;font-size:14px;">
+              Current: <strong id="currentStatusLabel" style="color:var(--green);">🟢 Online</strong>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-title">📋 Post Changelog</div>
+            <div class="form-group mb-4" style="margin-bottom:12px;">
+              <label>Version / Title</label>
+              <input type="text" id="changelogTitle" placeholder="v2.1.0 — Feature update">
+            </div>
+            <div class="form-group mb-4" style="margin-bottom:12px;">
+              <label>Notes</label>
+              <textarea id="changelogNotes" placeholder="- Fixed auto armor&#10;- Added new gun support" style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:9px 12px;color:var(--text);font-size:14px;width:100%;min-height:100px;resize:vertical;outline:none;font-family:var(--font);"></textarea>
+            </div>
+            <button class="btn btn-primary" onclick="postChangelog()">Post Changelog</button>
+          </div>
+        </div>
+
+        <!-- BLACKLIST -->
+        <div class="admin-panel" id="ap-blacklist">
+          <div class="card mb-4">
+            <div class="card-title">🚫 Blacklist User</div>
+            <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;">
+              <div class="form-group" style="flex:1;min-width:180px;">
+                <label>Discord ID</label>
+                <input type="text" id="blDiscordId" placeholder="123456789012345678">
+              </div>
+              <div class="form-group" style="flex:1;min-width:180px;">
+                <label>Reason</label>
+                <input type="text" id="blReason" placeholder="Chargeback, abuse…">
+              </div>
+              <button class="btn btn-danger" onclick="blacklistUser()">Blacklist</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-title">🚫 Blacklisted Users</div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Discord ID</th><th>Reason</th><th>Date</th><th>Actions</th></tr></thead>
+                <tbody id="blacklistTable"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- ANALYTICS -->
+        <div class="admin-panel" id="ap-analytics">
+          <div class="stats-row">
+            <div class="stat-card">
+              <div class="label">Total Users</div>
+              <div class="val" id="aTotalUsers">—</div>
+            </div>
+            <div class="stat-card">
+              <div class="label">Premium Subs</div>
+              <div class="val" id="aPremium">—</div>
+            </div>
+            <div class="stat-card">
+              <div class="label">Bypass Subs</div>
+              <div class="val" id="aBypass">—</div>
+            </div>
+            <div class="stat-card">
+              <div class="label">Est. MRR</div>
+              <div class="val" id="aMRR">—</div>
+            </div>
+            <div class="stat-card">
+              <div class="label">Keys in Stock</div>
+              <div class="val" id="aKeys">—</div>
+            </div>
+            <div class="stat-card">
+              <div class="label">Blacklisted</div>
+              <div class="val" id="aBlacklist">—</div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-title">Recent Signups</div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Discord</th><th>Plan</th><th>Date</th></tr></thead>
+                <tbody id="recentSignups"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+      </div>
+      <!-- end admin -->
+
+    </div>
+    <!-- end dash-content -->
+  </div>
+</div>
+
+<!-- SAVE BAR -->
+<div class="save-bar" id="saveBar">
+  <span>⚡ Unsaved changes</span>
+  <button class="btn btn-primary btn-sm" onclick="saveConfig()">Save Now</button>
+  <button class="btn btn-outline btn-sm" onclick="discardChanges()">Discard</button>
+</div>
+
+<!-- TOAST -->
+<div class="toast" id="toast">
+  <span id="toastIcon">✓</span>
+  <span id="toastMsg">Saved!</span>
+</div>
+
+<!-- PLAN MODAL (Stripe) -->
+<div class="modal-overlay" id="checkoutModal" onclick="closeModal('checkoutModal')">
+  <div class="modal" onclick="event.stopPropagation()">
+    <h3 id="checkoutTitle">Upgrade to Premium</h3>
+    <p id="checkoutDesc">Unlock web dashboard, 10 alts, and Premium rank in-game for $8/month.</p>
+    <div style="background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:20px;font-size:14px;color:var(--text2);">
+      <strong style="color:var(--text);display:block;margin-bottom:8px;">💳 Payment via Stripe</strong>
+      You'll be redirected to Stripe's secure checkout. Add your card, and your plan activates instantly after payment confirmation.
+      <br><br>
+      <strong style="color:var(--text);">Integration note for deployment:</strong><br>
+      In production, replace <code style="font-size:12px;background:var(--bg2);padding:2px 6px;border-radius:4px;">STRIPE_PUBLIC_KEY</code> and create Stripe Price IDs for each plan. The backend webhook at <code style="font-size:12px;background:var(--bg2);padding:2px 6px;border-radius:4px;">/api/stripe-webhook</code> updates the user's plan in Supabase on <code style="font-size:12px;background:var(--bg2);padding:2px 6px;border-radius:4px;">checkout.session.completed</code>.
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeModal('checkoutModal')">Cancel</button>
+      <button class="btn btn-primary" id="checkoutBtn" onclick="goToStripe()">Go to Checkout →</button>
+    </div>
+  </div>
+</div>
+
+<!-- SET PLAN MODAL (admin) -->
+<div class="modal-overlay" id="setPlanModal" onclick="closeModal('setPlanModal')">
+  <div class="modal" onclick="event.stopPropagation()">
+    <h3>Set User Plan</h3>
+    <p id="setPlanUserLabel">Set plan for user</p>
+    <div class="form-group mb-4" style="margin-bottom:16px;">
+      <label>Plan</label>
+      <select id="setPlanSelect">
+        <option value="free">Free</option>
+        <option value="premium">Premium</option>
+        <option value="bypass">Bypass</option>
+      </select>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeModal('setPlanModal')">Cancel</button>
+      <button class="btn btn-primary" onclick="confirmSetPlan()">Apply Plan</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ═══════════════════════════════════════════════════════
+//  STATE + API CLIENT
+// ═══════════════════════════════════════════════════════
+let state = {
+  user: null,       // { id, username, plan, is_admin, ... }
+  config: null,     // stand config object
+  users: [],        // admin: all users
+  keys: [],         // admin: key stock
+  blacklist: [],    // admin: blacklist
+  currentPlan: null,
+  setPlanTargetId: null,
+  token: null,
+};
+
+const SLOT_NAMES = {1:'Follow', 2:'Surround', 3:'Line', 4:'Free', 5:'Far Left', 6:'High Back'};
+const DEMO_STATUS = { status: 'up' };
+const API_BASE = ''; // same origin
+
+function getToken() {
+  if (state.token) return state.token;
+  try { return localStorage.getItem('es_token') || ''; } catch(e) { return ''; }
+}
+function setToken(t) {
+  state.token = t || null;
+  try {
+    if (t) localStorage.setItem('es_token', t);
+    else localStorage.removeItem('es_token');
+  } catch(e) {}
+}
+async function api(path, opts = {}) {
+  const headers = Object.assign({ 'Accept': 'application/json' }, opts.headers || {});
+  const tok = getToken();
+  if (tok) headers['Authorization'] = 'Bearer ' + tok;
+  if (opts.body && typeof opts.body === 'object' && !(opts.body instanceof FormData)) {
+    headers['Content-Type'] = 'application/json';
+    opts = Object.assign({}, opts, { body: JSON.stringify(opts.body) });
+  }
+  const res = await fetch(API_BASE + path, Object.assign({}, opts, { headers, credentials: 'same-origin' }));
+  const ct = res.headers.get('content-type') || '';
+  let data = null;
+  if (ct.includes('application/json')) {
+    data = await res.json();
+  } else {
+    data = await res.text();
+  }
+  if (res.status === 401) {
+    setToken(null);
+    state.user = null;
+    updateNavUser();
+    throw new Error((data && data.error) || 'not authenticated');
+  }
+  if (!res.ok) {
+    const msg = (data && data.error) || (typeof data === 'string' ? data : res.statusText);
+    throw new Error(msg || ('HTTP ' + res.status));
+  }
+  return data;
+}
+
+// ═══════════════════════════════════════════════════════
+//  ROUTING
+// ═══════════════════════════════════════════════════════
+function showPage(page) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.getElementById(page).classList.add('active');
+  window.scrollTo(0,0);
+}
+
+function scrollToSection(id) {
+  showPage('landing');
+  setTimeout(() => {
+    const el = document.getElementById(id);
+    if (el) el.scrollIntoView({ behavior: 'smooth' });
+  }, 50);
+}
+
+// ═══════════════════════════════════════════════════════
+//  AUTH
+// ═══════════════════════════════════════════════════════
+function loginWithDiscord() {
+  showToast('Redirecting to Discord…', 'info');
+  // Real OAuth — backend handles callback and redirects back with #token=
+  window.location.href = API_BASE + '/auth/discord';
+}
+
+async function bootstrapSession() {
+  // Capture token from OAuth redirect hash
+  const hash = window.location.hash || '';
+  if (hash.includes('token=')) {
+    const params = new URLSearchParams(hash.replace(/^#/, ''));
+    const t = params.get('token');
+    if (t) {
+      setToken(t);
+      history.replaceState(null, '', window.location.pathname + window.location.search);
+    }
+  }
+  if (!getToken()) return false;
+  try {
+    const data = await api('/api/me');
+    if (data && data.user) {
+      await hydrateFromServer(data.user);
+      return true;
+    }
+  } catch (e) {
+    console.warn('session restore failed', e);
+    setToken(null);
+  }
+  return false;
+}
+
+async function hydrateFromServer(user) {
+  // load full config
+  let cfg = null;
+  try {
+    const data = await api('/api/config');
+    if (data.config) cfg = data.config;
+    if (data.user) user = data.user;
+  } catch (e) {
+    console.warn(e);
+  }
+  const u = {
+    id: user.discord_id || user.id,
+    discord_id: user.discord_id || user.id,
+    username: user.username || user.global_name || 'User',
+    plan: user.plan || user.rank || 'free',
+    owner: (cfg && cfg.owner) || user.owner || '',
+    alts: (cfg && cfg.alts) || user.alts || {},
+    is_admin: !!user.is_admin,
+    avatar_url: user.avatar_url || '',
+  };
+  state.user = u;
+  state.config = cfg || buildDefaultConfig(u);
+  if (cfg) {
+    state.config = Object.assign(buildDefaultConfig(u), cfg);
+  }
+  updateNavUser();
+  updateSidebar();
+  renderOverview();
+  renderAltsTable();
+  renderControllersTable();
+  renderLoaderPreview();
+  renderSubscriptionPage();
+  loadConfigToForm();
+  // unlock config for all authenticated users (matches Discord bot)
+  document.getElementById('configLockedBanner').classList.add('hidden');
+  document.getElementById('configEditor').style.opacity = '1';
+  document.getElementById('configEditor').style.pointerEvents = '';
+  // bypass-only toggles
+  const isBypass = u.plan === 'bypass';
+  const togInf = document.getElementById('togInf');
+  const togRand = document.getElementById('togRand');
+  if (togInf) togInf.disabled = !isBypass;
+  if (togRand) togRand.disabled = !isBypass;
+  if (u.is_admin) {
+    document.getElementById('adminSidebarItem').classList.remove('hidden');
+    loadAdminData();
+  } else {
+    document.getElementById('adminSidebarItem').classList.add('hidden');
+  }
+  try { renderChangelog(); } catch(e) {}
+  try { renderMyTickets(); } catch(e) {}
+  try { renderActivity(); } catch(e) {}
+  try { fetchLiveStatus(); } catch(e) {}
+}
+
+function setCurrentUser(u) {
+  // legacy helper — prefer hydrateFromServer
+  state.user = u;
+  state.config = buildDefaultConfig(u);
+  updateNavUser();
+  updateSidebar();
+  renderOverview();
+  renderAltsTable();
+  renderControllersTable();
+  renderLoaderPreview();
+  renderSubscriptionPage();
+  loadConfigToForm();
+  document.getElementById('configLockedBanner').classList.add('hidden');
+  document.getElementById('configEditor').style.opacity = '1';
+  document.getElementById('configEditor').style.pointerEvents = '';
+  if (u.is_admin) {
+    document.getElementById('adminSidebarItem').classList.remove('hidden');
+    loadAdminData();
+  }
+}
+
+function buildDefaultConfig(u) {
+  return {
+    owner: u.owner || '',
+    key: 'xxxx-xxxx-xxxx-xxxx',
+    prefix: '.',
+    gun: '[Double-Barrel SG]',
+    slot: 2,
+    anim: 'rbxassetid://125405104081365',
+    char_user: 1,
+    char_random: false,
+    mute_gun_sounds: true,
+    auto_mask: true,
+    auto_armor: true,
+    muscle: true,
+    muscle_size: 15000,
+    inf: false,
+    alts: { ...u.alts },
+    rank: u.plan === 'bypass' ? 'bypass' : u.plan === 'premium' ? 'premium' : 'free',
+  };
+}
+
+async function logout() {
+  try { await api('/api/logout', { method: 'POST' }); } catch(e) {}
+  setToken(null);
+  state.user = null;
+  state.config = null;
+  updateNavUser();
+  showPage('landing');
+  showToast('Logged out', 'info');
+}
+
+function updateNavUser() {
+  const guest = document.getElementById('navGuest');
+  const userEl = document.getElementById('navUser');
+  if (state.user) {
+    guest.classList.add('hidden');
+    userEl.classList.remove('hidden');
+    document.getElementById('navUserName').textContent = state.user.username;
+  } else {
+    guest.classList.remove('hidden');
+    userEl.classList.add('hidden');
+  }
+}
+
+function updateSidebar() {
+  const u = state.user;
+  if (!u) return;
+  document.getElementById('sidebarName').textContent = u.username;
+  document.getElementById('sidebarAvatar').textContent = u.username[0].toUpperCase();
+  const planEl = document.getElementById('sidebarPlan');
+  planEl.innerHTML = `<span class="plan-badge plan-${u.plan}">${u.plan.toUpperCase()}</span>`;
+}
+
+// ═══════════════════════════════════════════════════════
+//  DASHBOARD NAVIGATION
+// ═══════════════════════════════════════════════════════
+function switchSection(id, btn) {
+  document.querySelectorAll('.dash-section').forEach(s => s.classList.remove('active'));
+  document.querySelectorAll('.sidebar-item').forEach(s => s.classList.remove('active'));
+  document.getElementById('sec-' + id).classList.add('active');
+  if (btn) btn.classList.add('active');
+  else {
+    const target = document.querySelector(`[data-section="${id}"]`);
+    if (target) target.classList.add('active');
+  }
+}
+
+function switchAdminTab(tab, btn) {
+  document.querySelectorAll('.admin-panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.admin-tab').forEach(t => t.classList.remove('active'));
+  document.getElementById('ap-' + tab).classList.add('active');
+  btn.classList.add('active');
+}
+
+// ═══════════════════════════════════════════════════════
+//  OVERVIEW
+// ═══════════════════════════════════════════════════════
+function renderOverview() {
+  const u = state.user;
+  document.getElementById('overviewGreeting').textContent = `Welcome back, ${u.username}!`;
+  document.getElementById('statPlan').innerHTML = `<span class="plan-badge plan-${u.plan}">${u.plan.toUpperCase()}</span>`;
+  const altCount = Object.keys(u.alts || {}).length;
+  document.getElementById('statAlts').textContent = altCount;
+  const limits = { free: 2, premium: 10, bypass: '∞' };
+  document.getElementById('statAltLimit').textContent = `of ${limits[u.plan]} max`;
+  document.getElementById('statOwner').textContent = u.owner || '—';
+
+  const bannerWrap = document.getElementById('upgradeBannerWrap');
+  if (u.plan === 'free') {
+    bannerWrap.innerHTML = `
+      <div class="upgrade-banner">
+        <div>
+          <h3>⚡ Unlock the full dashboard</h3>
+          <p>Upgrade to Premium or Bypass to edit your config from the web, link more alts, and get your rank in-game.</p>
+        </div>
+        <button class="btn btn-primary" onclick="switchSection('subscription', null)">View Plans</button>
+      </div>`;
+  } else {
+    bannerWrap.innerHTML = '';
+  }
+  // Seed initial activity on first load
+  if (!activityLog.length) {
+    addActivity('👋', `Logged in as <strong>${u.username}</strong>`);
+    addActivity('📋', `Plan: <strong>${u.plan.toUpperCase()}</strong>`);
+    if (Object.keys(u.alts || {}).length) {
+      addActivity('👥', `${Object.keys(u.alts).length} alt(s) linked`);
+    }
+  }
+  renderOverviewStatus();
+}
+
+// ═══════════════════════════════════════════════════════
+//  CONFIG
+// ═══════════════════════════════════════════════════════
+function loadConfigToForm() {
+  const c = state.config;
+  if (!c) return;
+  document.getElementById('cfgOwner').value = c.owner || '';
+  document.getElementById('cfgKey').value = c.key || '';
+  document.getElementById('cfgPrefix').value = c.prefix || '.';
+  document.getElementById('cfgGun').value = c.gun || '[Double-Barrel SG]';
+  document.getElementById('cfgSlot').value = c.slot || 2;
+  document.getElementById('cfgAnim').value = c.anim || '';
+  document.getElementById('cfgCharUser').value = c.char_user || 1;
+  document.getElementById('cfgMuscle').value = c.muscle_size || 15000;
+  document.getElementById('muscleVal').textContent = c.muscle_size || 15000;
+  document.getElementById('togMask').checked = !!c.auto_mask;
+  document.getElementById('togArmor').checked = !!c.auto_armor;
+  document.getElementById('togMuscle').checked = !!c.muscle;
+  document.getElementById('togMute').checked = !!c.mute_gun_sounds;
+  document.getElementById('togFriendly').checked = c.friendly_fire_prevention !== false;
+  document.getElementById('togInf').checked = !!c.inf;
+  document.getElementById('togRand').checked = !!c.char_random;
+  // Lock bypass toggles for non-bypass
+  if (state.user.plan !== 'bypass') {
+    document.getElementById('togInf').disabled = true;
+    document.getElementById('togRand').disabled = true;
+  }
+  // Watch for changes
+  document.querySelectorAll('#sec-config input, #sec-config select').forEach(el => {
+    el.addEventListener('change', () => showSaveBar());
+    el.addEventListener('input', () => showSaveBar());
+  });
+}
+
+async function saveConfig() {
+  if (!state.user) return;
+  const body = {
+    owner: document.getElementById('cfgOwner').value.trim(),
+    key: document.getElementById('cfgKey').value.trim(),
+    prefix: document.getElementById('cfgPrefix').value.trim() || '.',
+    gun: document.getElementById('cfgGun').value,
+    slot: parseInt(document.getElementById('cfgSlot').value),
+    anim: document.getElementById('cfgAnim').value.trim(),
+    char_user: parseInt(document.getElementById('cfgCharUser').value) || 1,
+    muscle_size: parseInt(document.getElementById('cfgMuscle').value),
+    auto_mask: document.getElementById('togMask').checked,
+    auto_armor: document.getElementById('togArmor').checked,
+    muscle: document.getElementById('togMuscle').checked,
+    mute_gun_sounds: document.getElementById('togMute').checked,
+    friendly_fire_prevention: document.getElementById('togFriendly') ? document.getElementById('togFriendly').checked : true,
+    inf: document.getElementById('togInf').checked,
+    char_random: document.getElementById('togRand').checked,
+    alts: state.config.alts || {},
+    controllers: state.config.controllers || [],
+  };
+  try {
+    const data = await api('/api/config', { method: 'POST', body });
+    state.config = data.config;
+    if (data.user) {
+      state.user.plan = data.user.plan;
+      state.user.owner = data.user.owner;
+      state.user.alts = data.user.alts;
+    }
+    state.user.owner = state.config.owner;
+    renderLoaderPreview();
+    renderOverview();
+    updateSidebar();
+    hideSaveBar();
+    addActivity('⚙️', 'Stand config saved');
+    showToast('Configuration saved! ✓', 'success');
+  } catch (e) {
+    showToast('Save failed: ' + e.message, 'error');
+  }
+}
+
+function discardChanges() { loadConfigToForm(); hideSaveBar(); }
+
+function showSaveBar() { document.getElementById('saveBar').classList.add('visible'); }
+function hideSaveBar() { document.getElementById('saveBar').classList.remove('visible'); }
+
+// ═══════════════════════════════════════════════════════
+//  ALTS
+// ═══════════════════════════════════════════════════════
+const ALT_LIMITS = { free: 2, premium: 10, bypass: Infinity };
+
+function renderAltsTable() {
+  if (!state.user) return;
+  const alts = state.config?.alts || {};
+  const tbody = document.getElementById('altsTableBody');
+  const entries = Object.entries(alts);
+  if (!entries.length) {
+    tbody.innerHTML = `<tr><td colspan="4" style="color:var(--text3);text-align:center;padding:24px;">No alts linked yet. Add one above.</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = entries.map(([name, slot]) => `
+    <tr>
+      <td><span style="color:var(--text);">${name}</span></td>
+      <td><span class="tag tag-blue">Slot ${slot}</span></td>
+      <td>${SLOT_NAMES[slot] || 'Unknown'}</td>
+      <td><button class="btn btn-danger btn-sm" onclick="removeAlt('${name}')">Remove</button></td>
+    </tr>
+  `).join('');
+}
+
+async function persistAltsAndControllers() {
+  if (!state.user) return;
+  try {
+    const data = await api('/api/config', {
+      method: 'POST',
+      body: {
+        alts: state.config.alts || {},
+        controllers: state.config.controllers || [],
+      }
+    });
+    if (data.config) state.config = data.config;
+    if (data.user) {
+      state.user.plan = data.user.plan;
+      state.user.alts = data.user.alts;
+    }
+  } catch (e) {
+    showToast('Sync failed: ' + e.message, 'error');
+    throw e;
+  }
+}
+
+async function addAlt() {
+  const name = document.getElementById('newAltName').value.trim();
+  const slot = parseInt(document.getElementById('newAltSlot').value);
+  if (!name) { showToast('Enter a Roblox username', 'error'); return; }
+  if (!state.config.alts) state.config.alts = {};
+  const limit = ALT_LIMITS[state.user.plan] || 2;
+  const current = Object.keys(state.config.alts).length;
+  if (current >= limit) {
+    showToast(`Your plan allows max ${limit === Infinity ? '∞' : limit} alts. Upgrade to add more.`, 'error');
+    return;
+  }
+  state.config.alts[name] = slot;
+  document.getElementById('newAltName').value = '';
+  try {
+    await persistAltsAndControllers();
+    renderAltsTable();
+    renderOverview();
+    renderLoaderPreview();
+    addActivity('👥', `Alt <strong>${name}</strong> linked (slot ${slot})`);
+    showToast(`Alt "${name}" added`, 'success');
+  } catch (e) {
+    delete state.config.alts[name];
+  }
+}
+
+async function removeAlt(name) {
+  delete state.config.alts[name];
+  try {
+    await persistAltsAndControllers();
+    renderAltsTable();
+    renderOverview();
+    renderLoaderPreview();
+    showToast(`Alt "${name}" removed`, 'info');
+  } catch (e) {}
+}
+
+// ═══════════════════════════════════════════════════════
+//  LOADER PREVIEW
+// ═══════════════════════════════════════════════════════
+function buildLoaderLua() {
+  if (!state.config) return '-- No config loaded';
+  const c = state.config;
+  const alts = Object.entries(c.alts || {}).map(([n,s]) => `        ["${n}"] = ${s},`).join('\n') || '        -- no alts linked';
+  const ctrls = (c.controllers || []).map(n => `        "${n}",`).join('\n') || '        -- no extra controllers';
+  const friendNames = [
+    c.owner || 'YourOwnerUsername',
+    ...Object.keys(c.alts || {}),
+    ...(c.controllers || []),
+  ].filter((v, i, a) => v && a.indexOf(v) === i);
+  const friendList = friendNames.map(n => `        "${n}",`).join('\n');
+  return `-- StandLoader.lua — Executive Stand
+-- Generated for: ${state.user?.username || 'Unknown'}
+-- Generated at: ${new Date().toISOString()}
+-- Inject on ALTS ONLY. Owner controls via public chat.
+
+StandConfig = {
+    Owner    = "${c.owner || 'YourRobloxUsername'}",
+    Key      = "${c.key || ''}",
+    Gun      = "${c.gun || '[Double-Barrel SG]'}",
+    Prefix   = "${c.prefix || '.'}",
+    Anim     = "${c.anim || ''}",
+    Char     = {
+        User   = ${c.char_user || 1},
+        Random = ${c.char_random ? 'true' : 'false'},
+    },
+    Slot            = ${c.slot || 2},
+    MuteGunSounds   = ${c.mute_gun_sounds ? 'true' : 'false'},
+    AutoMask        = ${c.auto_mask ? 'true' : 'false'},
+    AutoArmor       = ${c.auto_armor ? 'true' : 'false'},
+    Muscle          = ${c.muscle ? 'true' : 'false'},
+    MuscleSize      = ${c.muscle_size || 15000},
+    Inf             = ${c.inf ? 'true' : 'false'},
+    Rank            = "${c.rank || 'free'}",
+    Alts = {
+${alts}
+    },
+    Controllers = {
+${ctrls}
+    },
+    -- Friendly-fire prevention: alts will NEVER attack these usernames
+    FriendList = ${c.friendly_fire_prevention !== false ? `{
+${friendList}
+    }` : '{}  -- disabled'},
+}
+
+-- Load Stand from secure API
+local ApiBase = "https://your-render-service.onrender.com"
+local ok, err = pcall(function()
+    local loader = game:HttpGet(ApiBase .. "/api/v1/loader?discord_id=${state.user?.discord_id || '0'}")
+    loadstring(loader)()
+end)
+if not ok then warn("[Executive] Loader error: " .. tostring(err)) end`;
+}
+
+function renderLoaderPreview() {
+  document.getElementById('loaderPreview').textContent = buildLoaderLua();
+}
+
+async function downloadLoader() {
+  try {
+    const tok = getToken();
+    const res = await fetch(API_BASE + '/api/loader', {
+      headers: tok ? { Authorization: 'Bearer ' + tok } : {},
+      credentials: 'same-origin',
+    });
+    if (!res.ok) throw new Error('download failed');
+    const lua = await res.text();
+    const blob = new Blob([lua], { type: 'text/plain' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'StandLoader.lua';
+    a.click();
+    showToast('Loader downloaded!', 'success');
+  } catch (e) {
+    // fallback to client preview
+    const lua = buildLoaderLua();
+    const blob = new Blob([lua], { type: 'text/plain' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'StandLoader.lua';
+    a.click();
+    showToast('Loader downloaded (local preview)', 'info');
+  }
+}
+
+async function copyLoader() {
+  try {
+    const data = await api('/api/loader/preview');
+    await navigator.clipboard.writeText(data.source || buildLoaderLua());
+    showToast('Copied to clipboard!', 'success');
+  } catch (e) {
+    navigator.clipboard.writeText(buildLoaderLua()).then(() => {
+      showToast('Copied to clipboard!', 'success');
+    }).catch(() => showToast('Copy failed — use the preview text', 'error'));
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+//  SUBSCRIPTION + STRIPE
+// ═══════════════════════════════════════════════════════
+let _pendingPlan = null;
+
+function initiateCheckout(plan) {
+  _pendingPlan = plan;
+  const names = { premium: 'Premium — $8/mo', bypass: 'Bypass — $18/mo' };
+  const descs = {
+    premium: 'Unlock the web dashboard, up to 10 alts, and Premium rank in-game.',
+    bypass: 'Unlock everything: Bypass rank, unlimited alts, Inf ammo, and all exclusive features.',
+  };
+  document.getElementById('checkoutTitle').textContent = `Upgrade to ${plan.charAt(0).toUpperCase() + plan.slice(1)}`;
+  document.getElementById('checkoutDesc').textContent = descs[plan];
+  openModal('checkoutModal');
+}
+
+function goToStripe() {
+  /* PRODUCTION:
+   * 1. POST /api/create-checkout-session with { plan: _pendingPlan, discord_id }
+   * 2. Backend creates Stripe Checkout Session with the right Price ID
+   * 3. Redirect to session.url
+   *
+   * Example backend (Node/Express):
+   * const session = await stripe.checkout.sessions.create({
+   *   payment_method_types: ['card'],
+   *   mode: 'subscription',
+   *   line_items: [{ price: PRICE_IDS[plan], quantity: 1 }],
+   *   metadata: { discord_id },
+   *   success_url: 'https://yourdomain.com/dashboard?success=1',
+   *   cancel_url: 'https://yourdomain.com/dashboard',
+   * });
+   * res.json({ url: session.url });
+   *
+   * Webhook handler at /api/stripe-webhook listens for
+   * checkout.session.completed and updates Supabase:
+   * supabase.from('stand_configs').upsert({ discord_id, config: { rank: plan } })
+   */
+  closeModal('checkoutModal');
+  // Demo: apply plan immediately
+  if (_pendingPlan && state.user) {
+    state.user.plan = _pendingPlan;
+    if (state.config) state.config.rank = _pendingPlan;
+    updateSidebar();
+    renderOverview();
+    renderSubscriptionPage();
+    setCurrentUser(state.user); // re-evaluate permissions
+    showToast(`Plan upgraded to ${_pendingPlan}! ✓ (Demo)`, 'success');
+  }
+}
+
+function renderSubscriptionPage() {
+  if (!state.user) return;
+  const plan = state.user.plan;
+  document.getElementById('subPlanName').innerHTML = `<span class="plan-badge plan-${plan}" style="font-size:18px;padding:4px 12px;">${plan.toUpperCase()}</span>`;
+  const descs = {
+    free: 'Basic access with Discord bot commands.',
+    premium: 'Full dashboard access, 10 alts, Premium rank. Renews monthly.',
+    bypass: 'All features unlocked, unlimited alts, Bypass rank. Renews monthly.',
+  };
+  document.getElementById('subPlanDesc').textContent = descs[plan] || '';
+  const actionsEl = document.getElementById('subActions');
+  if (plan !== 'free') {
+    actionsEl.innerHTML = `<button class="btn btn-outline btn-sm" onclick="cancelSub()">Cancel Subscription</button>`;
+  } else {
+    actionsEl.innerHTML = '';
+  }
+  // Update plan buttons
+  ['free','premium','bypass'].forEach(p => {
+    const btn = document.getElementById(p + 'PlanBtn');
+    if (!btn) return;
+    if (p === plan) {
+      btn.textContent = 'Current Plan';
+      btn.disabled = true;
+      btn.classList.remove('btn-primary','btn-gold');
+      btn.classList.add('btn-outline');
+    } else {
+      btn.disabled = false;
+      if (p === 'premium') { btn.textContent = 'Upgrade'; btn.classList.add('btn-primary'); }
+      if (p === 'bypass') { btn.textContent = 'Upgrade'; btn.classList.add('btn-gold'); }
+    }
+  });
+}
+
+function cancelSub() {
+  if (!confirm('Cancel your subscription? You keep your plan until the billing period ends.')) return;
+  showToast('Subscription cancelled. Access remains until end of period.', 'info');
+  /* PRODUCTION: POST /api/cancel-subscription with discord_id */
+}
+
+// ═══════════════════════════════════════════════════════
+//  ADMIN — USERS
+// ═══════════════════════════════════════════════════════
+function renderAdminUsers(filter = '') {
+  const planFilter = document.getElementById('userPlanFilter')?.value || '';
+  let users = state.users.filter(u => {
+    const q = filter || document.getElementById('userSearch')?.value || '';
+    const matchSearch = !q || u.username.toLowerCase().includes(q.toLowerCase()) || u.discord_id.includes(q);
+    const matchPlan = !planFilter || u.plan === planFilter;
+    return matchSearch && matchPlan;
+  });
+  const tbody = document.getElementById('adminUsersTable');
+  if (!users.length) { tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--text3);padding:20px;">No users found</td></tr>`; return; }
+  tbody.innerHTML = users.map(u => `
+    <tr>
+      <td>
+        <div style="font-weight:600;color:var(--text);">${u.username}</div>
+        <div style="font-size:11px;color:var(--text3);">${u.discord_id}</div>
+      </td>
+      <td>${u.owner || '<span style="color:var(--text3)">—</span>'}</td>
+      <td><span class="plan-badge plan-${u.plan}">${u.plan.toUpperCase()}</span></td>
+      <td>${u._altCount != null ? u._altCount : Object.keys(u.alts || {}).length}</td>
+      <td style="font-size:12px;color:var(--text3);">${u.joined}</td>
+      <td>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;">
+          <button class="btn btn-outline btn-sm" onclick="openSetPlan('${u.discord_id}','${u.username}','${u.plan}')">Set Plan</button>
+          <button class="btn btn-danger btn-sm" onclick="adminBlacklist('${u.discord_id}')">Ban</button>
+          <button class="btn btn-outline btn-sm" onclick="adminForceUnlink('${u.discord_id}')">Unlink</button>
+        </div>
+      </td>
+    </tr>
+  `).join('');
+}
+
+function filterUsers() { renderAdminUsers(); }
+
+function openSetPlan(id, name, current) {
+  state.setPlanTargetId = id;
+  document.getElementById('setPlanUserLabel').textContent = `Set plan for ${name} (currently: ${current})`;
+  document.getElementById('setPlanSelect').value = current;
+  openModal('setPlanModal');
+}
+
+async function confirmSetPlan() {
+  const newPlan = document.getElementById('setPlanSelect').value;
+  try {
+    await api('/api/admin/set-plan', { method: 'POST', body: { discord_id: state.setPlanTargetId, plan: newPlan } });
+    const idx = state.users.findIndex(u => u.discord_id === state.setPlanTargetId);
+    if (idx !== -1) state.users[idx].plan = newPlan;
+    renderAdminUsers();
+    loadAdminData();
+    closeModal('setPlanModal');
+    showToast(`Plan updated to ${newPlan}`, 'success');
+  } catch (e) {
+    showToast('Failed: ' + e.message, 'error');
+  }
+}
+
+async function adminBlacklist(id) {
+  const reason = prompt('Blacklist reason:');
+  if (!reason) return;
+  try {
+    await api('/api/admin/blacklist', { method: 'POST', body: { discord_id: id, reason, action: 'add' } });
+    await loadAdminData();
+    showToast(`User ${id} blacklisted`, 'success');
+  } catch (e) { showToast(e.message, 'error'); }
+}
+
+async function adminForceUnlink(id) {
+  if (!confirm("Force unlink this user's Roblox config?")) return;
+  try {
+    // Clear owner + alts by saving empty config fields for that user via set-plan path isn't enough —
+    // use set-plan free + instruct; minimal: POST set-plan keeps rank, we need a dedicated clear.
+    // For now mark free and note staff should use Discord /unlink; attempt local display clear.
+    const idx = state.users.findIndex(u => u.discord_id === id);
+    if (idx !== -1) { state.users[idx].owner = ''; state.users[idx]._altCount = 0; }
+    renderAdminUsers();
+    showToast('Local unlink only — use Discord staff tools to fully clear config', 'info');
+  } catch (e) { showToast(e.message, 'error'); }
+}
+
+// ═══════════════════════════════════════════════════════
+//  ADMIN — KEYS
+// ═══════════════════════════════════════════════════════
+function renderAdminKeys() {
+  const tbody = document.getElementById('keysTable');
+  if (!state.keys.length) { tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;color:var(--text3);padding:20px;">No keys in stock</td></tr>`; return; }
+  tbody.innerHTML = state.keys.map(k => `
+    <tr>
+      <td><code style="font-size:12px;color:var(--accent2);">${k.key}</code></td>
+      <td><span class="tag tag-${k.product==='bypass'?'yellow':k.product==='premium'?'blue':'gray'}">${k.product}</span></td>
+      <td>${k.reserved ? `<span class="tag tag-green">Assigned</span>` : `<span class="tag tag-gray">Available</span>`}</td>
+      <td>${k.assigned_to_roblox_username || '—'}</td>
+      <td><button class="btn btn-danger btn-sm" onclick="removeKey(${k.id})">Delete</button></td>
+    </tr>
+  `).join('');
+}
+
+function addKey() {
+  const key = document.getElementById('newKeyVal').value.trim();
+  const product = document.getElementById('newKeyProduct').value;
+  if (!key) { showToast('Enter a key value', 'error'); return; }
+  if (state.keys.find(k => k.key === key)) { showToast('Key already exists', 'error'); return; }
+  state.keys.push({ id: Date.now(), key, product, reserved: false, assigned_to_roblox_username: null });
+  document.getElementById('newKeyVal').value = '';
+  renderAdminKeys();
+  renderAnalytics();
+  showToast('Key added to stock', 'success');
+}
+
+function removeKey(id) {
+  state.keys = state.keys.filter(k => k.id !== id);
+  renderAdminKeys();
+  renderAnalytics();
+  showToast('Key deleted', 'info');
+}
+
+// ═══════════════════════════════════════════════════════
+//  ADMIN — STATUS
+// ═══════════════════════════════════════════════════════
+const STATUS_LABELS = { up:'🟢 Online', down:'🔴 Down', updating:'🔵 Updating', detected:'🟡 Detected' };
+function setStatus(s) {
+  DEMO_STATUS.status = s;
+  document.getElementById('currentStatusLabel').textContent = STATUS_LABELS[s];
+  renderOverviewStatus();
+  addActivity('🌐', `System status set to <strong>${STATUS_LABELS[s]}</strong>`);
+  showToast(`Status set to: ${STATUS_LABELS[s]}`, 'success');
+}
+
+function postChangelog() {
+  const title = document.getElementById('changelogTitle').value.trim();
+  const notes = document.getElementById('changelogNotes').value.trim();
+  if (!title) { showToast('Enter a title', 'error'); return; }
+  const entry = {
+    version: title.split(' ')[0] || title,
+    date: new Date().toLocaleDateString('en-US', { year:'numeric', month:'long', day:'numeric' }),
+    isNew: true,
+    title: title.includes(' ') ? title.slice(title.indexOf(' ')+1) : title,
+    notes: notes ? notes.split('\n').filter(Boolean).map(l => l.replace(/^[-•*]\s*/,'')) : ['General update'],
+  };
+  DEMO_CHANGELOG.unshift(entry);
+  renderChangelog();
+  document.getElementById('changelogTitle').value = '';
+  document.getElementById('changelogNotes').value = '';
+  addActivity('📋', `Changelog posted: <strong>${title}</strong>`);
+  showToast('Changelog posted! ✓', 'success');
+}
+
+// ═══════════════════════════════════════════════════════
+//  ADMIN — BLACKLIST
+// ═══════════════════════════════════════════════════════
+function renderAdminBlacklist() {
+  const tbody = document.getElementById('blacklistTable');
+  if (!state.blacklist.length) { tbody.innerHTML = `<tr><td colspan="4" style="text-align:center;color:var(--text3);padding:20px;">No blacklisted users</td></tr>`; return; }
+  tbody.innerHTML = state.blacklist.map(b => `
+    <tr>
+      <td><code style="font-size:12px;">${b.discord_id}</code></td>
+      <td>${b.reason}</td>
+      <td style="font-size:12px;color:var(--text3);">${b.date}</td>
+      <td><button class="btn btn-green btn-sm" onclick="unblacklist('${b.discord_id}')">Unban</button></td>
+    </tr>
+  `).join('');
+}
+
+async function blacklistUser() {
+  const id = document.getElementById('blDiscordId').value.trim();
+  const reason = document.getElementById('blReason').value.trim();
+  if (!id) { showToast('Enter a Discord ID', 'error'); return; }
+  try {
+    await api('/api/admin/blacklist', { method: 'POST', body: { discord_id: id, reason: reason || 'No reason', action: 'add' } });
+    document.getElementById('blDiscordId').value = '';
+    document.getElementById('blReason').value = '';
+    await loadAdminData();
+    showToast(`User ${id} blacklisted`, 'success');
+  } catch (e) { showToast(e.message, 'error'); }
+}
+
+async function unblacklist(id) {
+  try {
+    await api('/api/admin/blacklist', { method: 'POST', body: { discord_id: id, action: 'remove' } });
+    await loadAdminData();
+    showToast('User unbanned', 'success');
+  } catch (e) { showToast(e.message, 'error'); }
+}
+
+// ═══════════════════════════════════════════════════════
+//  ADMIN — ANALYTICS
+// ═══════════════════════════════════════════════════════
+function renderAnalytics() {
+  const total = state.users.length;
+  const premium = state.users.filter(u => u.plan === 'premium').length;
+  const bypass = state.users.filter(u => u.plan === 'bypass').length;
+  const mrr = (premium * 8 + bypass * 18);
+  const availKeys = state.keys.filter(k => !k.reserved).length;
+  document.getElementById('aTotalUsers').textContent = total;
+  document.getElementById('aPremium').textContent = premium;
+  document.getElementById('aBypass').textContent = bypass;
+  document.getElementById('aMRR').textContent = '$' + mrr;
+  document.getElementById('aKeys').textContent = availKeys;
+  document.getElementById('aBlacklist').textContent = state.blacklist.length;
+
+  const recent = [...state.users].sort((a,b) => new Date(b.joined) - new Date(a.joined)).slice(0,5);
+  document.getElementById('recentSignups').innerHTML = recent.map(u => `
+    <tr>
+      <td>${u.username}</td>
+      <td><span class="plan-badge plan-${u.plan}">${u.plan.toUpperCase()}</span></td>
+      <td style="font-size:12px;color:var(--text3);">${u.joined}</td>
+    </tr>
+  `).join('');
+}
+
+// ═══════════════════════════════════════════════════════
+//  CONTROLLERS
+// ═══════════════════════════════════════════════════════
+function renderControllersTable() {
+  const tbody = document.getElementById('controllersTableBody');
+  const ctrls = state.config?.controllers || [];
+  if (!ctrls.length) {
+    tbody.innerHTML = `<tr><td colspan="3" style="color:var(--text3);text-align:center;padding:24px;">No controllers added. Your alts only respond to your owner account.</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = ctrls.map((name, i) => `
+    <tr>
+      <td><span style="color:var(--text);font-weight:600;">${name}</span></td>
+      <td style="font-size:12px;color:var(--text3);">This session</td>
+      <td><button class="btn btn-danger btn-sm" onclick="removeController(${i})">Remove</button></td>
+    </tr>
+  `).join('');
+}
+
+async function addController() {
+  const name = document.getElementById('newCtrlName').value.trim();
+  if (!name) { showToast('Enter a Roblox username', 'error'); return; }
+  if (!state.config.controllers) state.config.controllers = [];
+  if (state.config.controllers.includes(name)) { showToast('Already added', 'error'); return; }
+  state.config.controllers.push(name);
+  document.getElementById('newCtrlName').value = '';
+  try {
+    await persistAltsAndControllers();
+    renderControllersTable();
+    renderLoaderPreview();
+    addActivity('🎮', `Controller <strong>${name}</strong> added`);
+    showToast(`Controller "${name}" added`, 'success');
+  } catch (e) {
+    state.config.controllers = state.config.controllers.filter(c => c !== name);
+  }
+}
+
+async function removeController(i) {
+  const name = state.config.controllers[i];
+  state.config.controllers.splice(i, 1);
+  try {
+    await persistAltsAndControllers();
+    renderControllersTable();
+    renderLoaderPreview();
+    showToast(`Controller "${name}" removed`, 'info');
+  } catch (e) {}
+}
+
+// ═══════════════════════════════════════════════════════
+//  CHANGELOG
+// ═══════════════════════════════════════════════════════
+const DEMO_CHANGELOG = [
+  {
+    version: 'v2.1.0', date: 'June 10, 2025', isNew: true,
+    title: 'Web Dashboard Launch',
+    notes: [
+      'Launched the full web dashboard for Premium and Bypass users',
+      'Real-time config editor with live loader preview',
+      'Alt management with per-slot assignments',
+      'Subscription management via Stripe',
+      'Admin panel with analytics, key management, and user controls',
+    ]
+  },
+  {
+    version: 'v2.0.3', date: 'May 28, 2025', isNew: false,
+    title: 'Bot stability & gun fixes',
+    notes: [
+      'Fixed auto-armor not triggering on Da Hood respawn',
+      'Added [MP5] and [Desert Eagle] to gun selector',
+      'Resolved /loader returning stale config for some users',
+      'Staff bot: improved /staffview embed formatting',
+    ]
+  },
+  {
+    version: 'v2.0.0', date: 'May 1, 2025', isNew: false,
+    title: 'Supabase migration & secure loader delivery',
+    notes: [
+      'Migrated from JSON files to Supabase for all config storage',
+      'Loader now delivered securely via Render API — no raw script URLs',
+      'Added key validation on every /loader request',
+      'New controller system: add multiple owner-equivalent accounts',
+      'Hood Customs support added (place ID auto-detected)',
+    ]
+  },
+  {
+    version: 'v1.9.1', date: 'April 12, 2025', isNew: false,
+    title: 'Bypass plan & Inf ammo',
+    notes: [
+      'Launched Bypass tier ($18/mo) with Inf ammo and char randomizer',
+      'Admin can now grant Bypass rank without a Stripe subscription',
+      'Fixed muscle size not applying in DERS Hood',
+    ]
+  },
+];
+
+async function renderChangelog() {
+  const feed = document.getElementById('changelogFeed');
+  if (!feed) return;
+  let entries = DEMO_CHANGELOG;
+  try {
+    const data = await api('/api/changelog');
+    if (data.entries && data.entries.length) {
+      entries = data.entries.map((e, i) => ({
+        version: e.version || 'update',
+        date: (e.date || '').slice(0, 10),
+        isNew: i === 0,
+        title: e.title,
+        notes: (e.notes || '').split('\n').filter(Boolean),
+      }));
+    }
+  } catch (e) {}
+  feed.innerHTML = entries.map(e => `
+    <div class="changelog-entry">
+      <div class="changelog-meta">
+        <span class="changelog-version">${e.version}</span>
+        <span class="changelog-date">${e.date}</span>
+        ${e.isNew ? '<span class="changelog-new">NEW</span>' : ''}
+      </div>
+      <h3>${e.title}</h3>
+      <ul>${(e.notes || []).map(n => `<li>${n}</li>`).join('')}</ul>
+    </div>
+  `).join('');
+}
+
+// ═══════════════════════════════════════════════════════
+//  SUPPORT & TICKETS
+// ═══════════════════════════════════════════════════════
+let tickets = [];
+let ticketCounter = 1001;
+
+function openTicket(category) {
+  document.getElementById('ticketCategory').value = category;
+  document.getElementById('ticketSubject').focus();
+}
+
+function submitTicket() {
+  const subject = document.getElementById('ticketSubject').value.trim();
+  const body = document.getElementById('ticketBody').value.trim();
+  if (!subject) { showToast('Enter a subject', 'error'); return; }
+  const ticket = {
+    id: ticketCounter++,
+    subject,
+    category: document.getElementById('ticketCategory').value,
+    priority: document.getElementById('ticketPriority').value,
+    body,
+    status: 'open',
+    date: new Date().toLocaleDateString(),
+  };
+  tickets.unshift(ticket);
+  document.getElementById('ticketSubject').value = '';
+  document.getElementById('ticketBody').value = '';
+  renderMyTickets();
+  addActivity('🎫', `Support ticket <strong>#${ticket.id}</strong> opened: ${subject}`);
+  showToast(`Ticket #${ticket.id} submitted! A staff member will respond in our Discord.`, 'success');
+  /* PRODUCTION: POST /api/tickets — bot sends a ticket embed to your Discord tickets channel */
+}
+
+function renderMyTickets() {
+  const tbody = document.getElementById('myTicketsTable');
+  if (!tickets.length) {
+    tbody.innerHTML = `<tr><td colspan="5" style="color:var(--text3);text-align:center;padding:20px;">No tickets yet.</td></tr>`;
+    return;
+  }
+  const statusMap = { open:'ts-open', inprogress:'ts-inprog', closed:'ts-closed', resolved:'ts-resolved' };
+  const statusLabel = { open:'Open', inprogress:'In Progress', closed:'Closed', resolved:'Resolved' };
+  tbody.innerHTML = tickets.map(t => `
+    <tr>
+      <td><span style="color:var(--text3);font-size:12px;">#${t.id}</span></td>
+      <td style="color:var(--text);">${t.subject}</td>
+      <td><span class="tag tag-blue">${t.category}</span></td>
+      <td><span class="ticket-status ${statusMap[t.status]||'ts-open'}">${statusLabel[t.status]||'Open'}</span></td>
+      <td style="font-size:12px;color:var(--text3);">${t.date}</td>
+    </tr>
+  `).join('');
+}
+
+function toggleFaq(el) {
+  const body = el.querySelector('.faq-body');
+  const arrow = el.querySelector('.faq-arrow');
+  const open = body.style.display !== 'none';
+  body.style.display = open ? 'none' : 'block';
+  arrow.textContent = open ? '▼' : '▲';
+}
+
+// ═══════════════════════════════════════════════════════
+//  ACTIVITY FEED
+// ═══════════════════════════════════════════════════════
+let activityLog = [];
+
+function addActivity(icon, text) {
+  const now = new Date();
+  const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  activityLog.unshift({ icon, text, time: timeStr });
+  if (activityLog.length > 8) activityLog.pop();
+  renderActivity();
+}
+
+function renderActivity() {
+  const feed = document.getElementById('activityFeed');
+  if (!feed) return;
+  if (!activityLog.length) {
+    feed.innerHTML = `<div style="font-size:13px;color:var(--text3);text-align:center;padding:16px 0;">No activity yet this session.</div>`;
+    return;
+  }
+  feed.innerHTML = activityLog.map(a => `
+    <div class="activity-item">
+      <span class="activity-icon">${a.icon}</span>
+      <span class="activity-text">${a.text}</span>
+      <span class="activity-time">${a.time}</span>
+    </div>
+  `).join('');
+}
+
+// ═══════════════════════════════════════════════════════
+//  SYSTEM STATUS DISPLAY (overview)
+// ═══════════════════════════════════════════════════════
+const STATUS_CONFIG = {
+  up:        { color: 'var(--green)',  dot: '#22c55e', name: 'All Systems Online',  desc: 'Stand is fully operational across all supported games.' },
+  down:      { color: 'var(--red)',    dot: '#ef4444', name: 'Stand Offline',        desc: 'The stand is currently down. Check Discord for updates.' },
+  updating:  { color: 'var(--accent2)', dot: '#7b8bff', name: 'Updating',           desc: 'A new version is being deployed. Back shortly.' },
+  detected:  { color: 'var(--gold)',   dot: '#f0b429', name: 'Detection Warning',   desc: 'Possible detection in one or more games. Use with caution.' },
+};
+
+function renderOverviewStatus() {
+  const el = document.getElementById('overviewStatus');
+  if (!el) return;
+  const s = STATUS_CONFIG[DEMO_STATUS.status] || STATUS_CONFIG.up;
+  el.innerHTML = `
+    <div class="status-display">
+      <span class="dot-pulse" style="background:${s.dot};box-shadow:0 0 8px ${s.dot};"></span>
+      <span class="status-name" style="color:${s.color};">${s.name}</span>
+    </div>
+    <span class="status-desc">${s.desc}</span>
+  `;
+}
+
+// ═══════════════════════════════════════════════════════
+//  DOCS NAVIGATION
+// ═══════════════════════════════════════════════════════
+function switchDoc(id, btn) {
+  document.querySelectorAll('.doc-section').forEach(s => s.classList.remove('active'));
+  document.querySelectorAll('.docs-nav-item').forEach(b => b.classList.remove('active'));
+  const section = document.getElementById('doc-' + id);
+  if (section) section.classList.add('active');
+  if (btn) {
+    btn.classList.add('active');
+  } else {
+    document.querySelectorAll('.docs-nav-item').forEach(b => {
+      if (b.getAttribute('onclick') && b.getAttribute('onclick').includes("'" + id + "'")) b.classList.add('active');
+    });
+  }
+  // scroll docs content to top
+  const dc = document.querySelector('.docs-content');
+  if (dc) dc.scrollTop = 0;
+}
+
+// ═══════════════════════════════════════════════════════
+//  MODALS + TOAST
+// ═══════════════════════════════════════════════════════
+function openModal(id) { document.getElementById(id).classList.add('show'); }
+function closeModal(id) { document.getElementById(id).classList.remove('show'); }
+
+let _toastTimer;
+function showToast(msg, type = 'success') {
+  const toast = document.getElementById('toast');
+  const icons = { success: '✓', error: '✕', info: 'ℹ' };
+  document.getElementById('toastIcon').textContent = icons[type] || '✓';
+  document.getElementById('toastMsg').textContent = msg;
+  toast.className = `toast show ${type}`;
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => toast.classList.remove('show'), 3200);
+}
+
+
+async function loadAdminData() {
+  if (!state.user || !state.user.is_admin) return;
+  try {
+    const users = await api('/api/admin/users');
+    state.users = (users.users || []).map(u => ({
+      discord_id: u.discord_id,
+      username: u.discord_id,
+      owner: u.owner,
+      plan: u.plan,
+      alts: {},
+      _altCount: u.alts,
+      joined: (u.joined || '').slice(0, 10),
+      is_admin: false,
+    }));
+    renderAdminUsers();
+  } catch (e) { console.warn(e); }
+  try {
+    const bl = await api('/api/admin/blacklist');
+    state.blacklist = bl.blacklist || [];
+    renderAdminBlacklist();
+  } catch (e) { console.warn(e); }
+  try {
+    const a = await api('/api/admin/analytics');
+    document.getElementById('aTotalUsers').textContent = a.total_users;
+    document.getElementById('aPremium').textContent = a.premium;
+    document.getElementById('aBypass').textContent = a.bypass;
+    document.getElementById('aMRR').textContent = '$' + a.mrr;
+    document.getElementById('aKeys').textContent = a.keys_available;
+    document.getElementById('aBlacklist').textContent = a.blacklisted;
+  } catch (e) { console.warn(e); }
+}
+
+async function fetchLiveStatus() {
+  try {
+    const res = await fetch(API_BASE + '/api/status');
+    const data = await res.json();
+    if (data && data.status) {
+      DEMO_STATUS.status = data.status;
+      renderOverviewStatus();
+    }
+  } catch (e) {}
+}
+
+// ═══════════════════════════════════════════════════════
+//  INIT
+// ═══════════════════════════════════════════════════════
+document.addEventListener('DOMContentLoaded', async () => {
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('success')) showToast('Payment successful! Your plan is now active.', 'success');
+  const ok = await bootstrapSession();
+  if (ok) {
+    showPage('dashboard');
+    showToast('Welcome back, ' + state.user.username, 'success');
+  }
+});
+
+</script>
+</body>
+</html>

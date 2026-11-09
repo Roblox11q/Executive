@@ -177,3 +177,57 @@ If you only see the user bot logs, the staff service was never deployed or crash
 ### 6. Free tier / root directory
 - If the repo root is the parent folder, set Render **Root Directory** to `Executive-main` (wherever `staff_bot.py` lives).
 - Free web services sleep; open the staff service URL once after deploy so it wakes.
+
+---
+
+## Web dashboard (live Discord OAuth + config)
+
+The user bot serves the SPA and REST API on the same Render service.
+
+### Discord OAuth setup
+
+1. Discord Developer Portal → your **user bot** application → OAuth2
+2. Add redirect URL: `https://YOUR-SERVICE.onrender.com/auth/callback`
+3. Copy **Client ID** and **Client Secret**
+
+### Render env vars (web)
+
+| Key | Required | Notes |
+|-----|----------|-------|
+| `DISCORD_CLIENT_ID` | Yes | OAuth2 client id |
+| `DISCORD_CLIENT_SECRET` | Yes | OAuth2 client secret |
+| `DISCORD_REDIRECT_URI` | Yes | Exact callback URL above |
+| `PUBLIC_BOT_URL` | Yes | `https://YOUR-SERVICE.onrender.com` (no trailing slash) |
+| `SESSION_SECRET` | Recommended | Random string for signing session tokens |
+| `ADMIN_DISCORD_IDS` | Optional | Comma-separated Discord user IDs with admin panel access |
+
+Also keep existing `SUPABASE_URL`, `SUPABASE_KEY`, `DISCORD_TOKEN`, etc.
+
+### Routes
+
+| Path | Purpose |
+|------|---------|
+| `/` | Dashboard SPA |
+| `/auth/discord` | Start Discord login |
+| `/auth/callback` | OAuth callback → sets session, redirects to `/` |
+| `/api/me` | Current user (Bearer token or cookie) |
+| `/api/config` | GET/POST stand config (Supabase `stand_configs`) |
+| `/api/loader` | Download real `StandLoader.lua` (same as Discord `/loader`) |
+| `/api/loader/preview` | JSON `{ source }` |
+| `/api/changelog` | Recent changelog entries |
+| `/api/admin/*` | Admin users / set-plan / blacklist / analytics |
+| `/health` | Health check |
+| `/api/status` | Loader maintenance gate |
+
+### User flow
+
+1. Open site → **Login with Discord**
+2. Authorize → redirected back logged in
+3. Configure owner, key, gun, alts, toggles → **Save**
+4. Download **StandLoader.lua** and inject on alts
+
+Config is stored in Supabase `stand_configs` (same table the Discord bot uses), so `/loader` in Discord and the website stay in sync.
+
+### Supabase
+
+Run the full `supabase_schema.sql` (includes `stand_configs`, `stand_blacklist`, `stand_status`, `stand_changelog`, key tables).

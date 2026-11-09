@@ -26,6 +26,17 @@ services:
         sync: false
       - key: PUBLIC_BOT_URL
         sync: false
+
+      - key: DISCORD_CLIENT_ID
+        sync: false
+      - key: DISCORD_CLIENT_SECRET
+        sync: false
+      - key: DISCORD_REDIRECT_URI
+        sync: false
+      - key: SESSION_SECRET
+        sync: false
+      - key: ADMIN_DISCORD_IDS
+        sync: false
       - key: STATUS_CHANNEL_ID
         value: "1554079705022595174"
       - key: STATUS_CHANNEL_LABEL
