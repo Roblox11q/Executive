@@ -3511,6 +3511,13 @@ async function fetchLiveStatus() {
     if (data && data.status) {
       DEMO_STATUS.status = data.status;
       renderOverviewStatus();
+      const el = document.getElementById('currentStatusLabel');
+      if (el && typeof STATUS_LABELS !== 'undefined' && STATUS_LABELS[data.status]) {
+        el.textContent = STATUS_LABELS[data.status];
+        if (typeof STATUS_COLORS_UI !== 'undefined' && STATUS_COLORS_UI[data.status]) {
+          el.style.color = STATUS_COLORS_UI[data.status];
+        }
+      }
     }
   } catch (e) {}
 }
@@ -3526,6 +3533,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     showPage('dashboard');
     showToast('Welcome back, ' + state.user.username, 'success');
   }
+  // Keep dashboard status in sync with Discord /status + admin panel
+  try { fetchLiveStatus(); } catch (e) {}
+  setInterval(() => { try { fetchLiveStatus(); } catch (e) {} }, 12000);
 });
 
 </script>

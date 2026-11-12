@@ -2,10 +2,12 @@
 """Stand Loader Configurator Bot - Render + Supabase."""
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import os
 import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -85,11 +87,13 @@ _WATCHED_FILES = ("bot.py", "StandMain.lua", "requirements.txt", "render.yaml")
 # Track last status (persisted so restarts keep maintenance lock)
 _current_status: str = "up"
 _status_note: str = ""
+_last_store_fetch: float = 0.0
+_STORE_FETCH_TTL = 3.0  # seconds — keep website /api/status fresh across processes
 
 
 def _load_persisted_status() -> None:
     """Load status from Supabase (preferred) then fall back to local JSON file."""
-    global _current_status, _status_note
+    global _current_status, _status_note, _last_store_fetch
     loaded = False
 
     # Prefer Supabase so status survives Render ephemeral disk / multi-instance
@@ -109,6 +113,7 @@ def _load_persisted_status() -> None:
                     _current_status = st
                 _status_note = str(rows[0].get("note") or "")
                 loaded = True
+                _last_store_fetch = time.monotonic()
         except Exception as e:
             print("load status from supabase error:", e)
 
@@ -120,12 +125,51 @@ def _load_persisted_status() -> None:
                 if st in STATUS_DOTS:
                     _current_status = st
                 _status_note = str(data.get("note") or "")
+                _last_store_fetch = time.monotonic()
         except Exception as e:
             print("load status file error:", e)
 
 
+def _refresh_status_from_store(*, force: bool = False) -> bool:
+    """
+    Re-read status from Supabase (shared with staff bot).
+    Returns True if local in-memory status changed.
+    """
+    global _current_status, _status_note, _last_store_fetch
+    now = time.monotonic()
+    if not force and (now - _last_store_fetch) < _STORE_FETCH_TTL:
+        return False
+
+    prev_st, prev_note = _current_status, _status_note
+    if not supabase:
+        _last_store_fetch = now
+        return False
+
+    try:
+        res = (
+            supabase.table(STATUS_TABLE)
+            .select("status, note")
+            .eq("id", "current")
+            .limit(1)
+            .execute()
+        )
+        rows = res.data or []
+        if rows:
+            st = str(rows[0].get("status") or "up").lower().strip()
+            if st in STATUS_DOTS:
+                _current_status = st
+            _status_note = str(rows[0].get("note") or "")
+        _last_store_fetch = now
+    except Exception as e:
+        print("refresh status from supabase error:", e)
+        return False
+
+    return (_current_status != prev_st) or (_status_note != prev_note)
+
+
 def _save_persisted_status() -> None:
     """Persist status to local file + Supabase (best-effort)."""
+    global _last_store_fetch
     payload = {
         "status": _current_status,
         "note": _status_note,
@@ -160,11 +204,17 @@ def _save_persisted_status() -> None:
                     "updated_at": payload["updated_at"],
                 }
             ).execute()
+            _last_store_fetch = time.monotonic()
         except Exception as e:
             print("save status to supabase error:", e)
 
 
 def get_system_status() -> str:
+    """Return current status; lightly refresh from Supabase so website stays in sync with staff bot."""
+    try:
+        _refresh_status_from_store(force=False)
+    except Exception:
+        pass
     return _current_status if _current_status in STATUS_DOTS else "up"
 
 
@@ -766,15 +816,27 @@ async def staff_check(interaction: discord.Interaction) -> bool:
 async def _update_bot_presence(status: str | None = None) -> None:
     """Set the bot's activity/presence to reflect the current system status."""
     if status is None:
-        status = get_system_status()
+        status = _current_status if _current_status in STATUS_DOTS else "up"
+    else:
+        status = str(status).lower().strip()
+    if status not in STATUS_DOTS:
+        status = "up"
     dot = STATUS_DOTS.get(status, "🟢")
     label = STATUS_LABELS.get(status, status)
+    # Keep activity name short (Discord truncates ~128 chars)
     activity = discord.Activity(
         type=discord.ActivityType.watching,
         name=f"{dot} {label}",
     )
+    if bot is None or not getattr(bot, "is_ready", lambda: False)():
+        print(f"presence skip (bot not ready) → {dot} {label}")
+        return
     try:
-        await bot.change_presence(activity=activity)
+        await bot.change_presence(
+            status=discord.Status.online,
+            activity=activity,
+        )
+        print(f"presence updated → watching {dot} {label}")
     except Exception as e:
         print("presence update error:", e)
 
@@ -791,13 +853,13 @@ async def update_status_channel(
     status: str,
     *,
     note: str = "",
-    by: Optional[discord.abc.User] = None,
+    by: Any = None,
     announce: bool = True,
+    rename_channel: bool = True,
 ) -> Optional[str]:
     """
-    Rename status channel with colored dot and optionally post an embed.
+    Persist status, update bot presence, rename status channel, optionally post embed.
     status: up | down | updating | detected
-    Persists status so loaders + Discord commands stay blocked across restarts.
     Returns error string or None on success.
     """
     global _current_status, _status_note
@@ -812,30 +874,38 @@ async def update_status_channel(
         _status_note = ""
     _save_persisted_status()
 
-    # Keep bot presence in sync with system status
+    # Keep bot presence in sync with system status (always)
     await _update_bot_presence(status)
 
-    channel = bot.get_channel(STATUS_CHANNEL_ID)
-    if channel is None:
-        try:
-            channel = await bot.fetch_channel(STATUS_CHANNEL_ID)
-        except Exception as e:
-            return f"Cannot fetch status channel: {e}"
+    channel = None
+    rename_err = None
+    if rename_channel and STATUS_CHANNEL_ID:
+        channel = bot.get_channel(STATUS_CHANNEL_ID)
+        if channel is None:
+            try:
+                channel = await bot.fetch_channel(STATUS_CHANNEL_ID)
+            except Exception as e:
+                rename_err = f"Cannot fetch status channel: {e}"
+                print(rename_err)
 
-    new_name = _status_channel_name(status)
-    try:
-        if hasattr(channel, "edit"):
-            await channel.edit(name=new_name, reason=f"Status → {status}")
-    except Exception as e:
-        print("status channel rename error:", e)
+        if channel is not None:
+            new_name = _status_channel_name(status)
+            try:
+                current = getattr(channel, "name", None)
+                if current != new_name and hasattr(channel, "edit"):
+                    await channel.edit(name=new_name, reason=f"Status → {status}")
+                    print(f"status channel renamed → {new_name}")
+            except Exception as e:
+                rename_err = f"status channel rename error: {e}"
+                print(rename_err)
 
     label = STATUS_LABELS.get(status, status)
     color = STATUS_COLORS.get(status, 0x95A5A6)
     dot = STATUS_DOTS.get(status, "⚪")
     blocked = status in MAINTENANCE_BLOCK_STATES
 
-    if announce and isinstance(channel, discord.TextChannel):
-        desc = note.strip() if note and note.strip() else None
+    if announce and channel is not None and isinstance(channel, discord.TextChannel):
+        desc = note.strip() if note and str(note).strip() else None
         embed = discord.Embed(
             title=f"{dot} System Status — {label}",
             color=color,
@@ -856,7 +926,52 @@ async def update_status_channel(
             print("status channel message error:", e)
             return f"Saved status but failed to post: {e}"
 
+    # Presence/status persisted even if rename failed (rate limit / permissions)
+    return rename_err
+
+
+async def apply_status_from_store(*, announce: bool = False) -> Optional[str]:
+    """Pull latest status from Supabase and apply presence + channel name."""
+    changed = _refresh_status_from_store(force=True)
+    st = get_system_status()
+    await _update_bot_presence(st)
+    if changed:
+        return await update_status_channel(
+            st,
+            note=_status_note,
+            announce=announce,
+            rename_channel=True,
+        )
     return None
+
+
+async def status_watch_loop() -> None:
+    """Background: pick up status changes made by staff bot / other instances."""
+    await bot.wait_until_ready()
+    while not bot.is_closed():
+        try:
+            prev = _current_status
+            changed = _refresh_status_from_store(force=True)
+            if changed:
+                print(f"[status-watch] store changed {prev} → {_current_status}")
+                await _update_bot_presence(_current_status)
+                # Rename channel without re-announcing (staff bot already announced)
+                ch = bot.get_channel(STATUS_CHANNEL_ID)
+                if ch is None and STATUS_CHANNEL_ID:
+                    try:
+                        ch = await bot.fetch_channel(STATUS_CHANNEL_ID)
+                    except Exception:
+                        ch = None
+                if ch is not None and hasattr(ch, "edit"):
+                    new_name = _status_channel_name(_current_status)
+                    try:
+                        if getattr(ch, "name", None) != new_name:
+                            await ch.edit(name=new_name, reason="Status sync from store")
+                    except Exception as e:
+                        print("[status-watch] rename error:", e)
+        except Exception as e:
+            print("[status-watch]", e)
+        await asyncio.sleep(15)
 
 
 async def post_changelog(
@@ -1093,6 +1208,12 @@ async def on_ready():
 
     # Set bot activity status to reflect current system status
     await _update_bot_presence()
+
+    # Keep presence + channel in sync when staff bot changes status via Supabase
+    try:
+        bot.loop.create_task(status_watch_loop())
+    except Exception as e:
+        print("status_watch_loop start error:", e)
 
     # Automatic changelog whenever watched files change between deploys
     try:
@@ -1487,9 +1608,12 @@ async def _start_http():
         return web.Response(text="Stand Discord bot online")
 
     async def api_status(_request):
-        st = get_system_status()
+        # Always refresh from shared store so website reflects staff /status command
+        _refresh_status_from_store(force=True)
+        st = _current_status if _current_status in STATUS_DOTS else "up"
         blocked = st in MAINTENANCE_BLOCK_STATES
         payload = {
+            "ok": True,
             "status": st,
             "label": STATUS_LABELS.get(st, st),
             "blocked": blocked,
@@ -1504,6 +1628,57 @@ async def _start_http():
             "note": _status_note,
         }
         return web.json_response(payload, status=503 if blocked else 200)
+
+    async def api_status_sync(request):
+        """
+        Internal: staff bot (or admin panel) notifies us that status changed in Supabase.
+        Reloads store, updates this bot's presence, and renames the status channel.
+        """
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        # Optional shared secret (STATUS_SYNC_SECRET or REGISTER_KEY_SECRET)
+        secret = (
+            request.headers.get("X-Status-Sync-Secret")
+            or (body or {}).get("secret")
+            or ""
+        )
+        expected = (
+            (os.getenv("STATUS_SYNC_SECRET") or "").strip()
+            or REGISTER_KEY_SECRET
+            or ""
+        )
+        if expected and secret != expected:
+            # Still allow localhost combined-service without secret
+            peer = request.remote or ""
+            if peer not in ("127.0.0.1", "::1"):
+                return web.json_response({"ok": False, "error": "unauthorized"}, status=401)
+
+        force_status = str((body or {}).get("status") or "").lower().strip()
+        note = str((body or {}).get("note") or "")
+        announce = bool((body or {}).get("announce", False))
+
+        if force_status and force_status in STATUS_DOTS:
+            err = await update_status_channel(
+                force_status,
+                note=note,
+                by=(body or {}).get("by") or "sync",
+                announce=announce,
+                rename_channel=True,
+            )
+        else:
+            err = await apply_status_from_store(announce=announce)
+
+        st = get_system_status()
+        return web.json_response(
+            {
+                "ok": err is None,
+                "status": st,
+                "error": err,
+                "presence": f"{STATUS_DOTS.get(st)} {STATUS_LABELS.get(st)}",
+            }
+        )
 
     async def api_stock(_request):
         """GET /api/v1/stock — available (unreserved) key counts for Roblox shop."""
@@ -1679,6 +1854,7 @@ async def _start_http():
     app.router.add_get("/health", health)
     app.router.add_get("/api/status", api_status)
     app.router.add_get("/api/v1/status", api_status)
+    app.router.add_post("/api/internal/status-sync", api_status_sync)
     app.router.add_get("/api/v1/stock", api_stock)
     app.router.add_post("/api/v1/dispense-key", api_dispense_key)
     # Dashboard OAuth + config APIs

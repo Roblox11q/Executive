@@ -36,6 +36,16 @@ STATUS_CHANNEL_ID = int(os.getenv("STATUS_CHANNEL_ID", "1554079705022595174") or
 CHANGELOG_CHANNEL_ID = int(os.getenv("CHANGELOG_CHANNEL_ID", "1553592489728933934") or "1553592489728933934")
 STATUS_CHANNEL_LABEL = os.getenv("STATUS_CHANNEL_LABEL", "Executive Stand")
 STATUS_TABLE = "stand_status"
+# Notify user bot (website + presence) when staff changes status
+PUBLIC_BOT_URL = (
+    os.getenv("PUBLIC_BOT_URL")
+    or os.getenv("RENDER_EXTERNAL_URL")
+    or ""
+).rstrip("/")
+STATUS_SYNC_SECRET = (
+    (os.getenv("STATUS_SYNC_SECRET") or "").strip()
+    or (os.getenv("REGISTER_KEY_SECRET") or "").strip()
+)
 CHANGELOG_TABLE = "stand_changelog"
 BLACKLIST_TABLE = "stand_blacklist"
 TABLE = "stand_configs"
@@ -474,25 +484,86 @@ def _status_channel_name(status: str) -> str:
 async def _update_bot_presence(status: str | None = None) -> None:
     """Set the bot's activity/presence to reflect the current system status."""
     if status is None:
-        status = get_system_status()
+        status = _current_status if _current_status in STATUS_DOTS else "up"
+    else:
+        status = str(status).lower().strip()
+    if status not in STATUS_DOTS:
+        status = "up"
     dot = STATUS_DOTS.get(status, "🟢")
     label = STATUS_LABELS.get(status, status)
     activity = discord.Activity(
         type=discord.ActivityType.watching,
         name=f"{dot} {label}",
     )
+    if bot is None or not getattr(bot, "is_ready", lambda: False)():
+        print(f"[Staff] presence skip (bot not ready) → {dot} {label}")
+        return
     try:
-        await bot.change_presence(activity=activity)
+        await bot.change_presence(
+            status=discord.Status.online,
+            activity=activity,
+        )
+        print(f"[Staff] presence updated → watching {dot} {label}")
     except Exception as e:
-        print("presence update error:", e)
+        print("[Staff] presence update error:", e)
+
+
+async def _notify_user_bot_status(
+    status: str,
+    *,
+    note: str = "",
+    by: Any = None,
+    announce: bool = False,
+) -> None:
+    """
+    Tell the user bot (website host) to reload status, update its presence,
+    and rename the status channel. Works in combined service via localhost.
+    """
+    targets = []
+    port = (os.getenv("PORT") or "10000").strip()
+    targets.append(f"http://127.0.0.1:{port}/api/internal/status-sync")
+    if PUBLIC_BOT_URL:
+        targets.append(f"{PUBLIC_BOT_URL}/api/internal/status-sync")
+
+    payload = {
+        "status": status,
+        "note": note or "",
+        "by": str(by) if by else "staff bot",
+        "announce": bool(announce),
+    }
+    if STATUS_SYNC_SECRET:
+        payload["secret"] = STATUS_SYNC_SECRET
+
+    headers = {"Content-Type": "application/json"}
+    if STATUS_SYNC_SECRET:
+        headers["X-Status-Sync-Secret"] = STATUS_SYNC_SECRET
+
+    for url in targets:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    url,
+                    json=payload,
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=8),
+                ) as resp:
+                    text = await resp.text()
+                    if resp.status < 400:
+                        print(f"[Staff] notified user bot status-sync OK ({url}) {text[:120]}")
+                        return
+                    print(f"[Staff] status-sync {url} → HTTP {resp.status}: {text[:200]}")
+        except Exception as e:
+            print(f"[Staff] status-sync notify failed ({url}): {e}")
 
 
 async def update_status_channel(
     status: str,
     *,
     note: str = "",
-    by: Optional[discord.abc.User] = None,
+    by: Any = None,
     announce: bool = True,
+    rename_channel: bool = True,
+    notify_user_bot: bool = True,
 ) -> Optional[str]:
     global _current_status, _status_note
     status = (status or "up").lower().strip()
@@ -506,30 +577,37 @@ async def update_status_channel(
         _status_note = ""
     _save_persisted_status()
 
-    # Keep bot presence in sync with system status
+    # Staff bot presence
     await _update_bot_presence(status)
 
-    channel = bot.get_channel(STATUS_CHANNEL_ID)
-    if channel is None:
-        try:
-            channel = await bot.fetch_channel(STATUS_CHANNEL_ID)
-        except Exception as e:
-            return f"Cannot fetch status channel: {e}"
+    channel = None
+    rename_err = None
+    if rename_channel and STATUS_CHANNEL_ID:
+        channel = bot.get_channel(STATUS_CHANNEL_ID)
+        if channel is None:
+            try:
+                channel = await bot.fetch_channel(STATUS_CHANNEL_ID)
+            except Exception as e:
+                rename_err = f"Cannot fetch status channel: {e}"
+                print("[Staff]", rename_err)
 
-    new_name = _status_channel_name(status)
-    try:
-        if hasattr(channel, "edit"):
-            await channel.edit(name=new_name, reason=f"Status → {status}")
-    except Exception as e:
-        print("status channel rename error:", e)
+        if channel is not None:
+            new_name = _status_channel_name(status)
+            try:
+                if getattr(channel, "name", None) != new_name and hasattr(channel, "edit"):
+                    await channel.edit(name=new_name, reason=f"Status → {status}")
+                    print(f"[Staff] status channel renamed → {new_name}")
+            except Exception as e:
+                rename_err = f"status channel rename error: {e}"
+                print("[Staff]", rename_err)
 
     label = STATUS_LABELS.get(status, status)
     color = STATUS_COLORS.get(status, 0x95A5A6)
     dot = STATUS_DOTS.get(status, "⚪")
     blocked = status in MAINTENANCE_BLOCK_STATES
 
-    if announce and isinstance(channel, discord.TextChannel):
-        desc = note.strip() if note and note.strip() else None
+    if announce and channel is not None and isinstance(channel, discord.TextChannel):
+        desc = note.strip() if note and str(note).strip() else None
         embed = discord.Embed(
             title=f"{dot} System Status — {label}",
             color=color,
@@ -547,9 +625,48 @@ async def update_status_channel(
         try:
             await channel.send(embed=embed)
         except Exception as e:
-            print("status channel message error:", e)
+            print("[Staff] status channel message error:", e)
+            # Still notify user bot so website/presence update
+            if notify_user_bot:
+                await _notify_user_bot_status(status, note=_status_note, by=by, announce=False)
             return f"Saved status but failed to post: {e}"
-    return None
+
+    # Push to user bot so website /api/status + user-bot presence stay in sync
+    if notify_user_bot:
+        await _notify_user_bot_status(status, note=_status_note, by=by, announce=False)
+
+    return rename_err
+
+
+async def status_watch_loop() -> None:
+    """Pick up status changes made from the website admin panel (user bot)."""
+    global _current_status, _status_note
+    await bot.wait_until_ready()
+    while not bot.is_closed():
+        try:
+            if not supabase:
+                await asyncio.sleep(20)
+                continue
+            prev = _current_status
+            res = (
+                supabase.table(STATUS_TABLE)
+                .select("status, note")
+                .eq("id", "current")
+                .limit(1)
+                .execute()
+            )
+            rows = res.data or []
+            if rows:
+                st = str(rows[0].get("status") or "up").lower().strip()
+                note = str(rows[0].get("note") or "")
+                if st in STATUS_DOTS and (st != _current_status or note != _status_note):
+                    _current_status = st
+                    _status_note = note
+                    print(f"[Staff status-watch] {prev} → {st}")
+                    await _update_bot_presence(st)
+        except Exception as e:
+            print("[Staff status-watch]", e)
+        await asyncio.sleep(15)
 
 
 async def post_changelog(
@@ -1113,17 +1230,22 @@ async def on_ready():
     print(f"[Staff] Status channel: {STATUS_CHANNEL_ID} | label: {STATUS_CHANNEL_LABEL}")
     print(f"[Staff] Transcripts: {TRANSCRIPT_CHANNEL_ID}")
     print(f"[Staff] Verify={VERIFY_ROLE_ID} Unverified={UNVERIFIED_ROLE_ID} Member={MEMBER_ROLE_ID}")
-    # Refresh status channel name from persisted state
+    # Refresh status channel name from persisted state (don't re-notify user bot on boot)
     try:
         await update_status_channel(
             get_system_status(),
             note=_status_note or f"Staff bot online — status `{get_system_status()}`",
             announce=False,
+            notify_user_bot=False,
         )
     except Exception as e:
         print("[Staff] on_ready status error:", e)
     # Set bot activity to reflect current system status
     await _update_bot_presence()
+    try:
+        bot.loop.create_task(status_watch_loop())
+    except Exception as e:
+        print("[Staff] status_watch_loop start error:", e)
 
 
 @bot.event
