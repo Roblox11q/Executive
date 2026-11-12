@@ -197,6 +197,8 @@ class Deps:
     set_blacklist: Callable[[Any, str, int], None]
     clear_blacklist: Callable[[Any], None]
     get_system_status: Callable[[], str]
+    update_status_channel: Callable[..., Any]
+    post_changelog: Callable[..., Any]
     supabase: Any
     TABLE: str
     BLACKLIST_TABLE: str
@@ -798,6 +800,95 @@ async def api_admin_keys_delete(request: web.Request) -> web.Response:
         return web.json_response({"ok": False, "error": str(e)}, status=500)
 
 
+# ── Admin: System status + changelog ─────────────────────────────────
+VALID_STATUSES = frozenset({"up", "down", "updating", "detected"})
+
+
+async def api_admin_set_status(request: web.Request) -> web.Response:
+    """Set global Stand status: renames Discord status channel, updates bot presence, persists."""
+    admin = await require_admin(request)
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"ok": False, "error": "invalid json"}, status=400)
+
+    status = str(body.get("status") or "").lower().strip()
+    note = str(body.get("note") or "").strip()
+    if status not in VALID_STATUSES:
+        return web.json_response(
+            {"ok": False, "error": f"invalid status; use: {', '.join(sorted(VALID_STATUSES))}"},
+            status=400,
+        )
+
+    update_fn = getattr(deps, "update_status_channel", None)
+    if not callable(update_fn):
+        return web.json_response(
+            {"ok": False, "error": "status updater not bound (bot not ready)"},
+            status=503,
+        )
+
+    # Build a lightweight "by" label for the embed (no real discord.User needed)
+    by_label = f"<@{admin['sub']}>" if admin.get("sub") else "Admin panel"
+
+    try:
+        err = await update_fn(
+            status,
+            note=note,
+            by=by_label,
+            announce=True,
+        )
+    except Exception as e:
+        print("[api/admin/status]", e)
+        return web.json_response({"ok": False, "error": str(e)}, status=500)
+
+    if err:
+        # Still may have partially applied (persisted + presence); report it
+        return web.json_response({"ok": False, "error": err, "status": status}, status=502)
+
+    return web.json_response({"ok": True, "status": status, "note": note})
+
+
+async def api_admin_post_changelog(request: web.Request) -> web.Response:
+    """Post a changelog embed to the Discord changelog channel + Supabase."""
+    admin = await require_admin(request)
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"ok": False, "error": "invalid json"}, status=400)
+
+    title = str(body.get("title") or "").strip()
+    notes = str(body.get("notes") or "").strip()
+    version = str(body.get("version") or "").strip()
+    if not title:
+        return web.json_response({"ok": False, "error": "title required"}, status=400)
+
+    post_fn = getattr(deps, "post_changelog", None)
+    if not callable(post_fn):
+        return web.json_response(
+            {"ok": False, "error": "changelog poster not bound (bot not ready)"},
+            status=503,
+        )
+
+    by_label = f"<@{admin['sub']}>" if admin.get("sub") else "Admin panel"
+
+    try:
+        err = await post_fn(
+            title=title,
+            notes=notes,
+            version=version,
+            by=by_label,
+            automatic=False,
+        )
+    except Exception as e:
+        print("[api/admin/changelog]", e)
+        return web.json_response({"ok": False, "error": str(e)}, status=500)
+
+    if err:
+        return web.json_response({"ok": False, "error": err}, status=502)
+
+    return web.json_response({"ok": True, "title": title})
+
+
 # ── Stripe ───────────────────────────────────────────────────────────
 async def api_create_checkout_session(request: web.Request) -> web.Response:
     payload = await require_user(request)
@@ -1321,6 +1412,8 @@ def register_routes(app: web.Application) -> None:
     app.router.add_post("/api/admin/keys", api_admin_keys_add)
     app.router.add_delete("/api/admin/keys", api_admin_keys_delete)
     app.router.add_post("/api/admin/keys/delete", api_admin_keys_delete)
+    app.router.add_post("/api/admin/status", api_admin_set_status)
+    app.router.add_post("/api/admin/changelog", api_admin_post_changelog)
     # Stripe
     app.router.add_post("/api/create-checkout-session", api_create_checkout_session)
     app.router.add_post("/api/stripe-webhook", api_stripe_webhook)

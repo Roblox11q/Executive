@@ -1657,6 +1657,8 @@ async def _start_http():
             set_blacklist=set_blacklist,
             clear_blacklist=clear_blacklist,
             get_system_status=get_system_status,
+            update_status_channel=update_status_channel,
+            post_changelog=post_changelog,
             supabase=supabase,
             TABLE=TABLE,
             BLACKLIST_TABLE=BLACKLIST_TABLE,

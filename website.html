@@ -3051,31 +3051,57 @@ async function loadAdminKeys() {
 //  ADMIN — STATUS
 // ═══════════════════════════════════════════════════════
 const STATUS_LABELS = { up:'🟢 Online', down:'🔴 Down', updating:'🔵 Updating', detected:'🟡 Detected' };
-function setStatus(s) {
-  DEMO_STATUS.status = s;
-  document.getElementById('currentStatusLabel').textContent = STATUS_LABELS[s];
-  renderOverviewStatus();
-  addActivity('🌐', `System status set to <strong>${STATUS_LABELS[s]}</strong>`);
-  showToast(`Status set to: ${STATUS_LABELS[s]}`, 'success');
+const STATUS_COLORS_UI = { up:'var(--green)', down:'var(--red)', updating:'var(--accent2)', detected:'var(--gold)' };
+
+async function setStatus(s) {
+  if (!STATUS_LABELS[s]) { showToast('Invalid status', 'error'); return; }
+  try {
+    await api('/api/admin/status', { method: 'POST', body: { status: s } });
+    DEMO_STATUS.status = s;
+    const el = document.getElementById('currentStatusLabel');
+    if (el) {
+      el.textContent = STATUS_LABELS[s];
+      el.style.color = STATUS_COLORS_UI[s] || 'var(--green)';
+    }
+    renderOverviewStatus();
+    addActivity('🌐', `System status set to <strong>${STATUS_LABELS[s]}</strong>`);
+    showToast(`Status set to: ${STATUS_LABELS[s]} — Discord channel + bot presence updated`, 'success');
+  } catch (e) {
+    console.warn('setStatus', e);
+    showToast(e.message || 'Failed to update status', 'error');
+  }
 }
 
-function postChangelog() {
+async function postChangelog() {
   const title = document.getElementById('changelogTitle').value.trim();
   const notes = document.getElementById('changelogNotes').value.trim();
   if (!title) { showToast('Enter a title', 'error'); return; }
-  const entry = {
-    version: title.split(' ')[0] || title,
-    date: new Date().toLocaleDateString('en-US', { year:'numeric', month:'long', day:'numeric' }),
-    isNew: true,
-    title: title.includes(' ') ? title.slice(title.indexOf(' ')+1) : title,
-    notes: notes ? notes.split('\n').filter(Boolean).map(l => l.replace(/^[-•*]\s*/,'')) : ['General update'],
-  };
-  DEMO_CHANGELOG.unshift(entry);
-  renderChangelog();
-  document.getElementById('changelogTitle').value = '';
-  document.getElementById('changelogNotes').value = '';
-  addActivity('📋', `Changelog posted: <strong>${title}</strong>`);
-  showToast('Changelog posted! ✓', 'success');
+  try {
+    await api('/api/admin/changelog', {
+      method: 'POST',
+      body: {
+        title,
+        notes,
+        version: title.split(' ')[0] || '',
+      },
+    });
+    const entry = {
+      version: title.split(' ')[0] || title,
+      date: new Date().toLocaleDateString('en-US', { year:'numeric', month:'long', day:'numeric' }),
+      isNew: true,
+      title: title.includes(' ') ? title.slice(title.indexOf(' ')+1) : title,
+      notes: notes ? notes.split('\n').filter(Boolean).map(l => l.replace(/^[-•*]\s*/,'')) : ['General update'],
+    };
+    DEMO_CHANGELOG.unshift(entry);
+    renderChangelog();
+    document.getElementById('changelogTitle').value = '';
+    document.getElementById('changelogNotes').value = '';
+    addActivity('📋', `Changelog posted: <strong>${title}</strong>`);
+    showToast('Changelog posted to Discord! ✓', 'success');
+  } catch (e) {
+    console.warn('postChangelog', e);
+    showToast(e.message || 'Failed to post changelog', 'error');
+  }
 }
 
 // ═══════════════════════════════════════════════════════
