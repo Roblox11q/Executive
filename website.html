@@ -1947,7 +1947,7 @@ if IsFriend(target.Name) then return end</code></pre>
 
         <div class="card mb-4">
           <div class="card-title">🎫 Open a Ticket</div>
-          <p style="font-size:14px;color:var(--text2);margin-bottom:16px;">Tickets are handled in our Discord server. Click a category above or fill in the form below and we'll direct you to the right channel.</p>
+          <p style="font-size:14px;color:var(--text2);margin-bottom:16px;">Fill in the form below. A private ticket channel will be created in our Discord server for staff to help you.</p>
           <div class="form-grid" style="margin-bottom:16px;">
             <div class="form-group">
               <label>Ticket Category</label>
@@ -2420,7 +2420,7 @@ async function hydrateFromServer(user) {
     document.getElementById('adminSidebarItem').classList.add('hidden');
   }
   try { renderChangelog(); } catch(e) {}
-  try { renderMyTickets(); } catch(e) {}
+  try { loadMyTickets(); } catch(e) {}
   try { renderActivity(); } catch(e) {}
   try { fetchLiveStatus(); } catch(e) {}
 }
@@ -2503,6 +2503,8 @@ function updateSidebar() {
 //  DASHBOARD NAVIGATION
 // ═══════════════════════════════════════════════════════
 function switchSection(id, btn) {
+  if (id === 'support') { try { loadMyTickets(); } catch(e) {} }
+
   document.querySelectorAll('.dash-section').forEach(s => s.classList.remove('active'));
   document.querySelectorAll('.sidebar-item').forEach(s => s.classList.remove('active'));
   document.getElementById('sec-' + id).classList.add('active');
@@ -3267,43 +3269,71 @@ async function renderChangelog() {
 //  SUPPORT & TICKETS
 // ═══════════════════════════════════════════════════════
 let tickets = [];
-let ticketCounter = 1001;
 
 function openTicket(category) {
   document.getElementById('ticketCategory').value = category;
   document.getElementById('ticketSubject').focus();
 }
 
-function submitTicket() {
+async function submitTicket() {
   const subject = document.getElementById('ticketSubject').value.trim();
   const body = document.getElementById('ticketBody').value.trim();
+  const category = document.getElementById('ticketCategory').value;
+  const priority = document.getElementById('ticketPriority').value;
   if (!subject) { showToast('Enter a subject', 'error'); return; }
-  const ticket = {
-    id: ticketCounter++,
-    subject,
-    category: document.getElementById('ticketCategory').value,
-    priority: document.getElementById('ticketPriority').value,
-    body,
-    status: 'open',
-    date: new Date().toLocaleDateString(),
-  };
-  tickets.unshift(ticket);
-  document.getElementById('ticketSubject').value = '';
-  document.getElementById('ticketBody').value = '';
-  renderMyTickets();
-  addActivity('🎫', `Support ticket <strong>#${ticket.id}</strong> opened: ${subject}`);
-  showToast(`Ticket #${ticket.id} submitted! A staff member will respond in our Discord.`, 'success');
-  /* PRODUCTION: POST /api/tickets — bot sends a ticket embed to your Discord tickets channel */
+  if (!getToken()) { showToast('Log in with Discord first', 'error'); return; }
+
+  const btn = document.querySelector('#sec-support .btn-primary');
+  if (btn) { btn.disabled = true; btn.textContent = 'Submitting…'; }
+
+  try {
+    const data = await api('/api/tickets', {
+      method: 'POST',
+      body: { subject, body, category, priority },
+    });
+    document.getElementById('ticketSubject').value = '';
+    document.getElementById('ticketBody').value = '';
+    const t = data.ticket || {};
+    addActivity('🎫', `Support ticket <strong>#${t.id || '?'}</strong> opened in Discord: ${subject}`);
+    showToast(data.message || `Ticket #${t.id} created in Discord. Staff will reply there.`, 'success');
+    await loadMyTickets();
+  } catch (e) {
+    showToast(e.message || 'Failed to create ticket', 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Submit Ticket'; }
+  }
+}
+
+async function loadMyTickets() {
+  if (!getToken()) {
+    tickets = [];
+    renderMyTickets();
+    return;
+  }
+  try {
+    const data = await api('/api/tickets');
+    tickets = (data.tickets || []).map(t => ({
+      id: t.id,
+      subject: t.subject || t.category || 'Ticket',
+      category: t.category || '',
+      status: t.status || 'open',
+      date: t.opened_at ? new Date(t.opened_at).toLocaleDateString() : '',
+    }));
+    renderMyTickets();
+  } catch (e) {
+    /* keep existing list on error */
+  }
 }
 
 function renderMyTickets() {
   const tbody = document.getElementById('myTicketsTable');
+  if (!tbody) return;
   if (!tickets.length) {
     tbody.innerHTML = `<tr><td colspan="5" style="color:var(--text3);text-align:center;padding:20px;">No tickets yet.</td></tr>`;
     return;
   }
-  const statusMap = { open:'ts-open', inprogress:'ts-inprog', closed:'ts-closed', resolved:'ts-resolved' };
-  const statusLabel = { open:'Open', inprogress:'In Progress', closed:'Closed', resolved:'Resolved' };
+  const statusMap = { open:'ts-open', claimed:'ts-inprog', inprogress:'ts-inprog', closed:'ts-closed', resolved:'ts-resolved' };
+  const statusLabel = { open:'Open', claimed:'Claimed', inprogress:'In Progress', closed:'Closed', resolved:'Resolved' };
   tbody.innerHTML = tickets.map(t => `
     <tr>
       <td><span style="color:var(--text3);font-size:12px;">#${t.id}</span></td>

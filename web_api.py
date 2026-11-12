@@ -12,6 +12,8 @@ import hmac
 import json
 import os
 import time
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Callable, Optional
 from urllib.parse import urlencode
 
@@ -66,6 +68,64 @@ STRIPE_PRICE_BYPASS = (os.getenv("STRIPE_PRICE_BYPASS") or "").strip()
 PUBLIC_URL = (
     os.getenv("PUBLIC_BOT_URL") or os.getenv("RENDER_EXTERNAL_URL") or ""
 ).rstrip("/")
+
+# Tickets — shared with staff_bot.py via data/tickets.json
+STAFF_ROLE_ID = (os.getenv("STAFF_ROLE_ID") or "").strip()
+TICKET_CATEGORY_ID = (os.getenv("TICKET_CATEGORY_ID") or "").strip()
+TICKET_DATA_FILE = Path(__file__).resolve().parent / "data" / "tickets.json"
+
+# Website form categories → Discord channel metadata
+WEB_TICKET_CATEGORIES = {
+    "general": {
+        "label": "General Support",
+        "description": "General questions and help",
+        "emoji": "💬",
+        "color": 0x5865F2,
+        "slug": "general",
+    },
+    "billing": {
+        "label": "Billing",
+        "description": "Plans, payments, refunds",
+        "emoji": "💰",
+        "color": 0xF1C40F,
+        "slug": "billing",
+    },
+    "bug": {
+        "label": "Bug Report",
+        "description": "Something is broken",
+        "emoji": "🐛",
+        "color": 0xE74C3C,
+        "slug": "bug",
+    },
+    "appeal": {
+        "label": "Ban Appeal",
+        "description": "Contest a ban or restriction",
+        "emoji": "⚖️",
+        "color": 0x9B59B6,
+        "slug": "appeal",
+    },
+    "feature": {
+        "label": "Feature Request",
+        "description": "Suggest an improvement",
+        "emoji": "✨",
+        "color": 0x2ECC71,
+        "slug": "feature",
+    },
+    "development": {
+        "label": "Development",
+        "description": "Report a bug",
+        "emoji": "❓",
+        "color": 0x5865F2,
+        "slug": "development",
+    },
+    "partnership": {
+        "label": "Partnership",
+        "description": "Affiliate / partnership inquiry",
+        "emoji": "🔧",
+        "color": 0x2ECC71,
+        "slug": "partnership",
+    },
+}
 
 
 def oauth_configured() -> bool:
@@ -845,6 +905,396 @@ async def api_stripe_webhook(request: web.Request) -> web.Response:
     return web.json_response({"ok": True})
 
 
+# ── Tickets (website → Discord channels, stored in Supabase) ─────────
+TICKETS_TABLE = "stand_tickets"
+
+
+def _ticket_bot_headers() -> dict:
+    return {
+        "Authorization": f"Bot {DISCORD_BOT_TOKEN}",
+        "Content-Type": "application/json",
+        "User-Agent": "ExecutiveStand-WebTickets (https://discord.com)",
+    }
+
+
+def _tickets_client():
+    return getattr(deps, "supabase", None)
+
+
+def _row_to_ticket(row: dict) -> dict:
+    return {
+        "channel_id": int(row["channel_id"]) if str(row.get("channel_id", "")).isdigit() else row.get("channel_id"),
+        "opener_id": int(row["opener_id"]) if str(row.get("opener_id", "")).isdigit() else row.get("opener_id"),
+        "category": row.get("category") or "general",
+        "number": int(row.get("number") or 0),
+        "opened_at": row.get("opened_at") or "",
+        "claimed_by": int(row["claimed_by"]) if row.get("claimed_by") and str(row["claimed_by"]).isdigit() else row.get("claimed_by"),
+        "claimed_at": row.get("claimed_at"),
+        "closed": bool(row.get("closed")),
+        "closed_by": row.get("closed_by"),
+        "closed_at": row.get("closed_at"),
+        "guild_id": int(row["guild_id"]) if row.get("guild_id") and str(row["guild_id"]).isdigit() else row.get("guild_id"),
+        "subject": row.get("subject") or "",
+        "priority": row.get("priority") or "medium",
+        "source": row.get("source") or "discord",
+        "body": row.get("body") or "",
+    }
+
+
+def _load_tickets() -> dict:
+    """Compatibility shape: {tickets: {channel_id: dict}, counters: {category: n}}."""
+    sb = _tickets_client()
+    out = {"tickets": {}, "counters": {}}
+    if not sb:
+        return out
+    try:
+        res = sb.table(TICKETS_TABLE).select("*").execute()
+        for row in res.data or []:
+            t = _row_to_ticket(row)
+            out["tickets"][str(t["channel_id"])] = t
+            cat = t.get("category") or "general"
+            out["counters"][cat] = max(int(out["counters"].get(cat, 0)), int(t.get("number") or 0))
+    except Exception as e:
+        print("[tickets] load error:", e)
+    return out
+
+
+def _next_ticket_number(category: str) -> int:
+    sb = _tickets_client()
+    if not sb:
+        return 1
+    try:
+        res = (
+            sb.table(TICKETS_TABLE)
+            .select("number")
+            .eq("category", category)
+            .order("number", desc=True)
+            .limit(1)
+            .execute()
+        )
+        if res.data:
+            return int(res.data[0].get("number") or 0) + 1
+    except Exception as e:
+        print("[tickets] next number error:", e)
+    return 1
+
+
+def _upsert_ticket(ticket: dict) -> None:
+    sb = _tickets_client()
+    if not sb:
+        print("[tickets] upsert skipped — no supabase")
+        return
+    row = {
+        "channel_id": str(ticket["channel_id"]),
+        "opener_id": str(ticket["opener_id"]),
+        "category": ticket.get("category") or "general",
+        "number": int(ticket.get("number") or 0),
+        "subject": ticket.get("subject") or "",
+        "priority": ticket.get("priority") or "medium",
+        "body": (ticket.get("body") or "")[:2000],
+        "source": ticket.get("source") or "discord",
+        "claimed_by": str(ticket["claimed_by"]) if ticket.get("claimed_by") else None,
+        "claimed_at": ticket.get("claimed_at"),
+        "closed": bool(ticket.get("closed")),
+        "closed_by": str(ticket["closed_by"]) if ticket.get("closed_by") else None,
+        "closed_at": ticket.get("closed_at"),
+        "guild_id": str(ticket["guild_id"]) if ticket.get("guild_id") else None,
+        "opened_at": ticket.get("opened_at") or datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        sb.table(TICKETS_TABLE).upsert(row).execute()
+    except Exception as e:
+        print("[tickets] upsert error:", e)
+        raise
+
+
+async def api_list_tickets(request: web.Request) -> web.Response:
+    """List the current user's tickets (open + closed) from Supabase."""
+    payload = await require_user(request)
+    discord_id = str(payload["sub"])
+    sb = _tickets_client()
+    mine = []
+    if sb:
+        try:
+            res = (
+                sb.table(TICKETS_TABLE)
+                .select("*")
+                .eq("opener_id", discord_id)
+                .order("opened_at", desc=True)
+                .execute()
+            )
+            for row in res.data or []:
+                t = _row_to_ticket(row)
+                mine.append(
+                    {
+                        "id": t.get("number") or t.get("channel_id"),
+                        "channel_id": str(t.get("channel_id")),
+                        "subject": t.get("subject") or t.get("category") or "Ticket",
+                        "category": t.get("category") or "",
+                        "priority": t.get("priority") or "medium",
+                        "status": "closed"
+                        if t.get("closed")
+                        else ("claimed" if t.get("claimed_by") else "open"),
+                        "opened_at": t.get("opened_at") or "",
+                        "source": t.get("source") or "discord",
+                        "guild_id": str(t.get("guild_id") or GUILD_ID or ""),
+                    }
+                )
+        except Exception as e:
+            print("[tickets] list error:", e)
+            return web.json_response({"ok": False, "error": str(e)}, status=500)
+    return web.json_response({"ok": True, "tickets": mine})
+
+
+
+async def api_create_ticket(request: web.Request) -> web.Response:
+    """
+    Create a real Discord ticket channel from the website form.
+    Body: { subject, body, category, priority }
+    Requires: GUILD_ID, STAFF_DISCORD_TOKEN (or DISCORD_TOKEN), preferably TICKET_CATEGORY_ID.
+    """
+    payload = await require_user(request)
+    discord_id = str(payload["sub"])
+    username = payload.get("username") or payload.get("global_name") or discord_id
+
+    if not GUILD_ID or not DISCORD_BOT_TOKEN:
+        return web.json_response(
+            {
+                "ok": False,
+                "error": "Ticket system not configured. Set GUILD_ID and STAFF_DISCORD_TOKEN.",
+            },
+            status=503,
+        )
+
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"ok": False, "error": "invalid json"}, status=400)
+
+    subject = str(body.get("subject") or "").strip()
+    details = str(body.get("body") or body.get("details") or "").strip()
+    category_key = str(body.get("category") or "general").strip().lower()
+    priority = str(body.get("priority") or "medium").strip().lower()
+    if priority not in ("low", "medium", "high"):
+        priority = "medium"
+    if not subject:
+        return web.json_response({"ok": False, "error": "subject is required"}, status=400)
+    if len(subject) > 200:
+        subject = subject[:200]
+    if len(details) > 4000:
+        details = details[:4000]
+
+    meta = WEB_TICKET_CATEGORIES.get(category_key) or WEB_TICKET_CATEGORIES["general"]
+    category_key = category_key if category_key in WEB_TICKET_CATEGORIES else "general"
+
+    sb = _tickets_client()
+    if not sb:
+        return web.json_response(
+            {"ok": False, "error": "Supabase not configured — cannot store tickets."},
+            status=503,
+        )
+
+    # Prevent multiple open tickets of same category for this user
+    try:
+        existing = (
+            sb.table(TICKETS_TABLE)
+            .select("channel_id")
+            .eq("opener_id", discord_id)
+            .eq("category", category_key)
+            .eq("closed", False)
+            .limit(1)
+            .execute()
+        )
+        if existing.data:
+            return web.json_response(
+                {
+                    "ok": False,
+                    "error": f"You already have an open {meta['label']} ticket in Discord.",
+                    "channel_id": existing.data[0].get("channel_id"),
+                },
+                status=409,
+            )
+    except Exception as e:
+        print("[tickets] duplicate check error:", e)
+
+    num = _next_ticket_number(category_key)
+    slug = (meta.get("slug") or meta["label"].lower().replace(" ", "-"))[:12]
+    channel_name = f"{slug}-{num:04d}"
+
+    # Permission overwrites (REST format)
+    # type 0 = role, type 1 = member
+    overwrites = [
+        {
+            "id": GUILD_ID,  # @everyone
+            "type": 0,
+            "deny": str(0x400 | 0x4000),  # VIEW_CHANNEL | READ_MESSAGE_HISTORY simplified via bits
+            "allow": "0",
+        },
+    ]
+    # Deny view for @everyone more cleanly: VIEW_CHANNEL = 1 << 10 = 1024
+    overwrites[0] = {
+        "id": GUILD_ID,
+        "type": 0,
+        "deny": "1024",
+        "allow": "0",
+    }
+    # Opener
+    overwrites.append(
+        {
+            "id": discord_id,
+            "type": 1,
+            "allow": str(1024 | 2048 | 65536 | 16384 | 32768),  # view, send, history, attach, embeds
+            "deny": "0",
+        }
+    )
+    # Staff role
+    if STAFF_ROLE_ID:
+        overwrites.append(
+            {
+                "id": STAFF_ROLE_ID,
+                "type": 0,
+                "allow": str(1024 | 2048 | 65536 | 8192 | 16384 | 32768),  # + manage messages
+                "deny": "0",
+            }
+        )
+
+    create_payload: dict[str, Any] = {
+        "name": channel_name,
+        "type": 0,
+        "topic": f"Ticket #{num} | {meta['label']} | opener:{discord_id} | web",
+        "permission_overwrites": overwrites,
+    }
+    if TICKET_CATEGORY_ID:
+        create_payload["parent_id"] = TICKET_CATEGORY_ID
+
+    headers = _ticket_bot_headers()
+    channel = None
+    async with ClientSession() as session:
+        async with session.post(
+            f"https://discord.com/api/v10/guilds/{GUILD_ID}/channels",
+            headers=headers,
+            json=create_payload,
+            timeout=20,
+        ) as resp:
+            raw = await resp.text()
+            if resp.status not in (200, 201):
+                print(f"[tickets] create channel failed {resp.status}: {raw[:500]}")
+                return web.json_response(
+                    {
+                        "ok": False,
+                        "error": f"Discord failed to create channel ({resp.status}). Check bot permissions and TICKET_CATEGORY_ID.",
+                    },
+                    status=502,
+                )
+            try:
+                channel = json.loads(raw)
+            except Exception:
+                return web.json_response({"ok": False, "error": "invalid Discord response"}, status=502)
+
+        channel_id = str(channel.get("id") or "")
+        if not channel_id:
+            return web.json_response({"ok": False, "error": "no channel id returned"}, status=502)
+
+        # Initial embed + user message
+        priority_label = {"low": "Low", "medium": "Medium", "high": "High ⚠️"}.get(priority, priority)
+        embed = {
+            "title": f"{meta['emoji']} {meta['label']} Ticket",
+            "description": (
+                f"Thanks for contacting support, <@{discord_id}>.\n\n"
+                f"**Category:** {meta['label']}\n"
+                f"**Priority:** {priority_label}\n"
+                f"**Subject:** {subject}\n\n"
+                f"**Details:**\n{details or '_No details provided._'}\n\n"
+                f"_Opened from the website by `{username}`._\n"
+                "Staff: reply here. Use the Discord ticket panel buttons to Claim / Close."
+            ),
+            "color": meta.get("color", 0x5865F2),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "footer": {"text": f"Ticket #{num:04d} • Executive Stand • Web"},
+        }
+        content = f"<@{discord_id}>"
+        if STAFF_ROLE_ID:
+            content += f" | <@&{STAFF_ROLE_ID}>"
+
+        components = [
+            {
+                "type": 1,
+                "components": [
+                    {
+                        "type": 2,
+                        "style": 4,
+                        "label": "Close",
+                        "emoji": {"name": "🔒"},
+                        "custom_id": "ticket:close",
+                    },
+                    {
+                        "type": 2,
+                        "style": 1,
+                        "label": "Claim",
+                        "emoji": {"name": "✋"},
+                        "custom_id": "ticket:claim",
+                    },
+                    {
+                        "type": 2,
+                        "style": 2,
+                        "label": "Transcript",
+                        "emoji": {"name": "📄"},
+                        "custom_id": "ticket:transcript",
+                    },
+                ],
+            }
+        ]
+        async with session.post(
+            f"https://discord.com/api/v10/channels/{channel_id}/messages",
+            headers=headers,
+            json={"content": content, "embeds": [embed], "components": components},
+            timeout=15,
+        ) as msg_resp:
+            if msg_resp.status not in (200, 201):
+                msg_err = await msg_resp.text()
+                print(f"[tickets] post message failed {msg_resp.status}: {msg_err[:300]}")
+                # Channel exists; still record ticket
+
+    ticket_row = {
+        "channel_id": int(channel_id),
+        "opener_id": int(discord_id),
+        "category": category_key,
+        "number": num,
+        "opened_at": datetime.now(timezone.utc).isoformat(),
+        "claimed_by": None,
+        "closed": False,
+        "guild_id": int(GUILD_ID) if str(GUILD_ID).isdigit() else GUILD_ID,
+        "subject": subject,
+        "priority": priority,
+        "source": "web",
+        "body": details[:500],
+    }
+    try:
+        _upsert_ticket(ticket_row)
+    except Exception as e:
+        return web.json_response(
+            {"ok": False, "error": f"Ticket channel created but failed to save to Supabase: {e}"},
+            status=500,
+        )
+
+    invite_hint = f"https://discord.com/channels/{GUILD_ID}/{channel_id}"
+    return web.json_response(
+        {
+            "ok": True,
+            "ticket": {
+                "id": num,
+                "channel_id": channel_id,
+                "subject": subject,
+                "category": category_key,
+                "priority": priority,
+                "status": "open",
+                "url": invite_hint,
+            },
+            "message": f"Ticket #{num:04d} created in Discord. Staff will reply there.",
+        }
+    )
+
+
 def register_routes(app: web.Application) -> None:
     """Attach all web dashboard routes to the aiohttp app."""
     app.router.add_get("/auth/discord", auth_discord)
@@ -858,6 +1308,9 @@ def register_routes(app: web.Application) -> None:
     app.router.add_get("/api/loader/preview", api_loader_preview)
     app.router.add_get("/api/changelog", api_changelog)
     app.router.add_get("/api/v1/me", api_me)
+    # Tickets
+    app.router.add_get("/api/tickets", api_list_tickets)
+    app.router.add_post("/api/tickets", api_create_ticket)
     # Admin
     app.router.add_get("/api/admin/users", api_admin_users)
     app.router.add_post("/api/admin/set-plan", api_admin_set_plan)
@@ -876,5 +1329,6 @@ def register_routes(app: web.Application) -> None:
         f"[web] OAuth={'ON' if oauth_configured() else 'OFF'} "
         f"admin_ids={len(ADMIN_DISCORD_IDS)} admin_roles={len(ADMIN_ROLE_IDS)} "
         f"guild={GUILD_ID or '(unset)'} stripe={'ON' if STRIPE_SECRET_KEY else 'OFF'} "
+        f"tickets={'ON' if (GUILD_ID and DISCORD_BOT_TOKEN) else 'OFF'} "
         f"redirect={DISCORD_REDIRECT_URI or '(unset)'}"
     )

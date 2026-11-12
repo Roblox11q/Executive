@@ -600,22 +600,99 @@ async def post_changelog(
     return None
 
 
-# ── Ticket data persistence ───────────────────────────────────────────────────
+# ── Ticket data persistence (Supabase stand_tickets, JSON file fallback) ─────
+TICKETS_TABLE = "stand_tickets"
+
+
+def _ticket_row_from_db(row: dict) -> dict:
+    def _int(v):
+        if v is None or v == "":
+            return None
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return v
+
+    return {
+        "channel_id": _int(row.get("channel_id")),
+        "opener_id": _int(row.get("opener_id")),
+        "category": row.get("category") or "general",
+        "number": int(row.get("number") or 0),
+        "opened_at": row.get("opened_at") or "",
+        "claimed_by": _int(row.get("claimed_by")),
+        "claimed_at": row.get("claimed_at"),
+        "closed": bool(row.get("closed")),
+        "closed_by": _int(row.get("closed_by")),
+        "closed_at": row.get("closed_at"),
+        "guild_id": _int(row.get("guild_id")),
+        "subject": row.get("subject") or "",
+        "priority": row.get("priority") or "medium",
+        "source": row.get("source") or "discord",
+        "body": row.get("body") or "",
+    }
+
+
 def _load_tickets() -> dict:
+    """Return {tickets: {channel_id: dict}, counters: {category: max_number}}."""
+    out: dict = {"tickets": {}, "counters": {}}
+    if supabase:
+        try:
+            res = supabase.table(TICKETS_TABLE).select("*").execute()
+            for row in res.data or []:
+                t = _ticket_row_from_db(row)
+                out["tickets"][str(t["channel_id"])] = t
+                cat = t.get("category") or "general"
+                out["counters"][cat] = max(
+                    int(out["counters"].get(cat, 0)), int(t.get("number") or 0)
+                )
+            return out
+        except Exception as e:
+            print("load tickets supabase error:", e)
     try:
         if TICKET_DATA_FILE.is_file():
             return json.loads(TICKET_DATA_FILE.read_text(encoding="utf-8"))
     except Exception as e:
-        print("load tickets error:", e)
-    return {"tickets": {}, "counters": {}}
+        print("load tickets file error:", e)
+    return out
+
+
+def _upsert_ticket_row(t: dict) -> None:
+    if not supabase:
+        return
+    row = {
+        "channel_id": str(t["channel_id"]),
+        "opener_id": str(t["opener_id"]),
+        "category": t.get("category") or "general",
+        "number": int(t.get("number") or 0),
+        "subject": t.get("subject") or "",
+        "priority": t.get("priority") or "medium",
+        "body": (t.get("body") or "")[:2000],
+        "source": t.get("source") or "discord",
+        "claimed_by": str(t["claimed_by"]) if t.get("claimed_by") else None,
+        "claimed_at": t.get("claimed_at"),
+        "closed": bool(t.get("closed")),
+        "closed_by": str(t["closed_by"]) if t.get("closed_by") else None,
+        "closed_at": t.get("closed_at"),
+        "guild_id": str(t["guild_id"]) if t.get("guild_id") else None,
+        "opened_at": t.get("opened_at") or datetime.now(timezone.utc).isoformat(),
+    }
+    supabase.table(TICKETS_TABLE).upsert(row).execute()
 
 
 def _save_tickets(data: dict) -> None:
+    """Persist full ticket map to Supabase (and JSON fallback)."""
+    tickets = data.get("tickets") or {}
+    if supabase:
+        try:
+            for t in tickets.values():
+                _upsert_ticket_row(t)
+        except Exception as e:
+            print("save tickets supabase error:", e)
     try:
         TICKET_DATA_FILE.parent.mkdir(parents=True, exist_ok=True)
         TICKET_DATA_FILE.write_text(json.dumps(data, indent=2), encoding="utf-8")
     except Exception as e:
-        print("save tickets error:", e)
+        print("save tickets file error:", e)
 
 
 TICKET_CATEGORIES = {

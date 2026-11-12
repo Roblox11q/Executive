@@ -103,3 +103,34 @@ create table if not exists stand_changelog (
   automatic   boolean not null default false,
   created_at  timestamptz not null default now()
 );
+
+-- ============================================================
+-- Support tickets (website + Discord staff bot)
+-- ============================================================
+
+create table if not exists stand_tickets (
+  channel_id   text primary key,
+  opener_id    text not null,
+  category     text not null default 'general',
+  number       int not null default 0,
+  subject      text not null default '',
+  priority     text not null default 'medium',
+  body         text not null default '',
+  source       text not null default 'discord',
+  claimed_by   text,
+  claimed_at   timestamptz,
+  closed       boolean not null default false,
+  closed_by    text,
+  closed_at    timestamptz,
+  guild_id     text,
+  opened_at    timestamptz not null default now()
+);
+
+create index if not exists stand_tickets_opener_idx
+  on stand_tickets (opener_id);
+
+create index if not exists stand_tickets_open_idx
+  on stand_tickets (closed, category);
+
+create index if not exists stand_tickets_opened_at_idx
+  on stand_tickets (opened_at desc);
