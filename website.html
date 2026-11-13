@@ -2496,9 +2496,34 @@ if IsFriend(target.Name) then return end</code></pre>
 
         <!-- KEYS -->
         <div class="admin-panel" id="ap-keys">
+          <div id="keyStockSummary" style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px;"></div>
+
+          <div class="card" style="margin-bottom:16px;">
+            <div class="card-title">📦 Bulk Restock (equal split)</div>
+            <p style="font-size:13px;color:var(--text2);margin-bottom:14px;">
+              Paste the keys you stock (required). Enter how many to add — they are split evenly across
+              Stand, Premium, and Bypass (remainder goes to the first plans). Nothing is auto-generated.
+            </p>
+            <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;margin-bottom:12px;">
+              <div class="form-group" style="width:140px;">
+                <label>Total amount</label>
+                <input type="number" id="restockAmount" min="1" max="500" value="30" placeholder="30">
+              </div>
+              <div class="form-group" style="flex:1;min-width:180px;">
+                <label>Preview split</label>
+                <div id="restockPreview" style="font-size:13px;color:var(--text2);padding:10px 0;">—</div>
+              </div>
+              <button class="btn btn-primary" onclick="restockKeys()">Restock evenly</button>
+            </div>
+            <div class="form-group">
+              <label>Keys (optional — one per line)</label>
+              <textarea id="restockKeysPaste" placeholder="Paste your keys here, one per line (required)." style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:10px 12px;color:var(--text);font-size:13px;width:100%;min-height:90px;resize:vertical;outline:none;font-family:ui-monospace,monospace;"></textarea>
+            </div>
+          </div>
+
           <div style="display:flex;gap:12px;margin-bottom:16px;flex-wrap:wrap;align-items:flex-end;">
             <div class="form-group" style="flex:1;min-width:200px;">
-              <label>Add Key to Stock</label>
+              <label>Add single key</label>
               <input type="text" id="newKeyVal" placeholder="xxxx-xxxx-xxxx-xxxx">
             </div>
             <div class="form-group" style="width:160px;">
@@ -2509,7 +2534,7 @@ if IsFriend(target.Name) then return end</code></pre>
                 <option value="bypass">Bypass</option>
               </select>
             </div>
-            <button class="btn btn-primary" onclick="addKey()">Add Key</button>
+            <button class="btn btn-outline" onclick="addKey()">Add Key</button>
           </div>
           <div class="card">
             <div class="card-title">🔑 Key Stock</div>
@@ -3690,7 +3715,29 @@ async function adminForceUnlink(id) {
 // ═══════════════════════════════════════════════════════
 function renderAdminKeys() {
   const tbody = document.getElementById('keysTable');
-  if (!state.keys.length) { tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;color:var(--text3);padding:20px;">No keys in stock</td></tr>`; return; }
+  const products = ['stand', 'premium', 'bypass'];
+  const avail = { stand: 0, premium: 0, bypass: 0 };
+  const total = { stand: 0, premium: 0, bypass: 0 };
+  (state.keys || []).forEach(k => {
+    const p = (k.product || 'stand').toLowerCase();
+    if (total[p] === undefined) return;
+    total[p]++;
+    if (!k.reserved) avail[p]++;
+  });
+  const sumEl = document.getElementById('keyStockSummary');
+  if (sumEl) {
+    sumEl.innerHTML = products.map(p => `
+      <div class="ov-stat" style="padding:14px;">
+        <div class="lbl">${p.charAt(0).toUpperCase() + p.slice(1)}</div>
+        <div class="val" style="font-size:20px;">${avail[p]} <span style="font-size:13px;color:var(--text3);font-weight:600;">available</span></div>
+        <div class="sub">${total[p]} total in stock</div>
+      </div>`).join('');
+  }
+  updateRestockPreview();
+  if (!state.keys.length) {
+    tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;color:var(--text3);padding:20px;">No keys in stock</td></tr>`;
+    return;
+  }
   tbody.innerHTML = state.keys.map(k => `
     <tr>
       <td><code style="font-size:12px;color:var(--accent2);">${k.key}</code></td>
@@ -3700,6 +3747,48 @@ function renderAdminKeys() {
       <td><button class="btn btn-danger btn-sm" onclick="removeKey(${k.id})">Delete</button></td>
     </tr>
   `).join('');
+}
+
+function updateRestockPreview() {
+  const el = document.getElementById('restockPreview');
+  const inp = document.getElementById('restockAmount');
+  if (!el || !inp) return;
+  let n = parseInt(inp.value, 10);
+  if (!n || n < 1) { el.textContent = 'Enter an amount'; return; }
+  n = Math.min(500, n);
+  const products = ['stand', 'premium', 'bypass'];
+  const base = Math.floor(n / 3);
+  const rem = n % 3;
+  const parts = products.map((p, i) => {
+    const c = base + (i < rem ? 1 : 0);
+    return `<strong>${c}</strong> ${p}`;
+  });
+  el.innerHTML = parts.join(' · ');
+}
+
+async function restockKeys() {
+  const amount = parseInt(document.getElementById('restockAmount').value, 10);
+  if (!amount || amount < 1) { showToast('Enter a valid amount', 'error'); return; }
+  const paste = ((document.getElementById('restockKeysPaste') || {}).value || '').trim();
+  if (!paste) { showToast('Paste the keys you want to stock — nothing is auto-generated', 'error'); return; }
+  const body = {
+    amount: Math.min(500, amount),
+    products: ['stand', 'premium', 'bypass'],
+    keys: paste,
+  };
+  if (!confirm(`Add up to ${body.amount} of your keys, split evenly across Stand, Premium, and Bypass?`)) return;
+  try {
+    const data = await api('/api/admin/keys/restock', { method: 'POST', body });
+    await loadAdminKeys();
+    renderAdminKeys();
+    renderAnalytics();
+    const dist = data.distribution || {};
+    const msg = `Restocked ${data.added || 0} keys — stand ${dist.stand || 0}, premium ${dist.premium || 0}, bypass ${dist.bypass || 0}`;
+    showToast(msg, 'success');
+    if (document.getElementById('restockKeysPaste')) document.getElementById('restockKeysPaste').value = '';
+  } catch (e) {
+    showToast('Restock failed: ' + (e.message || e), 'error');
+  }
 }
 
 async function addKey() {
@@ -4214,6 +4303,9 @@ async function fetchLiveStatus() {
 //  INIT
 // ═══════════════════════════════════════════════════════
 document.addEventListener('DOMContentLoaded', async () => {
+  const ra = document.getElementById('restockAmount');
+  if (ra) ra.addEventListener('input', updateRestockPreview);
+
   const params = new URLSearchParams(window.location.search);
   if (params.get('success')) showToast('Payment successful! Your plan is now active.', 'success');
   const ok = await bootstrapSession();
