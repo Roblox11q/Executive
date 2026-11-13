@@ -853,6 +853,140 @@ async def api_admin_keys_delete(request: web.Request) -> web.Response:
         return web.json_response({"ok": False, "error": str(e)}, status=500)
 
 
+KEY_STOCK_PRODUCTS = ("stand", "premium", "bypass")
+
+
+async def api_admin_keys_restock(request: web.Request) -> web.Response:
+    """Add N keys and split them evenly across plans (stand / premium / bypass).
+
+    Body:
+      amount: int  — total keys to add (required, 1–500); capped to pasted key count
+      keys: string | list  — required. Paste real keys (newline/comma separated) or JSON list.
+      products: list[str] — optional subset of plans (default all three).
+    """
+    await require_admin(request)
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"ok": False, "error": "invalid json"}, status=400)
+
+    try:
+        amount = int(body.get("amount") or 0)
+    except (TypeError, ValueError):
+        amount = 0
+    if amount < 1 or amount > 500:
+        return web.json_response(
+            {"ok": False, "error": "amount must be between 1 and 500"}, status=400
+        )
+
+    products_raw = body.get("products")
+    if isinstance(products_raw, list) and products_raw:
+        products = [
+            str(p).strip().lower()
+            for p in products_raw
+            if str(p).strip().lower() in KEY_STOCK_PRODUCTS
+        ]
+    else:
+        products = list(KEY_STOCK_PRODUCTS)
+    if not products:
+        return web.json_response({"ok": False, "error": "no valid products"}, status=400)
+
+    # Only keys the admin stocks — never auto-generate
+    raw_keys = body.get("keys")
+    provided: list[str] = []
+    if isinstance(raw_keys, list):
+        provided = [str(k).strip() for k in raw_keys if str(k).strip()]
+    elif isinstance(raw_keys, str):
+        for part in raw_keys.replace(",", "\n").splitlines():
+            k = part.strip()
+            if k:
+                provided.append(k)
+
+    # Dedupe while preserving order
+    seen: set[str] = set()
+    unique_provided: list[str] = []
+    for k in provided:
+        if k not in seen:
+            seen.add(k)
+            unique_provided.append(k)
+
+    if not unique_provided:
+        return web.json_response(
+            {
+                "ok": False,
+                "error": "paste the keys you want to stock (one per line) — nothing is auto-generated",
+            },
+            status=400,
+        )
+
+    # Cap amount to how many real keys were pasted
+    if len(unique_provided) < amount:
+        amount = len(unique_provided)
+    key_values = unique_provided[:amount]
+
+    n_products = len(products)
+    base = amount // n_products
+    rem = amount % n_products
+    # Equal split; remainder goes 1 extra to the first products
+    per_product_counts = [base + (1 if i < rem else 0) for i in range(n_products)]
+
+    if not deps.supabase:
+        return web.json_response({"ok": False, "error": "database unavailable"}, status=503)
+
+    inserted = []
+    skipped = []
+    idx = 0
+    try:
+        for prod, count in zip(products, per_product_counts):
+            for _ in range(count):
+                key_val = key_values[idx]
+                idx += 1
+                try:
+                    res = (
+                        deps.supabase.table(deps.KEY_STOCK_TABLE)
+                        .insert({"key": key_val, "product": prod, "reserved": False})
+                        .execute()
+                    )
+                    row = (res.data or [None])[0]
+                    if row:
+                        inserted.append(
+                            {
+                                "id": row.get("id"),
+                                "key": row.get("key"),
+                                "product": row.get("product"),
+                                "reserved": False,
+                                "assigned_to_roblox_username": "",
+                            }
+                        )
+                    else:
+                        skipped.append({"key": key_val, "product": prod, "error": "insert failed"})
+                except Exception as e:
+                    msg = str(e)
+                    skipped.append(
+                        {
+                            "key": key_val,
+                            "product": prod,
+                            "error": "duplicate" if "duplicate" in msg.lower() or "unique" in msg.lower() else msg,
+                        }
+                    )
+    except Exception as e:
+        print("[api/admin/keys restock]", e)
+        return web.json_response({"ok": False, "error": str(e)}, status=500)
+
+    distribution = {p: c for p, c in zip(products, per_product_counts)}
+    return web.json_response(
+        {
+            "ok": True,
+            "added": len(inserted),
+            "skipped": len(skipped),
+            "distribution": distribution,
+            "keys": inserted,
+            "errors": skipped[:20],
+            "generated": False,
+        }
+    )
+
+
 # ── Admin: System status + changelog ─────────────────────────────────
 VALID_STATUSES = frozenset({"up", "down", "updating", "detected"})
 
@@ -1587,6 +1721,7 @@ def register_routes(app: web.Application) -> None:
     app.router.add_post("/api/admin/keys", api_admin_keys_add)
     app.router.add_delete("/api/admin/keys", api_admin_keys_delete)
     app.router.add_post("/api/admin/keys/delete", api_admin_keys_delete)
+    app.router.add_post("/api/admin/keys/restock", api_admin_keys_restock)
     app.router.add_post("/api/admin/status", api_admin_set_status)
     app.router.add_post("/api/admin/changelog", api_admin_post_changelog)
     # Stripe
