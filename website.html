@@ -55,31 +55,154 @@ body {
 .mt-4 { margin-top: 16px; }
 .mb-4 { margin-bottom: 16px; }
 
-/* ── NAV ── */
+/* ── NAV (centered / ToDesktop-style) ── */
 nav {
   position: fixed; top: 0; left: 0; right: 0; z-index: 100;
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 0 32px; height: 60px;
-  background: rgba(7,8,13,0.85);
-  backdrop-filter: blur(16px);
-  border-bottom: 1px solid var(--border);
+  display: grid; grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  padding: 14px 28px;
+  background: transparent;
+  pointer-events: none;
 }
+nav > * { pointer-events: auto; }
 .nav-logo {
   display: flex; align-items: center; gap: 10px;
-  font-weight: 700; font-size: 17px; color: var(--text); text-decoration: none;
-  letter-spacing: -0.3px;
+  font-weight: 700; font-size: 15px; color: var(--text); text-decoration: none;
+  letter-spacing: -0.2px; justify-self: start;
 }
 .nav-logo .logo-icon {
-  width: 30px; height: 30px; background: var(--accent); border-radius: 7px;
+  width: 28px; height: 28px; background: var(--accent); border-radius: 8px;
   display: flex; align-items: center; justify-content: center;
-  font-size: 15px;
+  font-size: 14px; box-shadow: 0 0 20px var(--accent-glow);
 }
-.nav-links { display: flex; align-items: center; gap: 8px; }
+.nav-center {
+  justify-self: center;
+  display: flex; align-items: center; gap: 4px;
+  padding: 5px;
+  background: rgba(18, 20, 32, 0.72);
+  backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 999px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.35);
+}
 .nav-link {
-  color: var(--text2); text-decoration: none; font-size: 14px;
-  padding: 6px 12px; border-radius: 6px; transition: color .15s, background .15s;
+  color: rgba(255,255,255,0.65); text-decoration: none; font-size: 13.5px; font-weight: 500;
+  padding: 8px 14px; border-radius: 999px; transition: color .15s, background .15s;
+  background: transparent; border: none; cursor: pointer; font-family: inherit;
+  display: inline-flex; align-items: center; gap: 5px; white-space: nowrap;
 }
-.nav-link:hover { color: var(--text); background: var(--bg3); }
+.nav-link:hover { color: #fff; background: rgba(255,255,255,0.06); }
+.nav-link .chev {
+  width: 12px; height: 12px; opacity: .55; transition: transform .15s;
+}
+.nav-link.open .chev { transform: rotate(180deg); opacity: .9; }
+
+/* Mega / product dropdown under center pill */
+.nav-dd-wrap { position: relative; }
+.nav-mega {
+  display: none; position: absolute; top: calc(100% + 12px); left: 50%; transform: translateX(-50%);
+  width: 340px; padding: 8px;
+  background: rgba(16, 18, 28, 0.95);
+  backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 16px;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.55), 0 0 0 1px rgba(255,255,255,0.04) inset;
+  z-index: 130;
+}
+.nav-mega.show { display: block; animation: navMegaIn .16s ease-out; }
+@keyframes navMegaIn {
+  from { opacity: 0; transform: translateX(-50%) translateY(-6px); }
+  to { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+.nav-mega-item {
+  display: flex; gap: 12px; align-items: flex-start;
+  padding: 12px; border-radius: 12px; text-decoration: none; color: inherit;
+  transition: background .12s; cursor: pointer; border: none; background: none;
+  width: 100%; text-align: left; font-family: inherit;
+}
+.nav-mega-item:hover { background: rgba(255,255,255,0.05); }
+.nav-mega-icon {
+  width: 36px; height: 36px; border-radius: 10px; flex-shrink: 0;
+  background: rgba(91,106,245,0.15); color: var(--accent2);
+  display: flex; align-items: center; justify-content: center; font-size: 16px;
+}
+.nav-mega-text .t { font-size: 13.5px; font-weight: 600; color: #fff; margin-bottom: 2px; }
+.nav-mega-text .d { font-size: 12px; color: rgba(255,255,255,0.45); line-height: 1.4; }
+.nav-mega-sep { height: 1px; background: rgba(255,255,255,0.06); margin: 4px 8px; }
+
+.nav-right {
+  justify-self: end;
+  display: flex; align-items: center; gap: 10px;
+}
+.nav-pill-btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 8px 16px; border-radius: 999px; font-size: 13.5px; font-weight: 600;
+  cursor: pointer; border: 1px solid rgba(255,255,255,0.12);
+  background: rgba(18, 20, 32, 0.72); color: #fff;
+  backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+  transition: background .15s, border-color .15s, transform .15s;
+  font-family: inherit; text-decoration: none;
+}
+.nav-pill-btn:hover { background: rgba(30, 34, 50, 0.9); border-color: rgba(255,255,255,0.2); }
+.nav-pill-btn.primary {
+  background: var(--accent); border-color: transparent;
+  box-shadow: 0 4px 20px var(--accent-glow);
+}
+.nav-pill-btn.primary:hover { background: var(--accent2); transform: translateY(-1px); }
+
+.nav-user-wrap { position: relative; display: flex; align-items: center; gap: 8px; }
+.nav-user-btn {
+  display: flex; align-items: center; gap: 8px;
+  padding: 4px 10px 4px 4px; border-radius: 999px;
+  background: rgba(18, 20, 32, 0.72); border: 1px solid rgba(255,255,255,0.1);
+  cursor: pointer; color: var(--text); font-size: 13px; font-weight: 600;
+  transition: background .15s, border-color .15s;
+  backdrop-filter: blur(16px); font-family: inherit;
+}
+.nav-user-btn:hover, .nav-user-btn.open {
+  background: rgba(30, 34, 50, 0.9); border-color: rgba(255,255,255,0.18);
+}
+.nav-user-btn .nav-avatar {
+  width: 28px; height: 28px; border-radius: 50%; background: var(--accent);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 700; overflow: hidden; flex-shrink: 0;
+}
+.nav-user-btn .nav-avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.nav-user-btn .nav-chevron {
+  width: 14px; height: 14px; opacity: .55; transition: transform .15s;
+}
+.nav-user-btn.open .nav-chevron { transform: rotate(180deg); opacity: .9; }
+.nav-dropdown {
+  display: none; position: absolute; top: calc(100% + 10px); right: 0;
+  min-width: 220px; background: rgba(16, 18, 28, 0.96);
+  backdrop-filter: blur(24px); border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 14px; box-shadow: 0 16px 48px rgba(0,0,0,.55); z-index: 120;
+  overflow: hidden; padding: 6px;
+}
+.nav-dropdown.show { display: block; animation: navDrop .14s ease-out; }
+@keyframes navDrop {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.nav-dropdown-head {
+  padding: 10px 12px 8px; border-bottom: 1px solid rgba(255,255,255,0.06); margin-bottom: 4px;
+}
+.nav-dropdown-head .nd-name { font-size: 13px; font-weight: 700; }
+.nav-dropdown-head .nd-id { font-size: 11px; color: var(--text3); margin-top: 2px; font-family: ui-monospace, monospace; }
+.nav-dropdown-item {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  padding: 10px 12px; border: none; background: none; border-radius: 8px;
+  color: var(--text); font-size: 13px; font-weight: 500; cursor: pointer; text-align: left;
+  transition: background .12s; font-family: inherit;
+}
+.nav-dropdown-item:hover { background: rgba(255,255,255,0.05); }
+.nav-dropdown-item .nd-icon { width: 18px; text-align: center; opacity: .85; }
+.nav-dropdown-item.danger { color: #f87171; }
+.nav-dropdown-item.danger:hover { background: rgba(248,113,113,.1); }
+.nav-dropdown-sep { height: 1px; background: rgba(255,255,255,0.06); margin: 4px 6px; }
+
+/* keep .nav-links id for mobile hide rules */
+.nav-links { display: contents; }
 .btn {
   display: inline-flex; align-items: center; gap: 8px;
   padding: 8px 18px; border-radius: 8px; font-size: 14px; font-weight: 600;
@@ -429,7 +552,8 @@ tr:hover td { background: rgba(13,15,24,.5); }
 /* MOBILE NAV COLLAPSE */
 @media(max-width:768px) {
   nav { padding: 0 16px; }
-  .nav-links .nav-link { display: none; }
+  .nav-center { display: none; }
+  nav { grid-template-columns: 1fr auto; padding: 12px 16px; }
   .dash-layout { flex-direction: column; }
   .sidebar { width: 100%; border-right: none; border-bottom: 1px solid var(--border); flex-direction: row; overflow-x: auto; padding: 8px; gap: 2px; }
   .sidebar-label { display: none; }
@@ -610,25 +734,77 @@ input[type=range]::-webkit-slider-thumb {
      NAV
 ══════════════════════════════════════════ -->
 <nav id="mainNav">
-  <a class="nav-logo" href="#" onclick="showPage('landing')">
+  <a class="nav-logo" href="#" onclick="showPage('landing'); return false;">
     <div class="logo-icon">⚡</div>
     Executive Stand
   </a>
-  <div class="nav-links" id="navLinks">
-    <a class="nav-link" href="#" onclick="showPage('landing')">Home</a>
-    <a class="nav-link" href="#features" onclick="scrollToSection('features')">Features</a>
-    <a class="nav-link" href="#pricing" onclick="scrollToSection('pricing')">Pricing</a>
-    <a class="nav-link" href="#" onclick="showPage('docs')">Docs</a>
-    <div id="navGuest">
-      <button class="btn btn-discord btn-sm" onclick="showPage('auth')">
-        <svg width="16" height="12" viewBox="0 0 71 55" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M60.1 4.9A58.5 58.5 0 0 0 45.6.4a40.9 40.9 0 0 0-1.9 3.8 54.2 54.2 0 0 0-16.2 0A40.1 40.1 0 0 0 25.6.4 58.3 58.3 0 0 0 11 4.9C1.6 18.7-1 32.2.3 45.5a58.9 58.9 0 0 0 17.9 9 44.4 44.4 0 0 0 3.8-6.2 38.3 38.3 0 0 1-6-2.9l1.5-1.1a42 42 0 0 0 36 0l1.5 1.1a38.4 38.4 0 0 1-6 2.9 44 44 0 0 0 3.8 6.2 58.7 58.7 0 0 0 17.9-9C72 30.1 68.6 16.7 60.1 4.9ZM23.8 37.5c-3.5 0-6.4-3.2-6.4-7.1s2.8-7.1 6.4-7.1c3.5 0 6.4 3.1 6.3 7.1 0 3.9-2.8 7.1-6.3 7.1Zm23.5 0c-3.5 0-6.4-3.2-6.4-7.1s2.9-7.1 6.4-7.1c3.6 0 6.4 3.1 6.4 7.1 0 3.9-2.8 7.1-6.4 7.1Z"/></svg>
-        Login with Discord
+
+  <div class="nav-center" id="navLinks">
+    <div class="nav-dd-wrap">
+      <button type="button" class="nav-link" id="navProductBtn" onclick="toggleProductMenu(event)">
+        Product
+        <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
       </button>
+      <div class="nav-mega" id="navProductMenu" onclick="event.stopPropagation()">
+        <button type="button" class="nav-mega-item" onclick="closeProductMenu(); scrollToSection('features');">
+          <div class="nav-mega-icon">🛡️</div>
+          <div class="nav-mega-text">
+            <div class="t">Stand Script</div>
+            <div class="d">In-game stand control for Da Hood and related games with alts &amp; loaders.</div>
+          </div>
+        </button>
+        <button type="button" class="nav-mega-item" onclick="closeProductMenu(); scrollToSection('pricing');">
+          <div class="nav-mega-icon">💎</div>
+          <div class="nav-mega-text">
+            <div class="t">Premium &amp; Bypass</div>
+            <div class="d">Unlock web dashboard, more alts, and exclusive in-script features.</div>
+          </div>
+        </button>
+        <div class="nav-mega-sep"></div>
+        <button type="button" class="nav-mega-item" onclick="closeProductMenu(); showPage('docs');">
+          <div class="nav-mega-icon">📖</div>
+          <div class="nav-mega-text">
+            <div class="t">Documentation</div>
+            <div class="d">Setup, commands, and configuration guides.</div>
+          </div>
+        </button>
+      </div>
     </div>
-    <div id="navUser" class="hidden" style="display:flex;align-items:center;gap:8px;">
-      <span id="navUserName" style="font-size:14px;color:var(--text2);"></span>
-      <button class="btn btn-primary btn-sm" onclick="showPage('dashboard')">Dashboard</button>
-      <button class="btn btn-outline btn-sm" onclick="logout()">Logout</button>
+    <a class="nav-link" href="#pricing" onclick="scrollToSection('pricing'); return false;">Pricing</a>
+    <a class="nav-link" href="#" onclick="showPage('docs'); return false;">Docs</a>
+    <a class="nav-link" href="#" onclick="showPage('dashboard'); setTimeout(() => switchSection('changelog'), 50); return false;">Changelog</a>
+  </div>
+
+  <div class="nav-right">
+    <div id="navGuest">
+      <button type="button" class="nav-pill-btn" onclick="showPage('auth')">Log in</button>
+    </div>
+    <div id="navUser" class="hidden nav-user-wrap">
+      <button type="button" class="nav-pill-btn primary" onclick="showPage('dashboard')">Dashboard</button>
+      <button type="button" class="nav-user-btn" id="navUserBtn" onclick="toggleNavDropdown(event)" aria-haspopup="true" aria-expanded="false">
+        <span class="nav-avatar" id="navAvatar">?</span>
+        <span id="navUserName">User</span>
+        <svg class="nav-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+      </button>
+      <div class="nav-dropdown" id="navDropdown" onclick="event.stopPropagation()">
+        <div class="nav-dropdown-head">
+          <div class="nd-name" id="ndName">—</div>
+          <div class="nd-id" id="ndId">—</div>
+        </div>
+        <button type="button" class="nav-dropdown-item" onclick="closeNavDropdown(); showPage('dashboard');">
+          <span class="nd-icon">📊</span> Dashboard
+        </button>
+        <button type="button" class="nav-dropdown-item" onclick="closeNavDropdown(); showPage('dashboard'); setTimeout(() => switchSection('subscription'), 50);">
+          <span class="nd-icon">💳</span> Subscription
+        </button>
+        <div class="nav-dropdown-sep"></div>
+        <button type="button" class="nav-dropdown-item" onclick="closeNavDropdown(); logout();">
+          <span class="nd-icon">🚪</span> Log out
+        </button>
+        <button type="button" class="nav-dropdown-item danger" onclick="closeNavDropdown(); openDeleteAccountModal();">
+          <span class="nd-icon">🗑️</span> Delete account
+        </button>
+      </div>
     </div>
   </div>
 </nav>
@@ -2551,12 +2727,71 @@ function updateNavUser() {
   if (state.user) {
     guest.classList.add('hidden');
     userEl.classList.remove('hidden');
-    document.getElementById('navUserName').textContent = state.user.username;
+    const u = state.user;
+    const name = u.username || 'User';
+    document.getElementById('navUserName').textContent = name;
+    const av = document.getElementById('navAvatar');
+    const letter = name[0].toUpperCase();
+    if (u.avatar_url) {
+      av.innerHTML = `<img src="${u.avatar_url}" alt="" onerror="this.parentNode.textContent='${letter}'" />`;
+    } else {
+      av.textContent = letter;
+    }
+    const ndName = document.getElementById('ndName');
+    const ndId = document.getElementById('ndId');
+    if (ndName) ndName.textContent = name;
+    if (ndId) ndId.textContent = 'ID ' + (u.id || u.discord_id || '—');
   } else {
     guest.classList.remove('hidden');
     userEl.classList.add('hidden');
+    closeNavDropdown();
   }
 }
+
+function toggleProductMenu(e) {
+  if (e) e.stopPropagation();
+  const menu = document.getElementById('navProductMenu');
+  const btn = document.getElementById('navProductBtn');
+  if (!menu || !btn) return;
+  const open = menu.classList.toggle('show');
+  btn.classList.toggle('open', open);
+  closeNavDropdown();
+}
+function closeProductMenu() {
+  const menu = document.getElementById('navProductMenu');
+  const btn = document.getElementById('navProductBtn');
+  if (menu) menu.classList.remove('show');
+  if (btn) btn.classList.remove('open');
+}
+document.addEventListener('click', function (e) {
+  const wrap = document.querySelector('.nav-dd-wrap');
+  if (wrap && !wrap.contains(e.target)) closeProductMenu();
+});
+
+function toggleNavDropdown(e) {
+  if (e) e.stopPropagation();
+  const drop = document.getElementById('navDropdown');
+  const btn = document.getElementById('navUserBtn');
+  if (!drop || !btn) return;
+  const open = drop.classList.toggle('show');
+  btn.classList.toggle('open', open);
+  btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+}
+
+function closeNavDropdown() {
+  const drop = document.getElementById('navDropdown');
+  const btn = document.getElementById('navUserBtn');
+  if (drop) drop.classList.remove('show');
+  if (btn) {
+    btn.classList.remove('open');
+    btn.setAttribute('aria-expanded', 'false');
+  }
+}
+
+document.addEventListener('click', function (e) {
+  const wrap = document.querySelector('.nav-user-wrap');
+  if (wrap && !wrap.contains(e.target)) closeNavDropdown();
+});
 
 function updateSidebar() {
   const u = state.user;
