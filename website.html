@@ -240,7 +240,11 @@ footer a:hover { color: var(--text2); }
 .user-pill {
   display: flex; align-items: center; gap: 10px; padding: 10px 12px;
   background: var(--bg3); border-radius: 10px; margin-top: 8px;
+  cursor: pointer; position: relative; transition: background .15s, border-color .15s;
+  border: 1px solid transparent; user-select: none;
 }
+.user-pill:hover { background: var(--bg2); border-color: var(--border); }
+.user-pill.open { background: var(--bg2); border-color: var(--accent); }
 .user-avatar { width: 32px; height: 32px; border-radius: 50%; background: var(--accent); display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 700; flex-shrink: 0; }
 .user-info { flex: 1; min-width: 0; }
 .user-name { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -249,6 +253,36 @@ footer a:hover { color: var(--text2); }
 .plan-free { background: rgba(86,95,126,.2); color: var(--text3); }
 .plan-premium { background: rgba(91,106,245,.2); color: var(--accent2); }
 .plan-bypass { background: rgba(240,180,41,.2); color: var(--gold); }
+
+/* Settings dropdown from user pill */
+.settings-menu {
+  display: none; position: absolute; left: 0; right: 0; bottom: calc(100% + 8px);
+  background: var(--bg2); border: 1px solid var(--border); border-radius: 12px;
+  box-shadow: 0 12px 40px rgba(0,0,0,.45); z-index: 80; overflow: hidden;
+  min-width: 220px;
+}
+.settings-menu.show { display: block; animation: settingsPop .15s ease-out; }
+@keyframes settingsPop {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.settings-menu-header {
+  padding: 14px 14px 10px; border-bottom: 1px solid var(--border);
+}
+.settings-menu-header .sm-name { font-size: 14px; font-weight: 700; }
+.settings-menu-header .sm-id { font-size: 11px; color: var(--text3); margin-top: 2px; font-family: ui-monospace, monospace; }
+.settings-menu-header .sm-plan { margin-top: 8px; }
+.settings-menu-item {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  padding: 11px 14px; background: none; border: none; color: var(--text);
+  font-size: 13px; font-weight: 500; cursor: pointer; text-align: left;
+  transition: background .12s;
+}
+.settings-menu-item:hover { background: var(--bg3); }
+.settings-menu-item .sm-icon { width: 18px; text-align: center; opacity: .85; }
+.settings-menu-item.danger { color: #f87171; }
+.settings-menu-item.danger:hover { background: rgba(248,113,113,.1); }
+.settings-menu-divider { height: 1px; background: var(--border); margin: 4px 0; }
 
 .dash-content { flex: 1; padding: 32px; overflow-y: auto; }
 .dash-section { display: none; }
@@ -1529,11 +1563,37 @@ if IsFriend(target.Name) then return end</code></pre>
         </button>
       </div>
       <div class="sidebar-spacer"></div>
-      <div class="user-pill" id="sidebarUser">
+      <div class="user-pill" id="sidebarUser" onclick="toggleSettingsMenu(event)" title="Account settings">
         <div class="user-avatar" id="sidebarAvatar">?</div>
         <div class="user-info">
           <div class="user-name" id="sidebarName">Loading...</div>
           <div class="user-plan" id="sidebarPlan">Free</div>
+        </div>
+        <div class="settings-menu" id="settingsMenu" onclick="event.stopPropagation()">
+          <div class="settings-menu-header">
+            <div class="sm-name" id="smName">—</div>
+            <div class="sm-id" id="smId">—</div>
+            <div class="sm-plan" id="smPlan"></div>
+          </div>
+          <button type="button" class="settings-menu-item" onclick="closeSettingsMenu(); switchSection('config');">
+            <span class="sm-icon">⚙️</span> Stand settings
+          </button>
+          <button type="button" class="settings-menu-item" onclick="closeSettingsMenu(); switchSection('subscription');">
+            <span class="sm-icon">💳</span> Subscription &amp; billing
+          </button>
+          <button type="button" class="settings-menu-item" onclick="closeSettingsMenu(); switchSection('alts');">
+            <span class="sm-icon">🎮</span> Alt accounts
+          </button>
+          <button type="button" class="settings-menu-item" onclick="closeSettingsMenu(); switchSection('support');">
+            <span class="sm-icon">🎫</span> Support tickets
+          </button>
+          <div class="settings-menu-divider"></div>
+          <button type="button" class="settings-menu-item" onclick="closeSettingsMenu(); logout();">
+            <span class="sm-icon">🚪</span> Log out
+          </button>
+          <button type="button" class="settings-menu-item danger" onclick="closeSettingsMenu(); openDeleteAccountModal();">
+            <span class="sm-icon">🗑️</span> Delete account
+          </button>
         </div>
       </div>
     </div>
@@ -2260,6 +2320,22 @@ if IsFriend(target.Name) then return end</code></pre>
   </div>
 </div>
 
+<!-- DELETE ACCOUNT MODAL -->
+<div class="modal-overlay" id="deleteAccountModal" onclick="closeModal('deleteAccountModal')">
+  <div class="modal" onclick="event.stopPropagation()">
+    <h3 style="color:#f87171;">Delete account</h3>
+    <p>This permanently removes your Stand config, alt links, and dashboard data. License keys already assigned cannot be un-sold. This cannot be undone.</p>
+    <div class="form-group" style="margin-bottom:16px;">
+      <label>Type <strong>DELETE</strong> to confirm</label>
+      <input type="text" id="deleteAccountConfirm" placeholder="DELETE" autocomplete="off" style="width:100%;padding:10px 12px;border-radius:8px;border:1px solid var(--border);background:var(--bg3);color:var(--text);font-size:14px;" />
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeModal('deleteAccountModal')">Cancel</button>
+      <button class="btn" style="background:#dc2626;color:#fff;" onclick="confirmDeleteAccount()">Delete my account</button>
+    </div>
+  </div>
+</div>
+
 <script>
 // ═══════════════════════════════════════════════════════
 //  STATE + API CLIENT
@@ -2497,6 +2573,65 @@ function updateSidebar() {
   document.getElementById('sidebarAvatar').textContent = u.username[0].toUpperCase();
   const planEl = document.getElementById('sidebarPlan');
   planEl.innerHTML = `<span class="plan-badge plan-${u.plan}">${u.plan.toUpperCase()}</span>`;
+  // Settings menu header
+  const smName = document.getElementById('smName');
+  const smId = document.getElementById('smId');
+  const smPlan = document.getElementById('smPlan');
+  if (smName) smName.textContent = u.username || '—';
+  if (smId) smId.textContent = 'ID ' + (u.id || u.discord_id || '—');
+  if (smPlan) smPlan.innerHTML = `<span class="plan-badge plan-${u.plan}">${(u.plan || 'free').toUpperCase()}</span>`;
+}
+
+function toggleSettingsMenu(e) {
+  if (e) e.stopPropagation();
+  const menu = document.getElementById('settingsMenu');
+  const pill = document.getElementById('sidebarUser');
+  if (!menu || !pill) return;
+  const open = menu.classList.toggle('show');
+  pill.classList.toggle('open', open);
+}
+
+function closeSettingsMenu() {
+  const menu = document.getElementById('settingsMenu');
+  const pill = document.getElementById('sidebarUser');
+  if (menu) menu.classList.remove('show');
+  if (pill) pill.classList.remove('open');
+}
+
+document.addEventListener('click', function (e) {
+  const pill = document.getElementById('sidebarUser');
+  if (pill && !pill.contains(e.target)) closeSettingsMenu();
+});
+
+function openDeleteAccountModal() {
+  const input = document.getElementById('deleteAccountConfirm');
+  if (input) input.value = '';
+  const el = document.getElementById('deleteAccountModal');
+  if (el) el.classList.add('show');
+}
+
+async function confirmDeleteAccount() {
+  const input = document.getElementById('deleteAccountConfirm');
+  const confirm = (input && input.value || '').trim();
+  if (confirm.toUpperCase() !== 'DELETE') {
+    showToast('Type DELETE to confirm', 'error');
+    return;
+  }
+  try {
+    const res = await api('/api/delete-account', { method: 'POST', body: { confirm: 'DELETE' } });
+    if (!res || !res.ok) {
+      showToast((res && res.error) || 'Could not delete account', 'error');
+      return;
+    }
+    closeModal('deleteAccountModal');
+    state.user = null;
+    setToken(null);
+    updateNavUser();
+    showPage('landing');
+    showToast('Account deleted', 'info');
+  } catch (err) {
+    showToast(String(err.message || err), 'error');
+  }
 }
 
 // ═══════════════════════════════════════════════════════

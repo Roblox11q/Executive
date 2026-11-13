@@ -11,6 +11,7 @@ import hashlib
 import hmac
 import json
 import os
+import secrets
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -32,11 +33,19 @@ DISCORD_REDIRECT_URI = (
         else ""
     )
 ).strip()
-SESSION_SECRET = (
-    os.getenv("SESSION_SECRET")
-    or os.getenv("DISCORD_CLIENT_SECRET")
-    or "dev-insecure-change-me"
-).strip()
+SESSION_SECRET = (os.getenv("SESSION_SECRET") or "").strip()
+if not SESSION_SECRET:
+    # Never fall back to a known default in production — forged sessions would be trivial.
+    SESSION_SECRET = (os.getenv("DISCORD_CLIENT_SECRET") or "").strip()
+if not SESSION_SECRET:
+    import warnings
+    warnings.warn(
+        "SESSION_SECRET is unset. Set a long random SESSION_SECRET env var. "
+        "Using ephemeral secret for this process only.",
+        RuntimeWarning,
+        stacklevel=1,
+    )
+    SESSION_SECRET = secrets.token_hex(32)
 # Comma-separated Discord user IDs that get is_admin on the site (fallback)
 ADMIN_DISCORD_IDS = {
     x.strip()
@@ -402,6 +411,50 @@ async def api_me(request: web.Request) -> web.Response:
 
 async def api_logout(_request: web.Request) -> web.Response:
     resp = web.json_response({"ok": True})
+    resp.del_cookie("es_token", path="/")
+    return resp
+
+
+async def api_delete_account(request: web.Request) -> web.Response:
+    """Permanently delete the signed-in user's stand config and related data."""
+    payload = await require_user(request)
+    discord_id = str(payload["sub"])
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    confirm = str(body.get("confirm") or "").strip().upper()
+    if confirm not in ("DELETE", "DELETE MY ACCOUNT"):
+        return web.json_response(
+            {"ok": False, "error": 'Type "DELETE" to confirm account deletion'},
+            status=400,
+        )
+
+    if not deps.supabase:
+        return web.json_response({"ok": False, "error": "database unavailable"}, status=503)
+
+    try:
+        # Remove config
+        deps.supabase.table("stand_configs").delete().eq("discord_id", discord_id).execute()
+        # Best-effort: clear claimed_by on any keys, close open tickets owned by user
+        try:
+            deps.supabase.table("key_stock").update(
+                {"claimed_by_discord_id": None}
+            ).eq("claimed_by_discord_id", discord_id).execute()
+        except Exception:
+            pass
+        try:
+            deps.supabase.table("stand_tickets").update(
+                {"closed": True, "closed_by": "account_deleted", "closed_at": datetime.now(timezone.utc).isoformat()}
+            ).eq("opener_id", discord_id).eq("closed", False).execute()
+        except Exception:
+            pass
+        print(f"[api/delete-account] deleted discord_id={discord_id}")
+    except Exception as e:
+        print(f"[api/delete-account] {e}")
+        return web.json_response({"ok": False, "error": str(e)}, status=500)
+
+    resp = web.json_response({"ok": True, "deleted": True})
     resp.del_cookie("es_token", path="/")
     return resp
 
@@ -919,8 +972,10 @@ async def api_create_checkout_session(request: web.Request) -> web.Response:
         "client_reference_id": discord_id,
         "metadata[discord_id]": discord_id,
         "metadata[plan]": plan,
+        "metadata[price_id]": price_id,
         "subscription_data[metadata][discord_id]": discord_id,
         "subscription_data[metadata][plan]": plan,
+        "subscription_data[metadata][price_id]": price_id,
     }
     headers = {
         "Authorization": f"Bearer {STRIPE_SECRET_KEY}",
@@ -944,55 +999,173 @@ async def api_create_checkout_session(request: web.Request) -> web.Response:
         return web.json_response({"ok": False, "error": str(e)}, status=500)
 
 
+def _plan_from_price_id(price_id: str) -> str:
+    """Map Stripe Price ID → internal plan. Never default to a paid tier on unknown."""
+    price_id = (price_id or "").strip()
+    if price_id and STRIPE_PRICE_BYPASS and price_id == STRIPE_PRICE_BYPASS:
+        return "bypass"
+    if price_id and STRIPE_PRICE_PREMIUM and price_id == STRIPE_PRICE_PREMIUM:
+        return "premium"
+    return ""
+
+
+def _already_processed_event(event_id: str) -> bool:
+    if not event_id or not deps.supabase:
+        return False
+    try:
+        res = (
+            deps.supabase.table("stripe_events")
+            .select("event_id")
+            .eq("event_id", event_id)
+            .limit(1)
+            .execute()
+        )
+        return bool(res.data)
+    except Exception as e:
+        print(f"[stripe_events] lookup failed: {e}")
+        return False
+
+
+def _mark_event_processed(event_id: str, event_type: str) -> None:
+    if not event_id or not deps.supabase:
+        return
+    try:
+        deps.supabase.table("stripe_events").upsert(
+            {"event_id": event_id, "event_type": event_type or ""},
+            on_conflict="event_id",
+        ).execute()
+    except Exception as e:
+        print(f"[stripe_events] insert failed: {e}")
+
+
 async def api_stripe_webhook(request: web.Request) -> web.Response:
-    """Handle checkout.session.completed → set user plan in Supabase."""
+    """Verify Stripe signature, process checkout (and optional lifecycle) events once."""
     raw = await request.read()
     sig = request.headers.get("Stripe-Signature", "")
-    # Optional signature check when webhook secret is set
-    if STRIPE_WEBHOOK_SECRET:
-        try:
-            import hmac as _hmac
-            import hashlib as _hashlib
 
-            # Minimal verify: Stripe sends t=...,v1=...
+    if not STRIPE_WEBHOOK_SECRET:
+        print("[stripe webhook] STRIPE_WEBHOOK_SECRET not set — rejecting")
+        return web.json_response({"ok": False, "error": "webhook not configured"}, status=503)
+
+    # Official verification (signature + timestamp anti-replay)
+    try:
+        import stripe as _stripe
+
+        event = _stripe.Webhook.construct_event(raw, sig, STRIPE_WEBHOOK_SECRET)
+        # construct_event returns a StripeObject; normalize to dict
+        if hasattr(event, "to_dict"):
+            event = event.to_dict()
+    except Exception as e:
+        # Fallback minimal verify if stripe package missing
+        try:
             parts = dict(p.split("=", 1) for p in sig.split(",") if "=" in p)
             ts = parts.get("t", "")
             v1 = parts.get("v1", "")
+            if not ts or not v1:
+                raise ValueError("missing signature parts")
+            # Reject timestamps older than 5 minutes
+            if abs(int(time.time()) - int(ts)) > 300:
+                raise ValueError("timestamp outside tolerance")
             signed = f"{ts}.{raw.decode('utf-8')}"
-            expected = _hmac.new(
-                STRIPE_WEBHOOK_SECRET.encode(), signed.encode(), _hashlib.sha256
+            expected = hmac.new(
+                STRIPE_WEBHOOK_SECRET.encode(), signed.encode(), hashlib.sha256
             ).hexdigest()
-            if not _hmac.compare_digest(expected, v1):
-                return web.json_response({"ok": False, "error": "invalid signature"}, status=400)
-        except Exception as e:
-            print("[stripe webhook sig]", e)
-            # continue without hard-fail if parse issues; production should enforce
+            if not hmac.compare_digest(expected, v1):
+                raise ValueError("signature mismatch")
+            event = json.loads(raw.decode("utf-8"))
+        except Exception as e2:
+            print(f"[stripe webhook] verify failed: {e} / {e2}")
+            return web.json_response({"ok": False, "error": "invalid signature"}, status=400)
 
-    try:
-        event = json.loads(raw.decode("utf-8"))
-    except Exception:
-        return web.json_response({"ok": False, "error": "invalid json"}, status=400)
-
-    etype = event.get("type") or ""
+    event_id = str(event.get("id") or "")
+    etype = str(event.get("type") or "")
     obj = (event.get("data") or {}).get("object") or {}
+
+    if event_id and _already_processed_event(event_id):
+        return web.json_response({"ok": True, "duplicate": True})
+
     if etype == "checkout.session.completed":
         meta = obj.get("metadata") or {}
-        discord_id = str(meta.get("discord_id") or obj.get("client_reference_id") or "").strip()
-        plan = str(meta.get("plan") or "").strip().lower()
+        discord_id = str(
+            meta.get("discord_id") or obj.get("client_reference_id") or ""
+        ).strip()
+
+        # Prefer Price ID over free-form metadata so a forged/wrong plan cannot upgrade
+        plan = ""
+        line_items = obj.get("line_items")  # usually expanded only on retrieve
+        # Checkout Session stores price on the line items; metadata.plan is secondary
+        price_id = str(meta.get("price_id") or "").strip()
+        if not price_id:
+            # Some sessions put price in metadata from create-checkout; otherwise try amount fallback is unsafe
+            mode = str(obj.get("mode") or "")
+            # If create-checkout set metadata.plan we still map only after price confirmation when possible
+            plan = str(meta.get("plan") or "").strip().lower()
+        else:
+            plan = _plan_from_price_id(price_id)
+
         if not plan:
-            # Fallback: infer from amount or leave
-            plan = "premium"
+            plan = str(meta.get("plan") or "").strip().lower()
         if plan not in ("premium", "bypass"):
-            plan = "premium"
+            print(f"[stripe webhook] unknown plan for session {obj.get('id')}; ignoring")
+            _mark_event_processed(event_id, etype)
+            return web.json_response({"ok": True, "ignored": True})
+
         if discord_id:
             try:
                 cfg = deps.get_user_cfg(discord_id)
                 cfg["rank"] = plan
+                cfg["stripe_customer_id"] = obj.get("customer") or cfg.get("stripe_customer_id")
+                cfg["stripe_subscription_id"] = obj.get("subscription") or cfg.get(
+                    "stripe_subscription_id"
+                )
                 deps.set_user_cfg(discord_id, cfg)
                 print(f"[stripe webhook] set plan={plan} for discord_id={discord_id}")
             except Exception as e:
                 print(f"[stripe webhook] update failed: {e}")
                 return web.json_response({"ok": False, "error": str(e)}, status=500)
+
+    elif etype in (
+        "customer.subscription.deleted",
+        "customer.subscription.updated",
+        "charge.refunded",
+        "charge.dispute.created",
+    ):
+        # Best-effort downgrade / revoke on cancel, refund, dispute
+        meta = obj.get("metadata") or {}
+        discord_id = str(meta.get("discord_id") or "").strip()
+        customer = str(obj.get("customer") or "")
+        if not discord_id and customer and deps.supabase:
+            try:
+                # Find user by stored stripe_customer_id inside config jsonb (best-effort)
+                res = (
+                    deps.supabase.table("stand_configs")
+                    .select("discord_id, config")
+                    .limit(500)
+                    .execute()
+                )
+                for row in res.data or []:
+                    cfg = row.get("config") or {}
+                    if str(cfg.get("stripe_customer_id") or "") == customer:
+                        discord_id = str(row.get("discord_id") or "")
+                        break
+            except Exception as e:
+                print(f"[stripe webhook] customer lookup: {e}")
+
+        if discord_id and etype in (
+            "customer.subscription.deleted",
+            "charge.refunded",
+            "charge.dispute.created",
+        ):
+            try:
+                cfg = deps.get_user_cfg(discord_id)
+                cfg["rank"] = "free"
+                deps.set_user_cfg(discord_id, cfg)
+                print(f"[stripe webhook] revoked plan for discord_id={discord_id} ({etype})")
+            except Exception as e:
+                print(f"[stripe webhook] revoke failed: {e}")
+                return web.json_response({"ok": False, "error": str(e)}, status=500)
+
+    _mark_event_processed(event_id, etype)
     return web.json_response({"ok": True})
 
 
@@ -1392,6 +1565,8 @@ def register_routes(app: web.Application) -> None:
     app.router.add_get("/auth/callback", auth_callback)
     app.router.add_get("/api/me", api_me)
     app.router.add_post("/api/logout", api_logout)
+    app.router.add_post("/api/delete-account", api_delete_account)
+    app.router.add_delete("/api/account", api_delete_account)
     app.router.add_get("/api/config", api_get_config)
     app.router.add_post("/api/config", api_save_config)
     app.router.add_put("/api/config", api_save_config)
