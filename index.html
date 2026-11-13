@@ -55,31 +55,153 @@ body {
 .mt-4 { margin-top: 16px; }
 .mb-4 { margin-bottom: 16px; }
 
-/* ── NAV ── */
+/* ── NAV (centered / ToDesktop-style) ── */
 nav {
   position: fixed; top: 0; left: 0; right: 0; z-index: 100;
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 0 32px; height: 60px;
-  background: rgba(7,8,13,0.85);
-  backdrop-filter: blur(16px);
-  border-bottom: 1px solid var(--border);
+  display: grid; grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  padding: 14px 28px;
+  background: var(--bg);
+  border-bottom: none;
+  box-shadow: none;
+  pointer-events: none;
 }
+nav > * { pointer-events: auto; }
 .nav-logo {
   display: flex; align-items: center; gap: 10px;
-  font-weight: 700; font-size: 17px; color: var(--text); text-decoration: none;
-  letter-spacing: -0.3px;
+  font-weight: 700; font-size: 15px; color: var(--text); text-decoration: none;
+  letter-spacing: -0.2px; justify-self: start;
 }
 .nav-logo .logo-icon {
-  width: 30px; height: 30px; background: var(--accent); border-radius: 7px;
+  width: 28px; height: 28px; background: var(--accent); border-radius: 8px;
   display: flex; align-items: center; justify-content: center;
-  font-size: 15px;
+  font-size: 14px; box-shadow: 0 0 20px var(--accent-glow);
 }
-.nav-links { display: flex; align-items: center; gap: 8px; }
+.nav-center {
+  justify-self: center;
+  display: flex; align-items: center; gap: 4px;
+  padding: 5px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  box-shadow: 0 8px 28px rgba(0,0,0,0.25);
+}
 .nav-link {
-  color: var(--text2); text-decoration: none; font-size: 14px;
-  padding: 6px 12px; border-radius: 6px; transition: color .15s, background .15s;
+  color: rgba(255,255,255,0.65); text-decoration: none; font-size: 13.5px; font-weight: 500;
+  padding: 8px 14px; border-radius: 999px; transition: color .15s, background .15s;
+  background: transparent; border: none; cursor: pointer; font-family: inherit;
+  display: inline-flex; align-items: center; gap: 5px; white-space: nowrap;
 }
-.nav-link:hover { color: var(--text); background: var(--bg3); }
+.nav-link:hover { color: #fff; background: rgba(255,255,255,0.06); }
+.nav-link .chev {
+  width: 12px; height: 12px; opacity: .55; transition: transform .15s;
+}
+.nav-link.open .chev { transform: rotate(180deg); opacity: .9; }
+
+/* Mega / product dropdown under center pill */
+.nav-dd-wrap { position: relative; }
+.nav-mega {
+  display: none; position: absolute; top: calc(100% + 12px); left: 50%; transform: translateX(-50%);
+  width: 340px; padding: 8px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.55), 0 0 0 1px rgba(255,255,255,0.04) inset;
+  z-index: 130;
+}
+.nav-mega.show { display: block; animation: navMegaIn .16s ease-out; }
+@keyframes navMegaIn {
+  from { opacity: 0; transform: translateX(-50%) translateY(-6px); }
+  to { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+.nav-mega-item {
+  display: flex; gap: 12px; align-items: flex-start;
+  padding: 12px; border-radius: 12px; text-decoration: none; color: inherit;
+  transition: background .12s; cursor: pointer; border: none; background: none;
+  width: 100%; text-align: left; font-family: inherit;
+}
+.nav-mega-item:hover { background: rgba(255,255,255,0.05); }
+.nav-mega-icon {
+  width: 36px; height: 36px; border-radius: 10px; flex-shrink: 0;
+  background: rgba(91,106,245,0.15); color: var(--accent2);
+  display: flex; align-items: center; justify-content: center; font-size: 16px;
+}
+.nav-mega-text .t { font-size: 13.5px; font-weight: 600; color: #fff; margin-bottom: 2px; }
+.nav-mega-text .d { font-size: 12px; color: rgba(255,255,255,0.45); line-height: 1.4; }
+.nav-mega-sep { height: 1px; background: rgba(255,255,255,0.06); margin: 4px 8px; }
+
+.nav-right {
+  justify-self: end;
+  display: flex; align-items: center; gap: 10px;
+}
+.nav-pill-btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 8px 16px; border-radius: 999px; font-size: 13.5px; font-weight: 600;
+  cursor: pointer; border: 1px solid var(--border);
+  background: var(--bg2); color: var(--text);
+  transition: background .15s, border-color .15s, transform .15s;
+  font-family: inherit; text-decoration: none;
+}
+.nav-pill-btn:hover { background: var(--bg3); border-color: var(--border2); }
+.nav-pill-btn.primary {
+  background: var(--accent); border-color: transparent;
+  box-shadow: 0 4px 20px var(--accent-glow);
+}
+.nav-pill-btn.primary:hover { background: var(--accent2); transform: translateY(-1px); }
+
+.nav-user-wrap { position: relative; display: flex; align-items: center; gap: 8px; }
+.nav-user-btn {
+  display: flex; align-items: center; gap: 8px;
+  padding: 4px 10px 4px 4px; border-radius: 999px;
+  background: var(--bg2); border: 1px solid var(--border);
+  cursor: pointer; color: var(--text); font-size: 13px; font-weight: 600;
+  transition: background .15s, border-color .15s;
+  font-family: inherit;
+}
+.nav-user-btn:hover, .nav-user-btn.open {
+  background: var(--bg3); border-color: var(--border2);
+}
+.nav-user-btn .nav-avatar {
+  width: 28px; height: 28px; border-radius: 50%; background: var(--accent);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 700; overflow: hidden; flex-shrink: 0;
+}
+.nav-user-btn .nav-avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.nav-user-btn .nav-chevron {
+  width: 14px; height: 14px; opacity: .55; transition: transform .15s;
+}
+.nav-user-btn.open .nav-chevron { transform: rotate(180deg); opacity: .9; }
+.nav-dropdown {
+  display: none; position: absolute; top: calc(100% + 10px); right: 0;
+  min-width: 220px; background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 14px; box-shadow: 0 16px 48px rgba(0,0,0,.55); z-index: 120;
+  overflow: hidden; padding: 6px;
+}
+.nav-dropdown.show { display: block; animation: navDrop .14s ease-out; }
+@keyframes navDrop {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.nav-dropdown-head {
+  padding: 10px 12px 8px; border-bottom: 1px solid rgba(255,255,255,0.06); margin-bottom: 4px;
+}
+.nav-dropdown-head .nd-name { font-size: 13px; font-weight: 700; }
+.nav-dropdown-head .nd-id { font-size: 11px; color: var(--text3); margin-top: 2px; font-family: ui-monospace, monospace; }
+.nav-dropdown-item {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  padding: 10px 12px; border: none; background: none; border-radius: 8px;
+  color: var(--text); font-size: 13px; font-weight: 500; cursor: pointer; text-align: left;
+  transition: background .12s; font-family: inherit;
+}
+.nav-dropdown-item:hover { background: rgba(255,255,255,0.05); }
+.nav-dropdown-item .nd-icon { width: 18px; text-align: center; opacity: .85; }
+.nav-dropdown-item.danger { color: #f87171; }
+.nav-dropdown-item.danger:hover { background: rgba(248,113,113,.1); }
+.nav-dropdown-sep { height: 1px; background: rgba(255,255,255,0.06); margin: 4px 6px; }
+
+/* keep .nav-links id for mobile hide rules */
+.nav-links { display: contents; }
 .btn {
   display: inline-flex; align-items: center; gap: 8px;
   padding: 8px 18px; border-radius: 8px; font-size: 14px; font-weight: 600;
@@ -105,6 +227,161 @@ nav {
 .page { display: none; }
 .page.active { display: block; }
 
+
+/* ── Premium landing hero ── */
+.hero-premium {
+  min-height: calc(100vh - 60px);
+  display: flex; flex-direction: column; align-items: center;
+  text-align: center; padding: 72px 24px 48px;
+  position: relative; overflow: hidden;
+}
+.hero-premium .announce {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 6px 14px; border-radius: 999px; font-size: 13px; font-weight: 500;
+  background: var(--bg2); border: 1px solid var(--border); color: var(--text2);
+  margin-bottom: 28px;
+}
+.hero-premium .announce span { color: var(--accent2); }
+.hero-premium h1 {
+  font-size: clamp(36px, 6vw, 56px); font-weight: 800; letter-spacing: -1.8px;
+  line-height: 1.08; margin-bottom: 16px; max-width: 820px;
+}
+.hero-premium h1 .grad { color: var(--accent2); }
+.hero-premium .hero-sub {
+  font-size: 16px; color: var(--text2); max-width: 520px; line-height: 1.55; margin-bottom: 28px;
+}
+.hero-premium .hero-actions { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; margin-bottom: 48px; }
+.hero-preview {
+  width: min(920px, 100%);
+  background: var(--bg2); border: 1px solid var(--border); border-radius: 16px;
+  box-shadow: 0 24px 80px rgba(0,0,0,.45); overflow: hidden; text-align: left;
+}
+.hero-preview-top {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 16px; border-bottom: 1px solid var(--border); background: rgba(0,0,0,.2);
+}
+.hero-preview-body { display: grid; grid-template-columns: 160px 1fr; min-height: 280px; }
+.hero-preview-side { padding: 14px 12px; border-right: 1px solid var(--border); background: rgba(0,0,0,.15); }
+.hero-preview-side .hp-item {
+  display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 8px;
+  font-size: 12px; color: var(--text2); margin-bottom: 2px;
+}
+.hero-preview-side .hp-item.on { background: rgba(91,106,245,.15); color: var(--accent2); font-weight: 600; }
+.hero-preview-main { padding: 18px 20px; }
+.hp-metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 16px; }
+.hp-metric {
+  background: var(--bg3); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px;
+}
+.hp-metric .l { font-size: 11px; color: var(--text3); margin-bottom: 4px; }
+.hp-metric .v { font-size: 22px; font-weight: 800; letter-spacing: -0.5px; }
+.hp-metric .s { font-size: 11px; color: var(--text3); margin-top: 2px; }
+.hp-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.hp-table th { text-align: left; color: var(--text3); font-weight: 600; padding: 8px 6px; border-bottom: 1px solid var(--border); font-size: 10px; text-transform: uppercase; letter-spacing: .6px; }
+.hp-table td { padding: 9px 6px; border-bottom: 1px solid rgba(255,255,255,.04); color: var(--text2); }
+.feat-row {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px;
+  max-width: 960px; margin: 48px auto 0; padding: 0 24px 64px; text-align: left;
+}
+.feat-row-item { display: flex; gap: 14px; align-items: flex-start; }
+.feat-row-item .fi {
+  width: 40px; height: 40px; border-radius: 10px; flex-shrink: 0;
+  background: rgba(91,106,245,.12); color: var(--accent2);
+  display: flex; align-items: center; justify-content: center; font-size: 18px;
+}
+.feat-row-item h4 { font-size: 14px; font-weight: 700; margin-bottom: 4px; }
+.feat-row-item p { font-size: 13px; color: var(--text2); line-height: 1.45; }
+@media (max-width: 800px) {
+  .hero-preview-body { grid-template-columns: 1fr; }
+  .hero-preview-side { display: none; }
+  .feat-row { grid-template-columns: 1fr; }
+  .hp-metrics { grid-template-columns: 1fr; }
+}
+
+/* ── Premium dashboard overview ── */
+.ov-welcome h2 { font-size: 26px; font-weight: 800; letter-spacing: -0.6px; }
+.ov-welcome p { color: var(--text2); font-size: 14px; margin-top: 4px; }
+.ov-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 22px 0 18px; }
+.ov-stat {
+  background: var(--bg2); border: 1px solid var(--border); border-radius: 14px; padding: 16px 18px;
+  transition: border-color .15s;
+}
+.ov-stat:hover { border-color: var(--border2); }
+.ov-stat .ic {
+  width: 32px; height: 32px; border-radius: 9px; display: flex; align-items: center; justify-content: center;
+  font-size: 15px; margin-bottom: 12px;
+}
+.ov-stat .ic.gold { background: rgba(240,180,41,.12); }
+.ov-stat .ic.purp { background: rgba(91,106,245,.12); }
+.ov-stat .ic.green { background: rgba(34,197,94,.12); }
+.ov-stat .ic.mute { background: rgba(86,95,126,.15); }
+.ov-stat .lbl { font-size: 12px; color: var(--text3); margin-bottom: 4px; }
+.ov-stat .val { font-size: 22px; font-weight: 800; letter-spacing: -0.6px; }
+.ov-stat .val.gold { color: var(--gold); }
+.ov-stat .val.green { color: var(--green); }
+.ov-stat .sub { font-size: 12px; color: var(--text3); margin-top: 4px; }
+.ov-stat .bar { height: 4px; background: var(--bg3); border-radius: 99px; margin-top: 10px; overflow: hidden; }
+.ov-stat .bar > i { display: block; height: 100%; background: var(--accent); border-radius: 99px; }
+.ov-grid { display: grid; grid-template-columns: 1.15fr 0.85fr; gap: 14px; margin-bottom: 14px; }
+.ov-card {
+  background: var(--bg2); border: 1px solid var(--border); border-radius: 14px; padding: 18px 20px;
+}
+.ov-card-head {
+  display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px;
+}
+.ov-card-head h3 { font-size: 14px; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+.ov-card-head a, .ov-card-head button.linkish {
+  font-size: 12px; color: var(--accent2); background: none; border: none; cursor: pointer; font-weight: 600;
+}
+.cfg-rows { display: flex; flex-direction: column; gap: 0; }
+.cfg-row {
+  display: grid; grid-template-columns: 120px 1fr auto; gap: 10px; align-items: center;
+  padding: 11px 0; border-bottom: 1px solid rgba(255,255,255,.04); font-size: 13px;
+}
+.cfg-row:last-child { border-bottom: none; }
+.cfg-row .k { color: var(--text3); font-weight: 500; }
+.cfg-row .v { color: var(--text); font-weight: 600; }
+.cfg-row .hint { color: var(--text3); font-size: 12px; }
+.act-list { display: flex; flex-direction: column; gap: 12px; }
+.act-item { display: flex; gap: 12px; align-items: flex-start; }
+.act-item .ai {
+  width: 28px; height: 28px; border-radius: 8px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center; font-size: 13px;
+  background: var(--bg3);
+}
+.act-item .t { font-size: 13px; font-weight: 600; }
+.act-item .d { font-size: 12px; color: var(--text3); margin-top: 2px; }
+.act-item .time { font-size: 11px; color: var(--text3); margin-left: auto; white-space: nowrap; }
+.stands-card { margin-top: 0; }
+.stands-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.stands-table th {
+  text-align: left; font-size: 11px; font-weight: 600; color: var(--text3);
+  text-transform: uppercase; letter-spacing: .6px; padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.stands-table td { padding: 12px; border-bottom: 1px solid rgba(255,255,255,.04); color: var(--text2); vertical-align: middle; }
+.stands-table tr:last-child td { border-bottom: none; }
+.stands-table .name { color: var(--text); font-weight: 600; }
+.pill-status {
+  display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600;
+}
+.pill-status .d { width: 7px; height: 7px; border-radius: 50%; }
+.pill-status.running .d { background: var(--green); box-shadow: 0 0 6px var(--green); }
+.pill-status.idle .d { background: var(--text3); }
+.pill-status.offline .d { background: var(--red); }
+.tag-mode {
+  font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 6px;
+  background: rgba(91,106,245,.15); color: var(--accent2);
+}
+.tag-mode.bypass { background: rgba(240,180,41,.15); color: var(--gold); }
+@media (max-width: 1000px) {
+  .ov-stats { grid-template-columns: repeat(2, 1fr); }
+  .ov-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 600px) {
+  .ov-stats { grid-template-columns: 1fr; }
+  .cfg-row { grid-template-columns: 1fr; gap: 4px; }
+}
+
 /* ── LANDING ── */
 #landing { padding-top: 60px; }
 .hero {
@@ -115,7 +392,8 @@ nav {
 }
 .hero-bg {
   position: absolute; inset: 0; pointer-events: none;
-  background: radial-gradient(ellipse 80% 60% at 50% 10%, rgba(91,106,245,.13) 0%, transparent 70%);
+  background: none;
+  display: none;
 }
 .hero-grid {
   position: absolute; inset: 0; pointer-events: none; opacity: .04;
@@ -393,7 +671,7 @@ tr:hover td { background: rgba(13,15,24,.5); }
 
 /* PLAN UPGRADE */
 .upgrade-banner {
-  background: linear-gradient(135deg, rgba(91,106,245,.1) 0%, rgba(123,139,255,.05) 100%);
+  background: var(--bg2);
   border: 1px solid var(--accent); border-radius: 14px; padding: 24px 28px;
   display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;
   margin-bottom: 24px;
@@ -429,7 +707,8 @@ tr:hover td { background: rgba(13,15,24,.5); }
 /* MOBILE NAV COLLAPSE */
 @media(max-width:768px) {
   nav { padding: 0 16px; }
-  .nav-links .nav-link { display: none; }
+  .nav-center { display: none; }
+  nav { grid-template-columns: 1fr auto; padding: 12px 16px; }
   .dash-layout { flex-direction: column; }
   .sidebar { width: 100%; border-right: none; border-bottom: 1px solid var(--border); flex-direction: row; overflow-x: auto; padding: 8px; gap: 2px; }
   .sidebar-label { display: none; }
@@ -610,25 +889,77 @@ input[type=range]::-webkit-slider-thumb {
      NAV
 ══════════════════════════════════════════ -->
 <nav id="mainNav">
-  <a class="nav-logo" href="#" onclick="showPage('landing')">
+  <a class="nav-logo" href="#" onclick="showPage('landing'); return false;">
     <div class="logo-icon">⚡</div>
     Executive Stand
   </a>
-  <div class="nav-links" id="navLinks">
-    <a class="nav-link" href="#" onclick="showPage('landing')">Home</a>
-    <a class="nav-link" href="#features" onclick="scrollToSection('features')">Features</a>
-    <a class="nav-link" href="#pricing" onclick="scrollToSection('pricing')">Pricing</a>
-    <a class="nav-link" href="#" onclick="showPage('docs')">Docs</a>
-    <div id="navGuest">
-      <button class="btn btn-discord btn-sm" onclick="showPage('auth')">
-        <svg width="16" height="12" viewBox="0 0 71 55" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M60.1 4.9A58.5 58.5 0 0 0 45.6.4a40.9 40.9 0 0 0-1.9 3.8 54.2 54.2 0 0 0-16.2 0A40.1 40.1 0 0 0 25.6.4 58.3 58.3 0 0 0 11 4.9C1.6 18.7-1 32.2.3 45.5a58.9 58.9 0 0 0 17.9 9 44.4 44.4 0 0 0 3.8-6.2 38.3 38.3 0 0 1-6-2.9l1.5-1.1a42 42 0 0 0 36 0l1.5 1.1a38.4 38.4 0 0 1-6 2.9 44 44 0 0 0 3.8 6.2 58.7 58.7 0 0 0 17.9-9C72 30.1 68.6 16.7 60.1 4.9ZM23.8 37.5c-3.5 0-6.4-3.2-6.4-7.1s2.8-7.1 6.4-7.1c3.5 0 6.4 3.1 6.3 7.1 0 3.9-2.8 7.1-6.3 7.1Zm23.5 0c-3.5 0-6.4-3.2-6.4-7.1s2.9-7.1 6.4-7.1c3.6 0 6.4 3.1 6.4 7.1 0 3.9-2.8 7.1-6.4 7.1Z"/></svg>
-        Login with Discord
+
+  <div class="nav-center" id="navLinks">
+    <div class="nav-dd-wrap">
+      <button type="button" class="nav-link" id="navProductBtn" onclick="toggleProductMenu(event)">
+        Product
+        <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
       </button>
+      <div class="nav-mega" id="navProductMenu" onclick="event.stopPropagation()">
+        <button type="button" class="nav-mega-item" onclick="closeProductMenu(); scrollToSection('features');">
+          <div class="nav-mega-icon">🛡️</div>
+          <div class="nav-mega-text">
+            <div class="t">Stand Script</div>
+            <div class="d">In-game stand control for Da Hood and related games with alts &amp; loaders.</div>
+          </div>
+        </button>
+        <button type="button" class="nav-mega-item" onclick="closeProductMenu(); scrollToSection('pricing');">
+          <div class="nav-mega-icon">💎</div>
+          <div class="nav-mega-text">
+            <div class="t">Premium &amp; Bypass</div>
+            <div class="d">Unlock web dashboard, more alts, and exclusive in-script features.</div>
+          </div>
+        </button>
+        <div class="nav-mega-sep"></div>
+        <button type="button" class="nav-mega-item" onclick="closeProductMenu(); showPage('docs');">
+          <div class="nav-mega-icon">📖</div>
+          <div class="nav-mega-text">
+            <div class="t">Documentation</div>
+            <div class="d">Setup, commands, and configuration guides.</div>
+          </div>
+        </button>
+      </div>
     </div>
-    <div id="navUser" class="hidden" style="display:flex;align-items:center;gap:8px;">
-      <span id="navUserName" style="font-size:14px;color:var(--text2);"></span>
-      <button class="btn btn-primary btn-sm" onclick="showPage('dashboard')">Dashboard</button>
-      <button class="btn btn-outline btn-sm" onclick="logout()">Logout</button>
+    <a class="nav-link" href="#pricing" onclick="scrollToSection('pricing'); return false;">Pricing</a>
+    <a class="nav-link" href="#" onclick="showPage('docs'); return false;">Docs</a>
+    <a class="nav-link" href="#" onclick="requireAuth(() => { showPage('dashboard'); setTimeout(() => switchSection('changelog'), 50); }); return false;">Changelog</a>
+  </div>
+
+  <div class="nav-right">
+    <div id="navGuest">
+      <button type="button" class="nav-pill-btn" onclick="showPage('auth')">Log in</button>
+    </div>
+    <div id="navUser" class="hidden nav-user-wrap">
+      <button type="button" class="nav-pill-btn primary" onclick="showPage('dashboard')">Dashboard</button>
+      <button type="button" class="nav-user-btn" id="navUserBtn" onclick="toggleNavDropdown(event)" aria-haspopup="true" aria-expanded="false">
+        <span class="nav-avatar" id="navAvatar">?</span>
+        <span id="navUserName">User</span>
+        <svg class="nav-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+      </button>
+      <div class="nav-dropdown" id="navDropdown" onclick="event.stopPropagation()">
+        <div class="nav-dropdown-head">
+          <div class="nd-name" id="ndName">—</div>
+          <div class="nd-id" id="ndId">—</div>
+        </div>
+        <button type="button" class="nav-dropdown-item" onclick="closeNavDropdown(); showPage('dashboard');">
+          <span class="nd-icon">📊</span> Dashboard
+        </button>
+        <button type="button" class="nav-dropdown-item" onclick="closeNavDropdown(); showPage('dashboard'); setTimeout(() => switchSection('subscription'), 50);">
+          <span class="nd-icon">💳</span> Subscription
+        </button>
+        <div class="nav-dropdown-sep"></div>
+        <button type="button" class="nav-dropdown-item" onclick="closeNavDropdown(); logout();">
+          <span class="nd-icon">🚪</span> Log out
+        </button>
+        <button type="button" class="nav-dropdown-item danger" onclick="closeNavDropdown(); openDeleteAccountModal();">
+          <span class="nd-icon">🗑️</span> Delete account
+        </button>
+      </div>
     </div>
   </div>
 </nav>
@@ -637,70 +968,76 @@ input[type=range]::-webkit-slider-thumb {
      LANDING PAGE
 ══════════════════════════════════════════ -->
 <div id="landing" class="page active">
-  <!-- HERO -->
-  <div class="hero">
-    <div class="hero-bg"></div>
-    <div class="hero-grid"></div>
-    <div class="status-pill">
-      <span class="status-dot"></span>
-      <span>System Operational — Da Hood, DERS Hood, Hood Customs</span>
-    </div>
-    <h1>The <span>Executive</span><br>Stand Suite</h1>
-    <p>Premium Stand configuration for Roblox Da Hood. Set up your alts, configure your loadout, and dominate — all from one sleek dashboard.</p>
+  <!-- HERO (premium product showcase) -->
+  <div class="hero-premium">
+    <div class="announce"><span>✦</span> New: Bypass plan now available</div>
+    <h1>Your stands. Fully <span class="grad">automated.</span></h1>
+    <p class="hero-sub">Automate your Da Hood stand control. Manage alts, loaders, and targeting from one clean dashboard — zero manual busywork.</p>
     <div class="hero-actions">
-      <button class="btn btn-primary btn-lg" onclick="showPage('auth')">
-        <svg width="16" height="12" viewBox="0 0 71 55" fill="currentColor"><path d="M60.1 4.9A58.5 58.5 0 0 0 45.6.4a40.9 40.9 0 0 0-1.9 3.8 54.2 54.2 0 0 0-16.2 0A40.1 40.1 0 0 0 25.6.4 58.3 58.3 0 0 0 11 4.9C1.6 18.7-1 32.2.3 45.5a58.9 58.9 0 0 0 17.9 9 44.4 44.4 0 0 0 3.8-6.2 38.3 38.3 0 0 1-6-2.9l1.5-1.1a42 42 0 0 0 36 0l1.5 1.1a38.4 38.4 0 0 1-6 2.9 44 44 0 0 0 3.8 6.2 58.7 58.7 0 0 0 17.9-9C72 30.1 68.6 16.7 60.1 4.9ZM23.8 37.5c-3.5 0-6.4-3.2-6.4-7.1s2.8-7.1 6.4-7.1c3.5 0 6.4 3.1 6.3 7.1 0 3.9-2.8 7.1-6.3 7.1Zm23.5 0c-3.5 0-6.4-3.2-6.4-7.1s2.9-7.1 6.4-7.1c3.6 0 6.4 3.1 6.4 7.1 0 3.9-2.8 7.1-6.4 7.1Z"/></svg>
-        Get Started Free
-      </button>
-      <a href="#pricing" class="btn btn-outline btn-lg" onclick="scrollToSection('pricing')">View Plans</a>
+      <button class="btn btn-primary btn-lg" onclick="showPage('auth')">Start Free Trial →</button>
+      <a href="#features" class="btn btn-outline btn-lg" onclick="scrollToSection('features'); return false;">View Features</a>
     </div>
-    <div class="hero-stats">
-      <div class="stat"><div class="stat-num">99.9%</div><div class="stat-label">Uptime</div></div>
-      <div class="stat"><div class="stat-num">4</div><div class="stat-label">Supported Games</div></div>
-      <div class="stat"><div class="stat-num">&lt;100ms</div><div class="stat-label">Response Time</div></div>
+
+    <div class="hero-preview" id="features">
+      <div class="hero-preview-top">
+        <div style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;">
+          <span style="width:10px;height:10px;border-radius:50%;background:var(--accent);display:inline-block;"></span>
+          Executive Stand
+        </div>
+        <span class="plan-badge plan-bypass">Plan: Bypass</span>
+      </div>
+      <div class="hero-preview-body">
+        <div class="hero-preview-side">
+          <div class="hp-item on">Overview</div>
+          <div class="hp-item">Config</div>
+          <div class="hp-item">Alts</div>
+          <div class="hp-item">Loader</div>
+          <div class="hp-item">Subscription</div>
+        </div>
+        <div class="hero-preview-main">
+          <div style="font-size:14px;font-weight:700;margin-bottom:4px;">Alt Overview</div>
+          <div style="font-size:12px;color:var(--text3);margin-bottom:14px;">Real-time stand status and activity</div>
+          <div class="hp-metrics">
+            <div class="hp-metric"><div class="l">Total Alts</div><div class="v">24</div><div class="s"><span style="color:var(--green);">●</span> Active pool</div></div>
+            <div class="hp-metric"><div class="l">In Game</div><div class="v" style="color:var(--green);">18</div><div class="s">Running now</div></div>
+            <div class="hp-metric"><div class="l">Standby</div><div class="v">6</div><div class="s">Idle</div></div>
+          </div>
+          <table class="hp-table">
+            <thead><tr><th>Stand</th><th>Target</th><th>Status</th><th>Uptime</th></tr></thead>
+            <tbody>
+              <tr><td>Stand #1421</td><td>Main Push</td><td><span style="color:var(--green);">● Running</span></td><td>2h 34m</td></tr>
+              <tr><td>Stand #1420</td><td>Main Push</td><td><span style="color:var(--green);">● Running</span></td><td>2h 11m</td></tr>
+              <tr><td>Stand #1419</td><td>Farm Group</td><td><span style="color:var(--text3);">● Idle</span></td><td>—</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
     </div>
   </div>
 
-  <!-- FEATURES -->
-  <section id="features">
-    <div class="section-head">
-      <div class="section-label">Features</div>
-      <h2 class="section-title">Everything you need to run</h2>
-      <p class="section-sub">From alt management to full loadout config — all in one place.</p>
-    </div>
-    <div class="features-grid">
-      <div class="feature-card">
-        <div class="feature-icon">🤖</div>
-        <h3>Alt Management</h3>
-        <p>Link and configure multiple Roblox alt accounts with custom formation slots and controllers.</p>
-      </div>
-      <div class="feature-card">
-        <div class="feature-icon">🔧</div>
-        <h3>Live Config Editor</h3>
-        <p>Adjust your gun, prefix, animations, and all toggles from the web — no Discord commands needed.</p>
-      </div>
-      <div class="feature-card">
-        <div class="feature-icon">🛡️</div>
-        <h3>Auto Features</h3>
-        <p>Auto mask, auto armor, infinite ammo, and muscle size — all configurable per-user.</p>
-      </div>
-      <div class="feature-card">
-        <div class="feature-icon">🔑</div>
-        <h3>Key System</h3>
-        <p>License Hub integration with per-user keys. Manage and rotate your key directly from the dashboard.</p>
-      </div>
-      <div class="feature-card">
-        <div class="feature-icon">📦</div>
-        <h3>Instant Loader</h3>
-        <p>Download your personal StandLoader.lua straight from the dashboard. Ready to inject in seconds.</p>
-      </div>
-      <div class="feature-card">
-        <div class="feature-icon">⭐</div>
-        <h3>Premium Ranks</h3>
-        <p>Unlock Premium and Bypass ranks for exclusive in-script features unavailable to free users.</p>
+  <div class="feat-row">
+    <div class="feat-row-item">
+      <div class="fi">⚙️</div>
+      <div>
+        <h4>Smart Automation</h4>
+        <p>Set it once. Handle rotation, loadouts, and cooldowns automatically.</p>
       </div>
     </div>
-  </section>
+    <div class="feat-row-item">
+      <div class="fi">🛡️</div>
+      <div>
+        <h4>Enterprise Safe</h4>
+        <p>Built for scale and reliability. Secure, private, designed for serious operators.</p>
+      </div>
+    </div>
+    <div class="feat-row-item">
+      <div class="fi">📊</div>
+      <div>
+        <h4>Real-time Control</h4>
+        <p>Live status, target tracking, and one-click control from a clean dashboard.</p>
+      </div>
+    </div>
+  </div>
 
   <!-- PRICING -->
   <section id="pricing">
@@ -1595,59 +1932,86 @@ if IsFriend(target.Name) then return end</code></pre>
 
       <!-- ── OVERVIEW ── -->
       <div class="dash-section active" id="sec-overview">
-        <div class="dash-header">
-          <h2>Overview</h2>
-          <p id="overviewGreeting">Welcome back!</p>
+        <div class="ov-welcome">
+          <h2 id="overviewGreeting">Welcome back</h2>
+          <p>Here's what's happening with your Executive Stand setup.</p>
         </div>
 
         <div id="upgradeBannerWrap"></div>
 
-        <div class="stats-row">
-          <div class="stat-card">
-            <div class="label">Plan</div>
-            <div class="val" id="statPlan">Free</div>
-            <div class="sub">current tier</div>
+        <div class="ov-stats">
+          <div class="ov-stat">
+            <div class="ic gold">👑</div>
+            <div class="lbl">Plan</div>
+            <div class="val gold" id="statPlan">Free</div>
+            <div class="sub" id="statPlanSub">current tier</div>
           </div>
-          <div class="stat-card">
-            <div class="label">Alts Linked</div>
-            <div class="val" id="statAlts">0</div>
-            <div class="sub" id="statAltLimit">of 2 max</div>
+          <div class="ov-stat">
+            <div class="ic purp">👥</div>
+            <div class="lbl">Alts</div>
+            <div class="val" id="statAlts">0/2</div>
+            <div class="sub" id="statAltLimit">linked accounts</div>
+            <div class="bar"><i id="statAltBar" style="width:0%"></i></div>
           </div>
-          <div class="stat-card">
-            <div class="label">Roblox Owner</div>
-            <div class="val" style="font-size:16px;" id="statOwner">Not set</div>
-            <div class="sub">primary account</div>
+          <div class="ov-stat">
+            <div class="ic green">✓</div>
+            <div class="lbl">Status</div>
+            <div class="val green" id="statStatusVal">Operational</div>
+            <div class="sub" id="statStatusSub">all systems normal</div>
           </div>
-          <div class="stat-card">
-            <div class="label">Stand Status</div>
-            <div class="val" style="font-size:16px;">
-              <span class="status-badge"><span class="dot dot-green"></span>Online</span>
-            </div>
-            <div class="sub">all systems go</div>
-          </div>
-        </div>
-
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:0;" class="overview-bottom-grid">
-          <div class="card">
-            <div class="card-title">⚡ Quick Actions</div>
-            <div style="display:flex;flex-direction:column;gap:8px;">
-              <button class="btn btn-primary btn-sm w-full" style="justify-content:center;" onclick="switchSection('config', null)">⚙️ Edit Stand Config</button>
-              <button class="btn btn-outline btn-sm w-full" style="justify-content:center;" onclick="switchSection('alts', null)">👥 Manage Alts</button>
-              <button class="btn btn-outline btn-sm w-full" style="justify-content:center;" onclick="switchSection('loader', null)">📦 Download Loader</button>
-              <button class="btn btn-outline btn-sm w-full" style="justify-content:center;" onclick="switchSection('controllers', null)">🎮 Controllers</button>
-              <button class="btn btn-outline btn-sm w-full" style="justify-content:center;" onclick="switchSection('support', null)">🎫 Open a Ticket</button>
-            </div>
-          </div>
-          <div class="card">
-            <div class="card-title">📋 Recent Activity</div>
-            <div id="activityFeed" style="display:flex;flex-direction:column;gap:10px;"></div>
+          <div class="ov-stat">
+            <div class="ic mute">🎮</div>
+            <div class="lbl">Owner</div>
+            <div class="val" style="font-size:16px;" id="statOwner">—</div>
+            <div class="sub">primary Roblox account</div>
           </div>
         </div>
 
-        <div class="card" style="margin-top:16px;">
-          <div class="card-title">🌐 System Status</div>
-          <div id="overviewStatus" style="display:flex;align-items:center;gap:10px;padding:10px 0;"></div>
-          <div style="font-size:13px;color:var(--text3);margin-top:4px;">Join our <a href="#" style="color:var(--accent2);">Discord</a> for real-time updates and announcements.</div>
+        <div class="ov-grid">
+          <div class="ov-card">
+            <div class="ov-card-head">
+              <h3>⚙️ Stand Configuration</h3>
+              <button type="button" class="linkish" onclick="switchSection('config')">Edit config →</button>
+            </div>
+            <div class="cfg-rows" id="overviewConfigRows">
+              <div class="cfg-row"><span class="k">Mode</span><span class="v" id="ovMode">—</span><span class="hint">plan rank</span></div>
+              <div class="cfg-row"><span class="k">Target</span><span class="v" id="ovTarget">—</span><span class="hint">primary focus</span></div>
+              <div class="cfg-row"><span class="k">Gun</span><span class="v" id="ovGun">—</span><span class="hint">loadout</span></div>
+              <div class="cfg-row"><span class="k">Prefix</span><span class="v" id="ovPrefix">—</span><span class="hint">command prefix</span></div>
+              <div class="cfg-row"><span class="k">Alts</span><span class="v" id="ovAlts">—</span><span class="hint">linked</span></div>
+            </div>
+          </div>
+          <div class="ov-card">
+            <div class="ov-card-head">
+              <h3>📡 Recent Activity</h3>
+              <button type="button" class="linkish" onclick="switchSection('changelog')">Changelog →</button>
+            </div>
+            <div class="act-list" id="activityFeed"></div>
+          </div>
+        </div>
+
+        <div class="ov-card stands-card">
+          <div class="ov-card-head">
+            <h3>🎯 Live Stands</h3>
+            <span style="font-size:12px;color:var(--text3);" id="standsSummary">Owner + alts</span>
+          </div>
+          <div style="overflow-x:auto;">
+            <table class="stands-table">
+              <thead>
+                <tr>
+                  <th>Stand</th>
+                  <th>Role</th>
+                  <th>Target</th>
+                  <th>Status</th>
+                  <th>In Game</th>
+                  <th>Mode</th>
+                </tr>
+              </thead>
+              <tbody id="standsTableBody">
+                <tr><td colspan="6" style="color:var(--text3);">Sign in to see your stands.</td></tr>
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
 
@@ -2132,9 +2496,34 @@ if IsFriend(target.Name) then return end</code></pre>
 
         <!-- KEYS -->
         <div class="admin-panel" id="ap-keys">
+          <div id="keyStockSummary" style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px;"></div>
+
+          <div class="card" style="margin-bottom:16px;">
+            <div class="card-title">📦 Bulk Restock (equal split)</div>
+            <p style="font-size:13px;color:var(--text2);margin-bottom:14px;">
+              Paste the keys you stock (required). Enter how many to add — they are split evenly across
+              Stand, Premium, and Bypass (remainder goes to the first plans). Nothing is auto-generated.
+            </p>
+            <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;margin-bottom:12px;">
+              <div class="form-group" style="width:140px;">
+                <label>Total amount</label>
+                <input type="number" id="restockAmount" min="1" max="500" value="30" placeholder="30">
+              </div>
+              <div class="form-group" style="flex:1;min-width:180px;">
+                <label>Preview split</label>
+                <div id="restockPreview" style="font-size:13px;color:var(--text2);padding:10px 0;">—</div>
+              </div>
+              <button class="btn btn-primary" onclick="restockKeys()">Restock evenly</button>
+            </div>
+            <div class="form-group">
+              <label>Keys (optional — one per line)</label>
+              <textarea id="restockKeysPaste" placeholder="Paste your keys here, one per line (required)." style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:10px 12px;color:var(--text);font-size:13px;width:100%;min-height:90px;resize:vertical;outline:none;font-family:ui-monospace,monospace;"></textarea>
+            </div>
+          </div>
+
           <div style="display:flex;gap:12px;margin-bottom:16px;flex-wrap:wrap;align-items:flex-end;">
             <div class="form-group" style="flex:1;min-width:200px;">
-              <label>Add Key to Stock</label>
+              <label>Add single key</label>
               <input type="text" id="newKeyVal" placeholder="xxxx-xxxx-xxxx-xxxx">
             </div>
             <div class="form-group" style="width:160px;">
@@ -2145,7 +2534,7 @@ if IsFriend(target.Name) then return end</code></pre>
                 <option value="bypass">Bypass</option>
               </select>
             </div>
-            <button class="btn btn-primary" onclick="addKey()">Add Key</button>
+            <button class="btn btn-outline" onclick="addKey()">Add Key</button>
           </div>
           <div class="card">
             <div class="card-title">🔑 Key Stock</div>
@@ -2391,9 +2780,26 @@ async function api(path, opts = {}) {
 //  ROUTING
 // ═══════════════════════════════════════════════════════
 function showPage(page) {
+  // Dashboard (and all its sections) require a signed-in session
+  if (page === 'dashboard' && !state.user && !getToken()) {
+    showToast('Log in with Discord to continue', 'error');
+    page = 'auth';
+  }
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-  document.getElementById(page).classList.add('active');
-  window.scrollTo(0,0);
+  const el = document.getElementById(page);
+  if (!el) return;
+  el.classList.add('active');
+  window.scrollTo(0, 0);
+}
+
+function requireAuth(thenFn) {
+  if (state.user || getToken()) {
+    if (typeof thenFn === 'function') thenFn();
+    return true;
+  }
+  showToast('Log in with Discord to continue', 'error');
+  showPage('auth');
+  return false;
 }
 
 function scrollToSection(id) {
@@ -2551,12 +2957,71 @@ function updateNavUser() {
   if (state.user) {
     guest.classList.add('hidden');
     userEl.classList.remove('hidden');
-    document.getElementById('navUserName').textContent = state.user.username;
+    const u = state.user;
+    const name = u.username || 'User';
+    document.getElementById('navUserName').textContent = name;
+    const av = document.getElementById('navAvatar');
+    const letter = name[0].toUpperCase();
+    if (u.avatar_url) {
+      av.innerHTML = `<img src="${u.avatar_url}" alt="" onerror="this.parentNode.textContent='${letter}'" />`;
+    } else {
+      av.textContent = letter;
+    }
+    const ndName = document.getElementById('ndName');
+    const ndId = document.getElementById('ndId');
+    if (ndName) ndName.textContent = name;
+    if (ndId) ndId.textContent = 'ID ' + (u.id || u.discord_id || '—');
   } else {
     guest.classList.remove('hidden');
     userEl.classList.add('hidden');
+    closeNavDropdown();
   }
 }
+
+function toggleProductMenu(e) {
+  if (e) e.stopPropagation();
+  const menu = document.getElementById('navProductMenu');
+  const btn = document.getElementById('navProductBtn');
+  if (!menu || !btn) return;
+  const open = menu.classList.toggle('show');
+  btn.classList.toggle('open', open);
+  closeNavDropdown();
+}
+function closeProductMenu() {
+  const menu = document.getElementById('navProductMenu');
+  const btn = document.getElementById('navProductBtn');
+  if (menu) menu.classList.remove('show');
+  if (btn) btn.classList.remove('open');
+}
+document.addEventListener('click', function (e) {
+  const wrap = document.querySelector('.nav-dd-wrap');
+  if (wrap && !wrap.contains(e.target)) closeProductMenu();
+});
+
+function toggleNavDropdown(e) {
+  if (e) e.stopPropagation();
+  const drop = document.getElementById('navDropdown');
+  const btn = document.getElementById('navUserBtn');
+  if (!drop || !btn) return;
+  const open = drop.classList.toggle('show');
+  btn.classList.toggle('open', open);
+  btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+}
+
+function closeNavDropdown() {
+  const drop = document.getElementById('navDropdown');
+  const btn = document.getElementById('navUserBtn');
+  if (drop) drop.classList.remove('show');
+  if (btn) {
+    btn.classList.remove('open');
+    btn.setAttribute('aria-expanded', 'false');
+  }
+}
+
+document.addEventListener('click', function (e) {
+  const wrap = document.querySelector('.nav-user-wrap');
+  if (wrap && !wrap.contains(e.target)) closeNavDropdown();
+});
 
 function updateSidebar() {
   const u = state.user;
@@ -2637,11 +3102,17 @@ async function confirmDeleteAccount() {
 //  DASHBOARD NAVIGATION
 // ═══════════════════════════════════════════════════════
 function switchSection(id, btn) {
+  if (!state.user && !getToken()) {
+    showToast('Log in with Discord to continue', 'error');
+    showPage('auth');
+    return;
+  }
   if (id === 'support') { try { loadMyTickets(); } catch(e) {} }
 
   document.querySelectorAll('.dash-section').forEach(s => s.classList.remove('active'));
   document.querySelectorAll('.sidebar-item').forEach(s => s.classList.remove('active'));
-  document.getElementById('sec-' + id).classList.add('active');
+  const sec = document.getElementById('sec-' + id);
+  if (sec) sec.classList.add('active');
   if (btn) btn.classList.add('active');
   else {
     const target = document.querySelector(`[data-section="${id}"]`);
@@ -2661,36 +3132,154 @@ function switchAdminTab(tab, btn) {
 // ═══════════════════════════════════════════════════════
 function renderOverview() {
   const u = state.user;
-  document.getElementById('overviewGreeting').textContent = `Welcome back, ${u.username}!`;
-  document.getElementById('statPlan').innerHTML = `<span class="plan-badge plan-${u.plan}">${u.plan.toUpperCase()}</span>`;
-  const altCount = Object.keys(u.alts || {}).length;
-  document.getElementById('statAlts').textContent = altCount;
-  const limits = { free: 2, premium: 10, bypass: '∞' };
-  document.getElementById('statAltLimit').textContent = `of ${limits[u.plan]} max`;
-  document.getElementById('statOwner').textContent = u.owner || '—';
+  const c = state.config || {};
+  const greet = document.getElementById('overviewGreeting');
+  if (greet) greet.textContent = `Welcome back, ${u.username}`;
+
+  const plan = (u.plan || 'free').toLowerCase();
+  const planEl = document.getElementById('statPlan');
+  if (planEl) {
+    planEl.textContent = plan.charAt(0).toUpperCase() + plan.slice(1);
+    planEl.className = 'val' + (plan === 'bypass' || plan === 'premium' ? ' gold' : '');
+  }
+  const planSub = document.getElementById('statPlanSub');
+  if (planSub) planSub.textContent = plan === 'free' ? 'upgrade for more power' : 'active subscription';
+
+  const altsObj = u.alts || c.alts || {};
+  const altKeys = Object.keys(altsObj);
+  const altCount = altKeys.length;
+  const limits = { free: 2, premium: 10, bypass: 50 };
+  const lim = limits[plan] || 2;
+  const altsEl = document.getElementById('statAlts');
+  if (altsEl) altsEl.textContent = `${altCount}/${lim >= 50 ? '∞' : lim}`;
+  const altLimitEl = document.getElementById('statAltLimit');
+  if (altLimitEl) altLimitEl.textContent = altCount ? 'linked accounts' : 'no alts linked yet';
+  const bar = document.getElementById('statAltBar');
+  if (bar) bar.style.width = Math.min(100, (altCount / (lim || 1)) * 100) + '%';
+
+  const owner = u.owner || c.owner || '—';
+  const ownerEl = document.getElementById('statOwner');
+  if (ownerEl) ownerEl.textContent = owner;
+
+  // Config summary
+  const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+  set('ovMode', plan.charAt(0).toUpperCase() + plan.slice(1));
+  set('ovTarget', owner !== '—' ? owner : 'Not set');
+  set('ovGun', c.gun || '—');
+  set('ovPrefix', c.prefix || '.');
+  set('ovAlts', altCount ? `${altCount} linked` : 'None');
 
   const bannerWrap = document.getElementById('upgradeBannerWrap');
-  if (u.plan === 'free') {
-    bannerWrap.innerHTML = `
-      <div class="upgrade-banner">
-        <div>
-          <h3>⚡ Unlock the full dashboard</h3>
-          <p>Upgrade to Premium or Bypass to edit your config from the web, link more alts, and get your rank in-game.</p>
-        </div>
-        <button class="btn btn-primary" onclick="switchSection('subscription', null)">View Plans</button>
-      </div>`;
-  } else {
-    bannerWrap.innerHTML = '';
-  }
-  // Seed initial activity on first load
-  if (!activityLog.length) {
-    addActivity('👋', `Logged in as <strong>${u.username}</strong>`);
-    addActivity('📋', `Plan: <strong>${u.plan.toUpperCase()}</strong>`);
-    if (Object.keys(u.alts || {}).length) {
-      addActivity('👥', `${Object.keys(u.alts).length} alt(s) linked`);
+  if (bannerWrap) {
+    if (plan === 'free') {
+      bannerWrap.innerHTML = `
+        <div class="upgrade-banner">
+          <div>
+            <h3>Unlock the full dashboard</h3>
+            <p>Upgrade to Premium or Bypass for web config, more alts, and in-game rank.</p>
+          </div>
+          <button class="btn btn-primary" onclick="switchSection('subscription', null)">View Plans</button>
+        </div>`;
+    } else {
+      bannerWrap.innerHTML = '';
     }
   }
+
+  if (!activityLog.length) {
+    addActivity('👋', `Logged in as <strong>${u.username}</strong>`);
+    addActivity('📋', `Plan: <strong>${plan.toUpperCase()}</strong>`);
+    if (altCount) addActivity('👥', `${altCount} alt(s) linked`);
+  }
+  renderActivityFeedPremium();
+  renderStandsTable();
   renderOverviewStatus();
+}
+
+function renderActivityFeedPremium() {
+  const feed = document.getElementById('activityFeed');
+  if (!feed) return;
+  const items = (activityLog || []).slice(0, 5);
+  if (!items.length) {
+    feed.innerHTML = '<div style="color:var(--text3);font-size:13px;">No recent activity</div>';
+    return;
+  }
+  feed.innerHTML = items.map(a => `
+    <div class="act-item">
+      <div class="ai">${a.icon || '•'}</div>
+      <div style="flex:1;min-width:0;">
+        <div class="t">${a.text}</div>
+        <div class="d">${a.detail || ''}</div>
+      </div>
+      <div class="time">${a.time || ''}</div>
+    </div>`).join('');
+}
+
+function renderStandsTable() {
+  const body = document.getElementById('standsTableBody');
+  const summary = document.getElementById('standsSummary');
+  if (!body || !state.user) return;
+  const u = state.user;
+  const c = state.config || {};
+  const plan = (u.plan || 'free').toLowerCase();
+  const owner = u.owner || c.owner || '';
+  const altsObj = u.alts || c.alts || {};
+  // Target: owner is the focus the stands protect/attack around
+  const target = owner || 'Not set';
+  const modeClass = plan === 'bypass' ? 'bypass' : '';
+  const modeLabel = plan.charAt(0).toUpperCase() + plan.slice(1);
+
+  const rows = [];
+  if (owner) {
+    rows.push({
+      name: owner,
+      role: 'Owner',
+      target,
+      status: 'running',
+      statusLabel: 'Active',
+      inGame: 'Yes',
+      mode: modeLabel,
+      modeClass,
+    });
+  }
+  const altEntries = Object.entries(altsObj);
+  altEntries.forEach(([name, meta], i) => {
+    const slot = (meta && meta.slot) || (typeof meta === 'number' ? meta : i + 1);
+    // Alternate demo status for visual variety until live presence is wired
+    const running = i % 3 !== 2;
+    rows.push({
+      name: name,
+      role: `Alt · slot ${slot}`,
+      target,
+      status: running ? 'running' : 'idle',
+      statusLabel: running ? 'Active' : 'Standby',
+      inGame: running ? 'Yes' : 'No',
+      mode: modeLabel,
+      modeClass,
+    });
+  });
+
+  if (!rows.length) {
+    body.innerHTML = `<tr><td colspan="6" style="color:var(--text3);">No stands yet — set an owner and link alts in Config / Alts.</td></tr>`;
+    if (summary) summary.textContent = 'No stands configured';
+    return;
+  }
+
+  const active = rows.filter(r => r.status === 'running').length;
+  if (summary) summary.textContent = `${active} in game · ${rows.length} total`;
+
+  body.innerHTML = rows.map(r => `
+    <tr>
+      <td class="name">${escapeHtml(r.name)}</td>
+      <td>${escapeHtml(r.role)}</td>
+      <td>${escapeHtml(r.target)}</td>
+      <td><span class="pill-status ${r.status}"><span class="d"></span>${r.statusLabel}</span></td>
+      <td>${r.inGame}</td>
+      <td><span class="tag-mode ${r.modeClass}">${r.mode}</span></td>
+    </tr>`).join('');
+}
+
+function escapeHtml(s) {
+  return String(s || '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
 }
 
 // ═══════════════════════════════════════════════════════
@@ -3126,7 +3715,29 @@ async function adminForceUnlink(id) {
 // ═══════════════════════════════════════════════════════
 function renderAdminKeys() {
   const tbody = document.getElementById('keysTable');
-  if (!state.keys.length) { tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;color:var(--text3);padding:20px;">No keys in stock</td></tr>`; return; }
+  const products = ['stand', 'premium', 'bypass'];
+  const avail = { stand: 0, premium: 0, bypass: 0 };
+  const total = { stand: 0, premium: 0, bypass: 0 };
+  (state.keys || []).forEach(k => {
+    const p = (k.product || 'stand').toLowerCase();
+    if (total[p] === undefined) return;
+    total[p]++;
+    if (!k.reserved) avail[p]++;
+  });
+  const sumEl = document.getElementById('keyStockSummary');
+  if (sumEl) {
+    sumEl.innerHTML = products.map(p => `
+      <div class="ov-stat" style="padding:14px;">
+        <div class="lbl">${p.charAt(0).toUpperCase() + p.slice(1)}</div>
+        <div class="val" style="font-size:20px;">${avail[p]} <span style="font-size:13px;color:var(--text3);font-weight:600;">available</span></div>
+        <div class="sub">${total[p]} total in stock</div>
+      </div>`).join('');
+  }
+  updateRestockPreview();
+  if (!state.keys.length) {
+    tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;color:var(--text3);padding:20px;">No keys in stock</td></tr>`;
+    return;
+  }
   tbody.innerHTML = state.keys.map(k => `
     <tr>
       <td><code style="font-size:12px;color:var(--accent2);">${k.key}</code></td>
@@ -3136,6 +3747,48 @@ function renderAdminKeys() {
       <td><button class="btn btn-danger btn-sm" onclick="removeKey(${k.id})">Delete</button></td>
     </tr>
   `).join('');
+}
+
+function updateRestockPreview() {
+  const el = document.getElementById('restockPreview');
+  const inp = document.getElementById('restockAmount');
+  if (!el || !inp) return;
+  let n = parseInt(inp.value, 10);
+  if (!n || n < 1) { el.textContent = 'Enter an amount'; return; }
+  n = Math.min(500, n);
+  const products = ['stand', 'premium', 'bypass'];
+  const base = Math.floor(n / 3);
+  const rem = n % 3;
+  const parts = products.map((p, i) => {
+    const c = base + (i < rem ? 1 : 0);
+    return `<strong>${c}</strong> ${p}`;
+  });
+  el.innerHTML = parts.join(' · ');
+}
+
+async function restockKeys() {
+  const amount = parseInt(document.getElementById('restockAmount').value, 10);
+  if (!amount || amount < 1) { showToast('Enter a valid amount', 'error'); return; }
+  const paste = ((document.getElementById('restockKeysPaste') || {}).value || '').trim();
+  if (!paste) { showToast('Paste the keys you want to stock — nothing is auto-generated', 'error'); return; }
+  const body = {
+    amount: Math.min(500, amount),
+    products: ['stand', 'premium', 'bypass'],
+    keys: paste,
+  };
+  if (!confirm(`Add up to ${body.amount} of your keys, split evenly across Stand, Premium, and Bypass?`)) return;
+  try {
+    const data = await api('/api/admin/keys/restock', { method: 'POST', body });
+    await loadAdminKeys();
+    renderAdminKeys();
+    renderAnalytics();
+    const dist = data.distribution || {};
+    const msg = `Restocked ${data.added || 0} keys — stand ${dist.stand || 0}, premium ${dist.premium || 0}, bypass ${dist.bypass || 0}`;
+    showToast(msg, 'success');
+    if (document.getElementById('restockKeysPaste')) document.getElementById('restockKeysPaste').value = '';
+  } catch (e) {
+    showToast('Restock failed: ' + (e.message || e), 'error');
+  }
 }
 
 async function addKey() {
@@ -3527,19 +4180,7 @@ function addActivity(icon, text) {
 }
 
 function renderActivity() {
-  const feed = document.getElementById('activityFeed');
-  if (!feed) return;
-  if (!activityLog.length) {
-    feed.innerHTML = `<div style="font-size:13px;color:var(--text3);text-align:center;padding:16px 0;">No activity yet this session.</div>`;
-    return;
-  }
-  feed.innerHTML = activityLog.map(a => `
-    <div class="activity-item">
-      <span class="activity-icon">${a.icon}</span>
-      <span class="activity-text">${a.text}</span>
-      <span class="activity-time">${a.time}</span>
-    </div>
-  `).join('');
+  renderActivityFeedPremium();
 }
 
 // ═══════════════════════════════════════════════════════
@@ -3553,16 +4194,25 @@ const STATUS_CONFIG = {
 };
 
 function renderOverviewStatus() {
-  const el = document.getElementById('overviewStatus');
-  if (!el) return;
   const s = STATUS_CONFIG[DEMO_STATUS.status] || STATUS_CONFIG.up;
-  el.innerHTML = `
-    <div class="status-display">
-      <span class="dot-pulse" style="background:${s.dot};box-shadow:0 0 8px ${s.dot};"></span>
-      <span class="status-name" style="color:${s.color};">${s.name}</span>
-    </div>
-    <span class="status-desc">${s.desc}</span>
-  `;
+  const val = document.getElementById('statStatusVal');
+  const sub = document.getElementById('statStatusSub');
+  if (val) {
+    val.textContent = s.name || 'Operational';
+    val.style.color = s.color || 'var(--green)';
+  }
+  if (sub) sub.textContent = s.desc || 'all systems normal';
+  // legacy node may still exist on older markup
+  const el = document.getElementById('overviewStatus');
+  if (el) {
+    el.innerHTML = `
+      <div class="status-display">
+        <span class="dot-pulse" style="background:${s.dot};box-shadow:0 0 8px ${s.dot};"></span>
+        <span class="status-name" style="color:${s.color};">${s.name}</span>
+      </div>
+      <span class="status-desc">${s.desc}</span>
+    `;
+  }
 }
 
 // ═══════════════════════════════════════════════════════
@@ -3660,6 +4310,9 @@ async function fetchLiveStatus() {
 //  INIT
 // ═══════════════════════════════════════════════════════
 document.addEventListener('DOMContentLoaded', async () => {
+  const ra = document.getElementById('restockAmount');
+  if (ra) ra.addEventListener('input', updateRestockPreview);
+
   const params = new URLSearchParams(window.location.search);
   if (params.get('success')) showToast('Payment successful! Your plan is now active.', 'success');
   const ok = await bootstrapSession();
