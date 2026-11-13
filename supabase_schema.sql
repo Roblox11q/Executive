@@ -134,3 +134,73 @@ create index if not exists stand_tickets_open_idx
 
 create index if not exists stand_tickets_opened_at_idx
   on stand_tickets (opened_at desc);
+
+-- ============================================================
+-- Stripe webhook idempotency
+-- ============================================================
+
+create table if not exists stripe_events (
+  event_id    text primary key,
+  event_type  text not null default '',
+  processed_at timestamptz not null default now()
+);
+
+-- ============================================================
+-- Atomic key reservation (avoids double-dispense races)
+-- ============================================================
+
+create or replace function reserve_key_stock(
+  p_product text,
+  p_roblox_user_id bigint,
+  p_roblox_username text default ''
+)
+returns table (
+  out_id bigint,
+  out_key text,
+  out_reused boolean
+)
+language plpgsql
+as $$
+declare
+  v_id bigint;
+  v_key text;
+begin
+  -- Idempotent: already reserved for this Roblox user + product?
+  select id, key into v_id, v_key
+  from key_stock
+  where product = p_product
+    and assigned_to_roblox_user_id = p_roblox_user_id
+    and reserved = true
+  limit 1;
+
+  if found then
+    return query select v_id, v_key, true;
+    return;
+  end if;
+
+  -- Atomically claim one available key (SKIP LOCKED avoids blocking / double-claim)
+  update key_stock
+  set
+    reserved = true,
+    reserved_at = now(),
+    assigned_to_roblox_user_id = p_roblox_user_id,
+    assigned_to_roblox_username = coalesce(p_roblox_username, ''),
+    assigned_at = now()
+  where id = (
+    select id
+    from key_stock
+    where product = p_product
+      and reserved = false
+    order by id
+    for update skip locked
+    limit 1
+  )
+  returning id, key into v_id, v_key;
+
+  if v_id is null then
+    return;  -- out of stock → empty result set
+  end if;
+
+  return query select v_id, v_key, false;
+end;
+$$;

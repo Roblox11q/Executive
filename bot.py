@@ -1738,56 +1738,79 @@ async def _start_http():
         now = datetime.now(timezone.utc).isoformat()
 
         try:
-            # Already assigned a key for this product + user? Reuse it (idempotent).
-            existing = (
-                supabase.table(KEY_STOCK_TABLE)
-                .select("key")
-                .eq("product", product)
-                .eq("assigned_to_roblox_user_id", roblox_user_id)
-                .eq("reserved", True)
-                .limit(1)
-                .execute()
-            )
-            rows = existing.data or []
-            if rows and rows[0].get("key"):
-                return web.json_response({"ok": True, "key": rows[0]["key"], "reused": True})
-
-            # Next available key
-            avail = (
-                supabase.table(KEY_STOCK_TABLE)
-                .select("id, key")
-                .eq("product", product)
-                .eq("reserved", False)
-                .order("id")
-                .limit(1)
-                .execute()
-            )
-            avail_rows = avail.data or []
-            if not avail_rows:
-                return web.json_response({"ok": False, "error": "out of stock"}, status=409)
-
-            row = avail_rows[0]
-            key = row["key"]
-            row_id = row["id"]
-
-            # Reserve only if still unreserved (best-effort race guard)
-            updated = (
-                supabase.table(KEY_STOCK_TABLE)
-                .update(
+            # Prefer atomic Postgres RPC (FOR UPDATE SKIP LOCKED) when available
+            key = None
+            reused = False
+            try:
+                rpc = supabase.rpc(
+                    "reserve_key_stock",
                     {
-                        "reserved": True,
-                        "reserved_at": now,
-                        "assigned_to_roblox_user_id": roblox_user_id,
-                        "assigned_to_roblox_username": roblox_username,
-                        "assigned_at": now,
-                    }
+                        "p_product": product,
+                        "p_roblox_user_id": roblox_user_id,
+                        "p_roblox_username": roblox_username,
+                    },
+                ).execute()
+                rpc_rows = rpc.data or []
+                if rpc_rows:
+                    row = rpc_rows[0]
+                    key = row.get("out_key") or row.get("key")
+                    reused = bool(row.get("out_reused") or row.get("reused"))
+                elif rpc_rows == []:
+                    # Empty set from function = out of stock
+                    return web.json_response({"ok": False, "error": "out of stock"}, status=409)
+            except Exception as rpc_err:
+                print(f"[api/dispense-key] rpc fallback: {rpc_err}")
+                # Fallback: previous best-effort path
+                existing = (
+                    supabase.table(KEY_STOCK_TABLE)
+                    .select("key")
+                    .eq("product", product)
+                    .eq("assigned_to_roblox_user_id", roblox_user_id)
+                    .eq("reserved", True)
+                    .limit(1)
+                    .execute()
                 )
-                .eq("id", row_id)
-                .eq("reserved", False)
-                .execute()
-            )
-            if not (updated.data):
-                return web.json_response({"ok": False, "error": "race — try again"}, status=409)
+                rows = existing.data or []
+                if rows and rows[0].get("key"):
+                    return web.json_response({"ok": True, "key": rows[0]["key"], "reused": True})
+
+                avail = (
+                    supabase.table(KEY_STOCK_TABLE)
+                    .select("id, key")
+                    .eq("product", product)
+                    .eq("reserved", False)
+                    .order("id")
+                    .limit(1)
+                    .execute()
+                )
+                avail_rows = avail.data or []
+                if not avail_rows:
+                    return web.json_response({"ok": False, "error": "out of stock"}, status=409)
+
+                row = avail_rows[0]
+                key = row["key"]
+                row_id = row["id"]
+                updated = (
+                    supabase.table(KEY_STOCK_TABLE)
+                    .update(
+                        {
+                            "reserved": True,
+                            "reserved_at": now,
+                            "assigned_to_roblox_user_id": roblox_user_id,
+                            "assigned_to_roblox_username": roblox_username,
+                            "assigned_at": now,
+                        }
+                    )
+                    .eq("id", row_id)
+                    .eq("reserved", False)
+                    .execute()
+                )
+                if not (updated.data):
+                    return web.json_response({"ok": False, "error": "race — try again"}, status=409)
+                reused = False
+
+            if not key:
+                return web.json_response({"ok": False, "error": "out of stock"}, status=409)
 
             # History row (best-effort)
             try:
@@ -1803,8 +1826,11 @@ async def _start_http():
             except Exception as e:
                 print(f"[api/dispense-key] roblox_keys upsert: {e}")
 
-            print(f"[api/dispense-key] dispensed {product} key to rbx={roblox_user_id} ({roblox_username})")
-            return web.json_response({"ok": True, "key": key, "reused": False})
+            print(
+                f"[api/dispense-key] dispensed {product} key to rbx={roblox_user_id} "
+                f"({roblox_username}) reused={reused}"
+            )
+            return web.json_response({"ok": True, "key": key, "reused": reused})
         except Exception as e:
             print(f"[api/dispense-key] error: {e}")
             return web.json_response({"ok": False, "error": str(e)}, status=500)
